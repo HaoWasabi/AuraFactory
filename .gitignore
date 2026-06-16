@@ -1,0 +1,89 @@
+# ==============================================================================
+# 🔐 MÔI TRƯỜNG & BẢO MẬT (TUYỆT ĐỐI KHÔNG ĐẨY LÊN GITHUB)
+# ==============================================================================
+.env
+.env.local
+.env.*
+*.env
+token.json
+secrets.json
+
+# ==============================================================================
+# 🐍 PYTHON CHUYÊN DỤNG (Bộ nhớ đệm, Thư viện ảo)
+# ==============================================================================
+# Bộ nhớ đệm biên dịch của Python
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Môi trường ảo (Virtual Environments)
+.venv/
+venv/
+ENV/
+env/
+/bin/
+/lib/
+/include/
+/share/
+pip-log.txt
+pip-delete-this-directory.txt
+
+# Cấu hình cài đặt gói (Poetry / Pipenv nếu có dùng)
+.pipenv/
+.poetry/
+
+# ==============================================================================
+# 🧠 BỘ NHỚ AI & DATABASE CỤC BỘ (Lưu trữ dữ liệu)
+# ==============================================================================
+# Cơ sở dữ liệu SQLite cục bộ
+*.db
+*.sqlite3
+*.sql
+*.mysql
+
+# Bộ nhớ Vector của Agent (ChromaDB, FAISS, Pinecone local cache)
+.chroma/
+chroma_db/
+faiss_index/
+vector_store_data/
+
+# Nhật ký hệ thống và Log của Agent (Nằm trong utils/logger.py)
+*.log
+logs/
+utils/logs/
+
+# ==============================================================================
+# 💻 CẤU HÌNH HỆ ĐIỀU HÀNH & TRÌNH BIÊN SOẠN CODE (IDE)
+# ==============================================================================
+# VS Code
+.vscode/
+!.vscode/settings.json
+!.vscode/tasks.json
+!.vscode/launch.json
+!.vscode/extensions.json
+*.code-workspace
+
+# PyCharm / IntelliJ
+.idea/
+
+# Hệ điều hành máy tính
+.DS_Store
+Thumbs.db
+
+# ==============================================================================
+# 🧪 KIỂM THỬ & ĐÓNG GÓI (Testing & Deployment)
+# ==============================================================================
+.pytest_cache/
+.htmlcov/
+htmlcov/
+.coverage
+.coverage.*
+nosetests.xml
+coverage.xml
+*.cover
+*.py,cover
+
+# Đóng gói Docker hoặc Build sản phẩm
+dist/
+build/
+*.egg-info/
