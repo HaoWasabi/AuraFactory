@@ -26,6 +26,7 @@ discord_agentic_system/
 │
 ├── tools/                   # Các công cụ/kỹ năng mà Agent có thể sử dụng (Action)
 │   ├── __init__.py
+│   ├── discord_server.py    # Tool sửa server
 │   ├── discord_channel.py   # Tool tạo/xóa/sửa Kênh, Danh mục (Category)
 │   ├── discord_permission.py# Tool thiết lập ma trận quyền, phân vai trò (Roles)
 │   ├── discord_webhook.py   # Tool cấu hình tích hợp, kết nối GitHub/GitLab
