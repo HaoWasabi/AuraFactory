@@ -16,6 +16,52 @@ bot = commands.Bot(command_prefix="!", intents=intents)
 async def on_ready():
     print(f"🤖 Bot Quản Trị Kênh Nâng Cấp Đã Sẵn Sàng: {bot.user}")
 
+@bot.command(name="bot_info")
+async def bot_info(ctx):
+    # Lấy danh sách tất cả các guild (server) mà bot đang tham gia
+    guilds_list = bot.guilds
+    total_servers = len(guilds_list)
+    
+    # Tạo chuỗi danh sách tên các server (giới hạn hiển thị nếu quá nhiều)
+    server_names = ", ".join([guild.name for guild in guilds_list])
+    if not server_names:
+        server_names = "Bot chưa tham gia server nào."
+
+    # Tạo nội dung phản hồi
+    msg = (
+        f"📊 **Thông tin Bot:**\n"
+        f"🔹 **Số lượng server đã tham gia:** {total_servers}/10\n"
+        f"📝 **Danh sách server:** {server_names}\n"
+    )
+    
+    # Cảnh báo nếu bot đã chạm hoặc vượt giới hạn tạo server
+    if total_servers >= 10:
+        msg += "⚠️ **Lưu ý:** Bot đã tham gia từ 10 server trở lên, hàm `create_guild` sẽ không hoạt động được nữa!"
+    else:
+        msg += "✅ Bot vẫn đủ điều kiện để tự tạo server mới."
+
+    await ctx.send(msg)
+
+@bot.command(name="create_server")
+async def create_server(ctx, *, server_name: str): # Dấu * giúp nhận toàn bộ tên server có khoảng trắng (Ví dụ: !create_server My New Server)
+    try:
+        # SỬA TẠI ĐÂY: Gọi hàm từ 'bot' chứ không phải 'guild'
+        new_guild = await bot.create_guild(name=server_name)
+        
+        # Lấy kênh chữ đầu tiên của server mới để tạo link mời
+        default_channel = new_guild.text_channels[0]
+        invite = await default_channel.create_invite(max_age=3600) # Link hết hạn sau 1 tiếng
+        
+        await ctx.send(
+            f"🎉 Đã tạo thành công server **{new_guild.name}**!\n"
+            f"🔗 Tham gia ngay tại đây: {invite.url}"
+        )
+        
+    except nextcord.HTTPException as e:
+        # Lỗi xảy ra khi Bot đã ở trong > 10 server hoặc lỗi API từ Discord
+        await ctx.send(
+            f"❌ Không thể tạo server. Lý do: Bot của bạn có thể đã tham gia vượt quá giới hạn 10 server của Discord."
+        )
 
 # --- 1. LỆNH TẠO KÊNH NÂNG CẤP (Hỗ trợ Thể loại & Ẩn/Hiện) ---
 # Cú pháp: !tao_kenh [loai] [che_do] [Tên Kênh]
@@ -595,42 +641,43 @@ import urllib.parse  # Thêm dòng này ở đầu file code của bạn nếu c
 # --- 22. LỆNH TẠO SERVER THEO TEMPLATE CHỈ ĐỊNH (SỬA LỖI LINK ĐỘNG) ---
 # Cú pháp: !tao_server [loai_mau] [Tên Server]
 # Ví dụ:   !tao_server gaming Server Chiến Game Đỉnh
-@bot.command(name="tao_server")
-async def tao_server(ctx, loai_mau: str = "gaming", *, ten_server: str):
-    if not ctx.author.guild_permissions.administrator:
-        await ctx.send("❌ Bạn phải là Quản trị viên (Administrator) mới được dùng lệnh này!")
-        return
+# @bot.command(name="tao_server")
+# async def tao_server(ctx, loai_mau: str = "gaming", *, ten_server: str):
+#     if not ctx.author.guild_permissions.administrator:
+#         await ctx.send("❌ Bạn phải là Quản trị viên (Administrator) mới được dùng lệnh này!")
+#         return
 
-    # Sử dụng chính xác mã template Gaming của bạn
-    ma_template_gaming = "6cfHZFDdJPjY"
+#     # Sử dụng chính xác mã template Gaming của bạn
+#     ma_template_gaming = "6cfHZFDdJPjY"
     
-    # Chuẩn hóa loại mẫu người dùng gõ
-    loai_nhap = loai_mau.lower()
+#     # Chuẩn hóa loại mẫu người dùng gõ
+#     loai_nhap = loai_mau.lower()
 
-    # Kiểm tra xem người dùng muốn tạo mẫu gì
-    if loai_nhap in ["gaming", "game", "trò-chơi"]:
-        link_chuan = f"https://discord.new/{ma_template_gaming}"
+#     # Kiểm tra xem người dùng muốn tạo mẫu gì
+#     if loai_nhap in ["gaming", "game", "trò-chơi"]:
+#         link_chuan = f"https://discord.new/{ma_template_gaming}"
         
-        giao_dien = (
-            f"👑 **THIẾT LẬP MÁY CHỦ GAMING ĐÃ SẴN SÀNG**\n"
-            f"Bot đã cấu hình xong mẫu thiết kế theo yêu cầu của bạn:\n\n"
-            f"👉 **[BẤM VÀO ĐÂY ĐỂ KHỞI TẠO MÁY CHỦ]({link_chuan})**\n\n"
-            f"📝 **Hướng dẫn 2 bước thực hiện khi cửa sổ hiện ra:**\n"
-            f"1️⃣ Tại ô **TÊN MÁY CHỦ (SERVER NAME)**: Bạn hãy copy và dán chính xác tên này vào: `{ten_server}`\n"
-            f"2️⃣ Nhấn nút **Tạo (Create)** ở góc dưới để hoàn tất và nhận ngay quyền Chủ Server!"
-        )
-    else:
-        # Nếu người dùng gõ loại khác (ví dụ: học-tập, clb...) mà bạn chưa có mã
-        giao_dien = (
-            f"⚠️ Hiện tại Bot mới chỉ hỗ trợ mẫu `gaming` thông qua mã cá nhân của bạn.\n"
-            f"Mặc định Bot sẽ cung cấp mẫu Gaming cho tên server: **{ten_server}**\n\n"
-            f"👉 **[Bấm vào đây để tạo mẫu Gaming của bạn](https://discord.new/{ma_template_gaming})**\n"
-            f"*(Đừng quên đổi tên thành `{ten_server}` trước khi bấm nút Tạo nhé!)*"
-        )
+#         giao_dien = (
+#             f"👑 **THIẾT LẬP MÁY CHỦ GAMING ĐÃ SẴN SÀNG**\n"
+#             f"Bot đã cấu hình xong mẫu thiết kế theo yêu cầu của bạn:\n\n"
+#             f"👉 **[BẤM VÀO ĐÂY ĐỂ KHỞI TẠO MÁY CHỦ]({link_chuan})**\n\n"
+#             f"📝 **Hướng dẫn 2 bước thực hiện khi cửa sổ hiện ra:**\n"
+#             f"1️⃣ Tại ô **TÊN MÁY CHỦ (SERVER NAME)**: Bạn hãy copy và dán chính xác tên này vào: `{ten_server}`\n"
+#             f"2️⃣ Nhấn nút **Tạo (Create)** ở góc dưới để hoàn tất và nhận ngay quyền Chủ Server!"
+#         )
+#     else:
+#         # Nếu người dùng gõ loại khác (ví dụ: học-tập, clb...) mà bạn chưa có mã
+#         giao_dien = (
+#             f"⚠️ Hiện tại Bot mới chỉ hỗ trợ mẫu `gaming` thông qua mã cá nhân của bạn.\n"
+#             f"Mặc định Bot sẽ cung cấp mẫu Gaming cho tên server: **{ten_server}**\n\n"
+#             f"👉 **[Bấm vào đây để tạo mẫu Gaming của bạn](https://discord.new/{ma_template_gaming})**\n"
+#             f"*(Đừng quên đổi tên thành `{ten_server}` trước khi bấm nút Tạo nhé!)*"
+#         )
 
-    await ctx.send(giao_dien)
+#     await ctx.send(giao_dien)
 
 # --- XỬ LÝ LỖI (ERROR HANDLING CẬP NHẬT) ---
+@bot_info.error
 @bat_cong_dong.error
 @tat_cong_dong.error
 @tao_kenh.error
@@ -652,7 +699,7 @@ async def tao_server(ctx, loai_mau: str = "gaming", *, ten_server: str):
 @xoa_ten.error
 @kenh_info.error
 @user_info.error
-@tao_server.error
+@create_server.error
 async def channel_error(ctx, error):
     if isinstance(error, commands.MissingPermissions):
         await ctx.send("❌ Bạn không có quyền `Quản lý kênh` để dùng lệnh này!")
