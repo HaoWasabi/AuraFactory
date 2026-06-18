@@ -28,7 +28,10 @@ discord_agentic_system/
 │   ├── __init__.py
 │   ├── discord_server.py    # Tool sửa server
 │   ├── discord_channel.py   # Tool tạo/xóa/sửa Kênh, Danh mục (Category)
-│   ├── discord_permission.py# Tool thiết lập ma trận quyền, phân vai trò (Roles)
+│   ├── discord_role.py      # Tool thiết lập ma trận quyền, phân vai trò (Roles)
+│   ├── discord_member.py    # Tool quản lý thành viên (Kick, Ban, Timeout, Purge)
+│   ├── discord_features.py  # Tool cấu hình tiện ích (Xác minh, Chào mừng, Auto-delete)
+│   ├── discord_backup.py    # Tool sao lưu & khôi phục cấu trúc Server
 │   ├── discord_webhook.py   # Tool cấu hình tích hợp, kết nối GitHub/GitLab
 │   └── web_search.py        # Tool tìm kiếm template server mẫu trên mạng (nếu cần)
 │
