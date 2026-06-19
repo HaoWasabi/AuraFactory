@@ -4,7 +4,7 @@ import nextcord
 import asyncio
 from typing import Optional, List, Dict, Any, Union
 
-class DiscordFeature:
+class DiscordFeatures:
     """
     Tập hợp các bộ công cụ (Tools) dành cho Agentic AI nhằm cấu hình các tính năng tương tác,
     tiện ích mở rộng tự động trên Server như: Xác minh thành viên, Tự động dọn kênh, Chào mừng và Bỏ phiếu.

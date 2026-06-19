@@ -70,6 +70,8 @@ class DiscordChannel:
                 kwargs.pop('topic', None) 
                 channel = await guild.create_voice_channel(name=channel_name, **kwargs)
             elif c_type == "stage":
+                if "COMMUNITY" not in guild.features:
+                    return json.dumps({"status": "error", "message": "Thất bại: Máy chủ phải kích hoạt tính năng 'Cộng đồng'."}, ensure_ascii=False)
                 kwargs.pop('topic', None)
                 channel = await guild.create_stage_channel(name=channel_name, **kwargs)
                 try: await channel.create_instance(topic=topic if topic else "Welcome!")
@@ -78,6 +80,10 @@ class DiscordChannel:
                 channel = await guild.create_forum_channel(name=channel_name, **kwargs)
                 try: await channel.create_instance(topic=topic if topic else "Welcome!")
                 except Exception: pass
+            elif c_type in ["news", "announcement"]:
+                if "COMMUNITY" not in guild.features:
+                    return json.dumps({"status": "error", "message": "Thất bại: Máy chủ phải kích hoạt tính năng 'Cộng đồng'."}, ensure_ascii=False)
+                channel = await guild.create_news_channel(name=channel_name, **kwargs)
             else:
                 return json.dumps({"status": "error", "message": f"Loại kênh '{channel_type}' không hợp lệ."}, ensure_ascii=False)
 

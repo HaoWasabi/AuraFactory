@@ -2127,4 +2127,4 @@ async def channel_error(ctx, error):
     else:
         await ctx.send(f"❌ Lỗi hệ thống: {error}")
 
-bot.run(os.getenv("TOKEN_BOT"))
+bot.run(os.getenv("DISCORD_TOKEN"))

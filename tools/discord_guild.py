@@ -19,6 +19,7 @@ class DiscordGuild:
           - icon_url: Đường dẫn ảnh để đổi Avatar Server (str)
           - banner_url: Đường dẫn ảnh để đổi Ảnh nền Server (str)
           - verification_level: Mức độ xác minh bảo mật của Server (str: 'none', 'low', 'medium', 'high', 'highest')
+          - enable_community: Bật hoặc tắt tính năng Cộng đồng (bool: True/False)
         """
         try:
             # Kiểm tra quyền: Chỉ có Chủ server hoặc người có quyền Administrator mới được sửa cấu hình Server
@@ -63,6 +64,30 @@ class DiscordGuild:
                 banner_bytes = await download_image_bytes(kwargs.pop('banner_url'))
                 if banner_bytes: kwargs['banner'] = banner_bytes
 
+            # TÍCH HỢP LOGIC NÂNG/HẠ CẤP CỘNG ĐỒNG (COMMUNITY)
+            if 'enable_community' in kwargs:
+                enable_community = kwargs.pop('enable_community')
+                # Lấy danh sách các tính năng hiện tại của guild đưa vào mảng để tùy biến
+                current_features = list(guild.features)
+
+                if enable_community:
+                    if "COMMUNITY" not in current_features:
+                        current_features.append("COMMUNITY")
+                        kwargs['features'] = current_features
+                        
+                        # Điều kiện bắt buộc của Discord: Phải gán kênh Quy định và kênh Cập nhật
+                        # Nếu máy chủ chưa chỉ định sẵn, Bot lấy đại kênh văn bản đầu tiên của Server để lấp chỗ trống
+                        fallback_channel = guild.text_channels[0] if guild.text_channels else None
+                        if not fallback_channel:
+                            return json.dumps({"status": "error", "message": "Thất bại: Server phải có ít nhất 1 kênh văn bản để làm kênh quy định khi bật Cộng đồng."}, ensure_ascii=False)
+                        
+                        kwargs['rules_channel'] = guild.rules_channel or fallback_channel
+                        kwargs['public_updates_channel'] = guild.public_updates_channel or fallback_channel
+                else:
+                    if "COMMUNITY" in current_features:
+                        current_features.remove("COMMUNITY")
+                        kwargs['features'] = current_features
+
             # Lọc các tham số hợp lệ mà đối tượng Guild hỗ trợ sửa đổi trực tiếp
             valid_kwargs = {}
             for key, val in kwargs.items():
@@ -73,11 +98,17 @@ class DiscordGuild:
             if valid_kwargs:
                 await guild.edit(**valid_kwargs)
 
+            # Chuẩn hóa lại tên hiển thị trong kết quả trả về cho đẹp
+            updated_fields_log = list(valid_kwargs.keys())
+            if 'features' in updated_fields_log:
+                updated_fields_log.remove('features')
+                updated_fields_log.append('community_status')
+
             return json.dumps({
                 "status": "success",
                 "action": "modify_server_profile",
                 "guild_id": guild.id,
-                "updated_fields": list(valid_kwargs.keys())
+                "updated_fields": updated_fields_log
             }, ensure_ascii=False)
 
         except nextcord.Forbidden:
@@ -104,7 +135,8 @@ class DiscordGuild:
                 "total_channels": len(guild.channels),
                 "total_roles": len(guild.roles),
                 "icon_url": guild.icon.url if guild.icon else None,
-                "banner_url": guild.banner.url if guild.banner else None
+                "banner_url": guild.banner.url if guild.banner else None,
+                "features": list(guild.features)
             }
             return json.dumps(info, ensure_ascii=False)
         except Exception as e:
