@@ -25,10 +25,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 from dotenv import load_dotenv
-
 load_dotenv()
-
-# Well-Architected components
 from providers.gemini_provider import GeminiProvider
 from agents.orchestrator import OrchestratorAgent
 from agents.architect_agent import ArchitectAgent

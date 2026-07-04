@@ -16,6 +16,7 @@ Constraints:
 """
 import time
 import json
+from pathlib import Path
 from typing import Dict, Any, Optional, List
 from agents.base_agent import BaseAgent
 from providers.base import LLMProvider
@@ -23,23 +24,9 @@ from schemas.contracts import AgentRole, TaskAssignment, TaskResult, TaskStatus
 from observability.tracer import Tracer
 
 
-COPILOT_SYSTEM_PROMPT = """Bạn là Copilot Agent của AuraFactory — trợ lý thông minh cho cộng đồng Discord.
-
-## Khả năng
-- Trả lời câu hỏi về server, community guidelines
-- Hỗ trợ quản lý sự kiện (event)
-- Dịch thuật nội dung
-- Tóm tắt thông tin
-
-## Constraints  
-- Bạn KHÔNG THỂ thay đổi bất cứ gì trên Discord (tạo channel, ban member, etc.)
-- Nếu user yêu cầu action mà bạn không thể → nói rõ "Tôi chỉ có thể trả lời câu hỏi, không thể thực hiện thay đổi."
-
-## Style
-- Trả lời ngắn gọn, chính xác
-- Dùng tiếng Việt
-- Friendly nhưng professional
-"""
+def _load_prompt(name: str) -> str:
+    path = Path(__file__).parent.parent / "prompts" / f"{name}.md"
+    return path.read_text(encoding="utf-8")
 
 
 class CopilotAgent(BaseAgent):
@@ -53,7 +40,7 @@ class CopilotAgent(BaseAgent):
             role=AgentRole.COPILOT,
             llm=llm,
             tracer=tracer,
-            system_prompt=COPILOT_SYSTEM_PROMPT,
+            system_prompt=_load_prompt("copilot"),
             max_retries=1,  # Q&A không cần retry nhiều
         )
         # Phase 1: Simple in-memory knowledge

@@ -19,8 +19,6 @@ from agents.base_agent import BaseAgent
 from providers.base import LLMProvider
 from schemas.contracts import AgentRole, TaskAssignment, TaskResult, TaskStatus
 from observability.tracer import Tracer
-
-# Import existing tools (giữ nguyên code cũ!)
 from tools.discord_channel import DiscordChannel
 from tools.discord_category import DiscordCategory
 
