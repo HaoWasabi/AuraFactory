@@ -1,6 +1,10 @@
 <!DOCTYPE html>
 <html lang="vi">
 <head>
+  <script>
+    // API Server URL — đổi khi deploy
+    const API_URL = "http://localhost:8000";
+  </script>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
   <title>Aura Factory</title>
@@ -497,22 +501,57 @@
       const handleSend = () => {
         if (!inputValue.trim() && uploadedFiles.length === 0) return;
         const userMsg = { role: 'user', content: inputValue, files: [...uploadedFiles] };
-        const aiResponse = {
-          role: 'ai',
-          content: `Cảm ơn bạn! Tôi đã nhận được: "${inputValue}". Đây là phản hồi mẫu với markdown.\n\`\`\`python\nprint("Hello AI")\n\`\`\`\n*Đề xuất:* Hãy xem xét thêm.`
-        };
+        
+        // Thêm user message + loading vào chat ngay
         setChats(prev => prev.map(chat => {
           if (chat.id === activeChatId) {
             return {
               ...chat,
-              messages: [...chat.messages, userMsg, aiResponse],
+              messages: [...chat.messages, userMsg, { role: 'ai', content: '🧠 Đang xử lý...' }],
               title: inputValue.slice(0, 40) || 'Cuộc trò chuyện'
             };
           }
           return chat;
         }));
+        
+        const msgText = inputValue;
         setInputValue('');
         setUploadedFiles([]);
+        
+        // Gọi API server thật
+        fetch(API_URL + '/chat', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ message: msgText }),
+        })
+        .then(res => res.json())
+        .then(data => {
+          setChats(prev => prev.map(chat => {
+            if (chat.id === activeChatId) {
+              const msgs = [...chat.messages];
+              msgs[msgs.length - 1] = { 
+                role: 'ai', 
+                content: data.message || JSON.stringify(data.results, null, 2),
+                trace_id: data.trace_id
+              };
+              return { ...chat, messages: msgs };
+            }
+            return chat;
+          }));
+        })
+        .catch(err => {
+          setChats(prev => prev.map(chat => {
+            if (chat.id === activeChatId) {
+              const msgs = [...chat.messages];
+              msgs[msgs.length - 1] = { 
+                role: 'ai', 
+                content: '❌ Không kết nối được server. Chạy: `uvicorn server:app --reload --port 8000`'
+              };
+              return { ...chat, messages: msgs };
+            }
+            return chat;
+          }));
+        });
       };
 
       const handleKeyDown = (e) => {
@@ -551,6 +590,47 @@
         if (newName) {
           setChats(prev => prev.map(c => c.id === chatId ? { ...c, title: newName } : c));
         }
+      };
+
+      // Approval flow — gọi API approve/reject
+      const handleApproval = (traceId, approved) => {
+        // Lấy pending approvals → approve/reject → update UI
+        fetch(API_URL + '/approvals')
+        .then(res => res.json())
+        .then(listData => {
+          const pending = listData.pending || [];
+          if (pending.length === 0) {
+            alert('Không có approval nào đang chờ.');
+            return;
+          }
+          const target = pending[0];
+          const endpoint = approved ? '/approve/' : '/reject/';
+          return fetch(API_URL + endpoint + target.approval_id, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ approver: 'admin', reason: '' }),
+          });
+        })
+        .then(res => res && res.json())
+        .then(data => {
+          if (!data) return;
+          // THAY THẾ message có nút approve bằng kết quả
+          setChats(prev => prev.map(chat => {
+            if (chat.id === activeChatId) {
+              const msgs = chat.messages.map(msg => {
+                if (msg.trace_id === traceId && msg.content.includes('Cần phê duyệt')) {
+                  return { role: 'ai', content: data.message || '✅ Đã xử lý', trace_id: null };
+                }
+                return msg;
+              });
+              return { ...chat, messages: msgs };
+            }
+            return chat;
+          }));
+        })
+        .catch(err => {
+          alert('Lỗi: ' + err.message);
+        });
       };
 
       const handleAgree = (messageIndex) => {
@@ -677,6 +757,7 @@
                     ` : html`
                       <div className="ai-message">
                         ${renderMarkdown(msg.content)}
+                        ${msg.trace_id && msg.content.includes('Cần phê duyệt') && html`<div style=${{ marginTop: 12, display: 'flex', gap: 8 }}><button onClick=${() => handleApproval(msg.trace_id, true)} style=${{ background: '#10b981', color: 'white', border: 'none', padding: '8px 16px', borderRadius: 8, cursor: 'pointer', fontWeight: 600 }}>✅ Phê duyệt</button><button onClick=${() => handleApproval(msg.trace_id, false)} style=${{ background: '#ef4444', color: 'white', border: 'none', padding: '8px 16px', borderRadius: 8, cursor: 'pointer', fontWeight: 600 }}>❌ Từ chối</button></div>`}
                         <div className="toolbar">
                           <button 
                             className=${agreedMessages.has(activeChatId + '-' + idx) ? 'agreed' : ''}
