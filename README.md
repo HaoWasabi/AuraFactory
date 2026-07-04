@@ -10,7 +10,7 @@
 ```
 ┌─────────────┐    HTTP    ┌─────────────────────────────────────┐
 │  Frontend   │ ─────────→ │  server.py (FastAPI)                │
-│  (Browser)  │ ←───────── │    ├── /chat — main endpoint        │
+│  (Browser)  │ ←───────── │    ├── /chat                        │
 └─────────────┘            │    ├── /approve/{id}                │
                            │    ├── /reject/{id}                 │
                            │    └── /health, /traces, /guilds    │
@@ -27,7 +27,7 @@
                      └──────┬───────┘    └───────────────┘
                             │
                     ┌───────▼──────┐
-                    │ Discord API  │ ← chỉ execute nếu Human Approve
+                    │ Discord API  │ ← chỉ execute khi Human Approve
                     └──────────────┘
 ```
 
@@ -35,62 +35,51 @@
 
 ```
 AuraFactory/
-├── server.py              ← 🚀 ENTRY POINT — FastAPI + Discord bot
-├── AFfrontend.html        ← Frontend UI (single-file React)
-├── requirements.txt       ← Dependencies
-├── welcome_config.json    ← Config cho welcome messages
+├── server.py              ← 🚀 Entry point (FastAPI + Discord bot)
+├── AFfrontend.html        ← Chat UI
+├── requirements.txt
+├── README.md
+├── LICENSE
 │
-├── agents/                ← 🧠 Agent System (AI Core)
-│   ├── base_agent.py         BaseAgent + permission check
-│   ├── orchestrator.py       Phân tích intent → route tasks
+├── agents/                ← 🧠 Agent System
+│   ├── base_agent.py         Permission check, retry, tracing
+│   ├── orchestrator.py       Phân tích → route tasks
 │   ├── architect_agent.py    Execute Discord operations
-│   └── copilot_agent.py      Q&A / giải đáp
+│   └── copilot_agent.py      Q&A, translate, events
+│
+├── prompts/               ← 💬 System Prompts (tách riêng, dễ edit)
+│   ├── orchestrator.md
+│   ├── architect.md
+│   └── copilot.md
 │
 ├── schemas/               ← 📋 Contracts + Rules
-│   ├── contracts.py          TaskAssignment, TaskResult (typed)
-│   ├── permissions.py        Risk levels + approval rules
-│   └── approval.py           Human-in-the-loop approval store
+│   ├── contracts.py          TaskAssignment, TaskResult
+│   ├── permissions.py        Risk levels, agent scope
+│   └── approval.py           Human-in-the-loop store
 │
 ├── providers/             ← 🔌 LLM Providers (pluggable)
 │   ├── base.py               Abstract interface
-│   ├── gemini_provider.py    Phase 1: Google Gemini (free)
-│   └── bedrock_provider.py   Phase 2: AWS Bedrock (production)
+│   └── gemini_provider.py    Google Gemini (Phase 1)
 │
-├── tools/                 ← 🔧 Discord Operations
-│   ├── discord_channel.py    Tạo/xóa/sửa channels
-│   ├── discord_role.py       Quản lý roles
-│   ├── discord_member.py     Quản lý members
-│   ├── discord_category.py   Categories
-│   ├── discord_guild.py      Server settings
-│   ├── discord_webhook.py    Webhooks
-│   ├── discord_backup.py     Backup/restore
-│   └── discord_features.py   Feature flags
+├── tools/                 ← 🔧 Discord API Wrappers
+│   ├── discord_channel.py
+│   ├── discord_category.py
+│   ├── discord_role.py
+│   ├── discord_member.py
+│   ├── discord_guild.py
+│   ├── discord_webhook.py
+│   ├── discord_backup.py
+│   └── discord_features.py
 │
-├── commands/              ← ⌨️ Slash Commands (Discord native)
-│   ├── channel_command.py
-│   ├── role_command.py
-│   ├── member_command.py
-│   └── ...
-│
-├── observability/         ← 📊 Tracing & Monitoring
-│   └── tracer.py             Request tracing + audit log
-│
+├── commands/              ← ⌨️ Discord Slash Commands
+├── observability/         ← 📊 Tracing
+│   └── tracer.py
 ├── config/                ← ⚙️ Settings
-│   └── settings.py           Environment + constants
-│
-├── docs/                  ← 📄 Documentation
+│   └── settings.py
+├── docs/                  ← 📜 Legal
 │   ├── privacy.md
-│   ├── term.md
-│   └── ui-plan.md
-│
-├── legacy/                ← 🗄️ Old code (reference only)
-│   ├── app_v1.py             Entry point cũ (Discord-only)
-│   ├── main_v1.py            Main cũ
-│   ├── prompts_v1.py         Prompts cũ
-│   └── core/                 Core logic cũ
-│
-└── test/                  ← 🧪 Tests
-    └── bot_test.py
+│   └── terms.md
+└── logs/                  ← 📁 Trace logs (auto-generated)
 ```
 
 ## 🚀 Quick Start
@@ -99,65 +88,64 @@ AuraFactory/
 # 1. Install
 pip install -r requirements.txt
 
-# 2. Config (.env)
+# 2. Tạo file .env
 DISCORD_TOKEN=your_bot_token
-GUILD_ID=your_server_id          # Right-click server → Copy Server ID
+GUILD_ID=your_server_id
 GEMINI_TOKEN=your_gemini_key
 
-# 3. Run
+# 3. Chạy
 python server.py
 
-# 4. Open
-# → http://localhost:8000/docs    (API docs)
-# → Open AFfrontend.html         (Chat UI)
+# 4. Sử dụng
+#  → Mở AFfrontend.html trên browser (Chat UI)
+#  → Hoặc mention bot trên Discord
+#  → API docs: http://localhost:8000/docs
 ```
 
-## 🛡️ Security: Human-in-the-Loop
+## 🛡️ Human-in-the-Loop Approval
 
-| Action | Risk Level | Behavior |
-|--------|-----------|----------|
-| `list_channels` | 🟢 LOW | Auto-execute |
+| Action | Risk | Behavior |
+|--------|------|----------|
 | `create_channel` | 🟡 MEDIUM | Auto-execute |
-| `delete_channel` | 🔴 HIGH | **Block → Require Approval** |
-| `delete_role` | 🔴 HIGH | **Block → Require Approval** |
-| `kick_member` | 🔴 HIGH | **Block → Require Approval** |
-| `ban_member` | 🔴 HIGH | **Block → Require Approval** |
-| `transfer_ownership` | 🔴 CRITICAL | **Block → Require Approval** |
+| `delete_channel` | 🔴 HIGH | Block → cần Approve |
+| `kick_member` | 🔴 HIGH | Block → cần Approve |
+| `ban_member` | 🔴 CRITICAL | Block → cần Approve |
 
-### Approval Flow:
 ```
 User: "Xóa kênh general"
-  → Orchestrator: plan đúng, route tới Architect
-  → Architect: check permission → HIGH risk
-  → System: TẠM DỪNG, tạo PendingApproval
-  → Frontend: hiện nút [✅ Phê duyệt] [❌ Từ chối]
-  → Admin click Approve
-  → POST /approve/{id} → Agent execute → Channel deleted
+  → Orchestrator plan → route Architect
+  → HIGH risk detected → TẠM DỪNG
+  → Frontend hiện [✅ Phê duyệt] [❌ Từ chối]
+  → Admin click ✅ → Execute → Done
 ```
 
 ## 🧪 API Endpoints
 
 | Method | Path | Description |
 |--------|------|-------------|
-| POST | `/chat` | Gửi prompt, nhận kết quả |
+| POST | `/chat` | Gửi prompt |
 | GET | `/health` | System status |
-| GET | `/approvals` | Xem pending approvals |
-| POST | `/approve/{id}` | Phê duyệt action |
-| POST | `/reject/{id}` | Từ chối action |
-| GET | `/traces/{id}` | Xem trace chi tiết |
-| GET | `/guilds` | Liệt kê Discord servers |
+| GET | `/approvals` | Pending approvals |
+| POST | `/approve/{id}` | Phê duyệt |
+| POST | `/reject/{id}` | Từ chối |
+| GET | `/traces/{id}` | Trace chi tiết |
+| GET | `/guilds` | Discord servers |
 
-## 📐 Design Principles (AWS Well-Architected + Agentic AI Lens)
+## 📐 Design Principles
 
-1. **Explicit Contracts** — Typed schemas cho mọi agent communication
-2. **Least Privilege** — Risk-based permissions, minimal Discord scopes
-3. **Human Oversight** — High-risk actions MUST have approval
-4. **Observable** — Every request traced end-to-end
-5. **Provider-Agnostic** — Swap LLM provider without code changes
-6. **Fail-Safe** — Default deny, timeout expired approvals
+Thiết kế theo **AWS Well-Architected Framework** + **Agentic AI Lens**:
 
----
+| Principle | Implementation |
+|-----------|---------------|
+| Decompose | Mỗi agent 1 scope, 1 file |
+| Observable | Mọi action traced (`observability/`) |
+| Behavior as Code | Prompts tách file, versioned (`prompts/`) |
+| Autonomy + Oversight | Risk levels + approval gate (`schemas/`) |
+| Explicit Contracts | Typed schemas (`schemas/contracts.py`) |
+| Evolutionary Architecture | LLM provider pluggable (`providers/`) |
 
-**Phase 1**: Gemini (free) ✅  
-**Phase 2**: AWS Bedrock + DynamoDB + CloudWatch  
-**Phase 3**: Multi-guild + RBAC + Dashboard
+## 🔄 Roadmap
+
+- **Phase 1** ✅ — Gemini + local approval
+- **Phase 2** — AWS Bedrock + DynamoDB + AgentCore
+- **Phase 3** — Multi-guild, RBAC, Dashboard
