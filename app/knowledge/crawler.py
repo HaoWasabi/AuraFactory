@@ -178,7 +178,16 @@ class ServerCrawler:
         """Extract scheduled events."""
         events = []
         try:
-            scheduled = await guild.fetch_scheduled_events()
+            # nextcord returns AsyncIterator or list depending on version
+            result = guild.fetch_scheduled_events()
+            scheduled = []
+            if hasattr(result, '__aiter__'):
+                async for evt in result:
+                    scheduled.append(evt)
+            elif hasattr(result, '__await__'):
+                scheduled = await result
+            else:
+                scheduled = list(result) if result else []
             for evt in scheduled:
                 events.append(ScheduledEvent(
                     name=evt.name,
