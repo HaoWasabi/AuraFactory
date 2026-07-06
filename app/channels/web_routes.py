@@ -144,7 +144,7 @@ async def page_login(request: Request):
             return RedirectResponse(url="/dashboard")
         request.session.clear()
 
-    return request.app.state.templates.TemplateResponse("login.html", {"request": request})
+    return request.app.state.templates.TemplateResponse(request, "login.html")
 
 
 @router.get("/dashboard", response_class=HTMLResponse)
@@ -154,4 +154,4 @@ async def page_dashboard(request: Request):
     if not token:
         return RedirectResponse(url="/")
 
-    return request.app.state.templates.TemplateResponse("dashboard.html", {"request": request})
+    return request.app.state.templates.TemplateResponse(request, "dashboard.html")
