@@ -92,6 +92,12 @@ async def login_page(request: Request):
     return templates.TemplateResponse(name="login.html", context={"request": request}, request=request)
 
 
+@router.get("/login")
+async def login_redirect(request: Request):
+    """Redirect /login to / for convenience."""
+    return RedirectResponse(url="/", status_code=302)
+
+
 @router.get("/dashboard", response_class=HTMLResponse)
 async def dashboard_page(request: Request):
     """Serve main dashboard. Requires authentication."""

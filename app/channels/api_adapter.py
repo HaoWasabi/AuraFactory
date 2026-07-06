@@ -12,6 +12,8 @@ from dataclasses import dataclass
 from fastapi import APIRouter, Request, HTTPException, Depends
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
+from itsdangerous import URLSafeTimedSerializer, BadSignature, SignatureExpired
+from app.config.settings import settings
 
 from app.channels.base import ChannelAdapterBase
 from app.models.messages import IncomingMessage, OutgoingMessage
@@ -97,6 +99,9 @@ def _check_rate_limit(client_ip: str) -> bool:
 # Auth Dependency
 # ================================================================
 
+_serializer = URLSafeTimedSerializer(settings.secret_key)
+SESSION_MAX_AGE = 7 * 24 * 3600
+
 async def get_current_user(request: Request) -> dict:
     """
     Extract and validate current user from session.
@@ -112,7 +117,12 @@ async def get_current_user(request: Request) -> dict:
         session_id = auth_header[7:]
     else:
         # Check session cookie
-        session_id = request.cookies.get("session_id")
+        signed_cookie = request.cookies.get("session_id")
+        if signed_cookie:
+            try:
+                session_id = _serializer.loads(signed_cookie, max_age=SESSION_MAX_AGE)
+            except (BadSignature, SignatureExpired):
+                raise HTTPException(status_code=401, detail="Phiên đã hết hạn. Vui lòng đăng nhập lại.")
 
     if not session_id:
         raise HTTPException(status_code=401, detail="Chưa đăng nhập. Vui lòng đăng nhập.")
