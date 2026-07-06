@@ -122,9 +122,9 @@ class AssistantAgent(BaseAgent):
         # Log cost
         cost_info = self._log_cost(
             trace_id,
-            response.input_tokens,
-            response.output_tokens,
-            response.model,
+            response.usage.prompt_tokens if response.usage else 0,
+            response.usage.completion_tokens if response.usage else 0,
+            "gemini",
         )
 
         logger.info(f"[{trace_id}] AssistantAgent responded ({len(content)} chars)")

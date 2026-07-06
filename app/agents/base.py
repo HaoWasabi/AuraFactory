@@ -125,9 +125,9 @@ class BaseAgent(ABC):
                     tools=tools,
                 )
 
-                # Validate response has content
-                if not response or not response.content:
-                    raise ValueError("LLM returned empty response")
+                # Allow empty content (e.g. safety-blocked) — caller handles fallback
+                if not response:
+                    raise ValueError("LLM returned None")
 
                 return response
 

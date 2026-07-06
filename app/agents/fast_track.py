@@ -173,9 +173,9 @@ class FastTrackExecutor(BaseAgent):
             if hasattr(self, "_last_llm_response") and self._last_llm_response:
                 cost_info = self._log_cost(
                     trace_id,
-                    self._last_llm_response.input_tokens,
-                    self._last_llm_response.output_tokens,
-                    self._last_llm_response.model,
+                    self._last_llm_response.usage.prompt_tokens if self._last_llm_response.usage else 0,
+                    self._last_llm_response.usage.completion_tokens if self._last_llm_response.usage else 0,
+                    "gemini",
                 )
 
             return TaskResult(

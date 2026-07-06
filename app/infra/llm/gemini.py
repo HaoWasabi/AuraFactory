@@ -5,7 +5,6 @@ import logging
 from typing import Any, Dict, List, Optional
 
 import google.generativeai as genai
-from google.generativeai.types import HarmCategory, HarmBlockThreshold
 
 from .base import BaseLLM, LLMResponse, ToolCall, UsageStats
 
@@ -21,7 +20,16 @@ class GeminiLLM(BaseLLM):
             logger.error("⚠️ GEMINI_API_KEY is empty! LLM calls will fail.")
             # Don't raise — let app start, but log clearly
         genai.configure(api_key=self.api_key)
-        self._model = genai.GenerativeModel(self.model)
+        # Initialize model with safety settings disabled at model level
+        self._model = genai.GenerativeModel(
+            self.model,
+            safety_settings={
+                "HARM_CATEGORY_HARASSMENT": "BLOCK_NONE",
+                "HARM_CATEGORY_HATE_SPEECH": "BLOCK_NONE",
+                "HARM_CATEGORY_SEXUALLY_EXPLICIT": "BLOCK_NONE",
+                "HARM_CATEGORY_DANGEROUS_CONTENT": "BLOCK_NONE",
+            }
+        )
         logger.info("GeminiLLM initialized (model=%s)", self.model)
 
     async def generate(
@@ -50,13 +58,13 @@ class GeminiLLM(BaseLLM):
             max_output_tokens=max_tokens,
         )
 
-        # Disable safety filters (they block Discord admin commands)
-        safety_settings = {
-            HarmCategory.HARM_CATEGORY_HARASSMENT: HarmBlockThreshold.BLOCK_NONE,
-            HarmCategory.HARM_CATEGORY_HATE_SPEECH: HarmBlockThreshold.BLOCK_NONE,
-            HarmCategory.HARM_CATEGORY_SEXUALLY_EXPLICIT: HarmBlockThreshold.BLOCK_NONE,
-            HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT: HarmBlockThreshold.BLOCK_NONE,
-        }
+        # Disable safety filters using string-based config (works with all SDK versions)
+        safety_settings = [
+            {"category": "HARM_CATEGORY_HARASSMENT", "threshold": "BLOCK_NONE"},
+            {"category": "HARM_CATEGORY_HATE_SPEECH", "threshold": "BLOCK_NONE"},
+            {"category": "HARM_CATEGORY_SEXUALLY_EXPLICIT", "threshold": "BLOCK_NONE"},
+            {"category": "HARM_CATEGORY_DANGEROUS_CONTENT", "threshold": "BLOCK_NONE"},
+        ]
 
         gemini_tools = self._convert_tools(tools) if tools else None
 
@@ -146,8 +154,11 @@ class GeminiLLM(BaseLLM):
         candidate = response.candidates[0]
 
         # Check for safety block
-        if hasattr(candidate, "finish_reason") and candidate.finish_reason not in (None, 1, "STOP"):
+        finish_reason = getattr(candidate, "finish_reason", None)
+        if finish_reason and finish_reason not in (None, 1, "STOP"):
             logger.warning("Gemini response blocked: finish_reason=%s", candidate.finish_reason)
+            # Don't return early — still try to extract any partial content below
+            # If truly empty, the caller's fallback logic will handle it
 
         if hasattr(candidate, "content") and candidate.content and hasattr(candidate.content, "parts"):
             for part in candidate.content.parts:

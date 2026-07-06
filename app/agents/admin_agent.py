@@ -190,11 +190,16 @@ class AdminAgent(BaseAgent):
             )
 
             if not response:
-                return self._error_result(trace_id, LLM_OVERLOAD_MESSAGE)
+                logger.error(f"[{trace_id}] AdminAgent: LLM returned None")
+                return self._error_result(trace_id, "Hệ thống AI không phản hồi. Vui lòng thử lại.")
 
-            raw_output = response.content.strip()
-            total_input_tokens += response.input_tokens
-            total_output_tokens += response.output_tokens
+            raw_output = (response.content or "").strip()
+            if not raw_output:
+                logger.warning(f"[{trace_id}] AdminAgent: LLM returned empty content (possibly safety blocked)")
+                return self._error_result(trace_id, "Hệ thống AI không thể xử lý yêu cầu này do bộ lọc an toàn. Vui lòng diễn đạt lại.")
+
+            total_input_tokens += response.usage.prompt_tokens if response.usage else 0
+            total_output_tokens += response.usage.completion_tokens if response.usage else 0
 
             # Parse ReAct format
             parsed = self._parse_react_output(raw_output)
@@ -224,7 +229,7 @@ class AdminAgent(BaseAgent):
             # ─── Terminal: FINISH ───
             if action.upper() == "FINISH":
                 message = action_input.get("message", thought) if isinstance(action_input, dict) else str(action_input)
-                cost_info = self._log_cost(trace_id, total_input_tokens, total_output_tokens, response.model)
+                cost_info = self._log_cost(trace_id, total_input_tokens, total_output_tokens, "gemini")
                 return TaskResult(
                     trace_id=trace_id,
                     content=message,
