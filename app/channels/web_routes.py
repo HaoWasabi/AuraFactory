@@ -89,7 +89,7 @@ async def login_page(request: Request):
     user = _get_session(request)
     if user:
         return RedirectResponse(url="/dashboard", status_code=302)
-    return templates.TemplateResponse("login.html", {"request": request})
+    return templates.TemplateResponse(name="login.html", context={"request": request}, request=request)
 
 
 @router.get("/dashboard", response_class=HTMLResponse)
@@ -98,10 +98,7 @@ async def dashboard_page(request: Request):
     user = _get_session(request)
     if not user:
         return RedirectResponse(url="/", status_code=302)
-    return templates.TemplateResponse("dashboard.html", {
-        "request": request,
-        "user": user,
-    })
+    return templates.TemplateResponse(name="dashboard.html", context={"request": request, "user": user}, request=request)
 
 
 # ================================================================
