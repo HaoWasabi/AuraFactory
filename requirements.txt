@@ -1,39 +1,39 @@
 # ============================================================
-# AuraFactory — Requirements
+# AuraFactory v3.0 — Requirements (7-Layer Architecture)
 # ============================================================
 
-# === CORE: Discord Bot ===
-nextcord>=2.6.0
-python-dotenv>=1.0.0
-
-# === PHASE 1: LLM Provider (Gemini — free/open) ===
-google-generativeai>=0.8.0
-
-# === API SERVER (Frontend ↔ Agent System) ===
+# === Core ===
 fastapi>=0.104.0
 uvicorn[standard]>=0.24.0
+python-dotenv>=1.0.0
 
-# === PHASE 2: AWS (uncomment khi tích hợp) ===
-# boto3>=1.34.0              # AWS SDK
-# botocore>=1.34.0           # AWS core
+# === Database ===
+asyncpg>=0.29.0
+sqlalchemy>=2.0.0
 
-# === AGENT FRAMEWORK (nếu dùng Strands sau) ===
-# strands-agents>=0.1.0      # Phase 2: AWS open-source agent framework
+# === Discord Bot ===
+nextcord>=2.6.0
 
-# === UTILITIES ===
-aiohttp>=3.9.0               # Async HTTP (Discord API backup)
-asyncio-extras>=1.3.0        # Async utilities (nếu cần)
+# === LLM Providers ===
+google-generativeai>=0.8.0       # Gemini
+aiohttp>=3.9.0                   # HTTP client (Groq, OpenRouter, Ollama)
 
-# === OBSERVABILITY ===
-# Phase 1: Dùng built-in logging + json files
-# Phase 2: uncomment below
-# aws-xray-sdk>=2.12.0       # AWS X-Ray tracing
-# opentelemetry-api>=1.20.0  # OpenTelemetry (nếu dùng)
+# === Memory (Phase 1 - uncomment when installing) ===
+# chromadb>=0.4.0                # Vector DB for semantic memory
+# sentence-transformers>=2.2.0   # Embedding model
 
-# === KNOWLEDGE BASE (Phase 1: local) ===
-# chromadb>=0.4.0            # Local vector DB (nếu cần RAG local)
-# sentence-transformers>=2.2.0  # Embedding model local
+# === Cache/Queue (Phase 2) ===
+# redis>=5.0.0                   # Rate limiter, session cache
 
-# === DEV/TEST ===
+# === Security ===
+# llm-guard>=0.3.0               # Phase 2: advanced guardrails
+
+# === Testing ===
 # pytest>=7.4.0
 # pytest-asyncio>=0.21.0
+# httpx>=0.25.0                  # For FastAPI test client
+
+# === AWS (Phase 2 — uncomment when migrating) ===
+# boto3>=1.34.0                  # AWS SDK
+# opensearch-py>=2.4.0           # OpenSearch (vector store)
+# aws-xray-sdk>=2.12.0           # X-Ray tracing
