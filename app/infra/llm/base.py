@@ -49,16 +49,27 @@ class BaseLLM(ABC):
     @abstractmethod
     async def generate(
         self,
-        prompt: str,
+        prompt: str = "",
         tools: Optional[List[Dict[str, Any]]] = None,
         temperature: float = 0.7,
+        messages: Optional[List[Dict[str, str]]] = None,
+        system_prompt: Optional[str] = None,
+        max_tokens: int = 2000,
+        **kwargs,
     ) -> LLMResponse:
         """Generate a response from the LLM.
 
+        Supports two calling styles:
+        1. Simple: generate(prompt="hello")
+        2. Chat: generate(messages=[{"role": "user", "content": "hello"}], system_prompt="...")
+
         Args:
-            prompt: The input prompt text.
+            prompt: Simple input prompt text.
             tools: Optional list of tool definitions for function calling.
             temperature: Sampling temperature (0.0 to 1.0).
+            messages: Optional chat-style message list.
+            system_prompt: Optional system instruction.
+            max_tokens: Maximum tokens to generate.
 
         Returns:
             LLMResponse with content, tool_calls, and usage stats.

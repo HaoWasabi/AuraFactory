@@ -16,21 +16,37 @@ class GeminiLLM(BaseLLM):
 
     def __init__(self, model: str = "gemini-2.5-flash", api_key: str = "") -> None:
         super().__init__(model=model, api_key=api_key)
+        if not self.api_key:
+            raise ValueError("GEMINI_API_KEY is required but not set")
         genai.configure(api_key=self.api_key)
         self._model = genai.GenerativeModel(self.model)
         logger.info("GeminiLLM initialized (model=%s)", self.model)
 
     async def generate(
         self,
-        prompt: str,
+        prompt: str = "",
         tools: Optional[List[Dict[str, Any]]] = None,
         temperature: float = 0.7,
+        messages: Optional[List[Dict[str, str]]] = None,
+        system_prompt: Optional[str] = None,
+        max_tokens: int = 2000,
+        **kwargs,
     ) -> LLMResponse:
         """Generate a response using Gemini.
 
+        Supports two calling styles:
+        1. Simple: generate(prompt="hello")
+        2. Chat-style: generate(messages=[{"role": "user", "content": "hello"}], system_prompt="You are...")
+
         Retries once on timeout errors.
         """
-        generation_config = genai.types.GenerationConfig(temperature=temperature)
+        # Build the content for Gemini
+        contents = self._build_contents(prompt, messages, system_prompt)
+
+        generation_config = genai.types.GenerationConfig(
+            temperature=temperature,
+            max_output_tokens=max_tokens,
+        )
 
         gemini_tools = self._convert_tools(tools) if tools else None
 
@@ -38,32 +54,69 @@ class GeminiLLM(BaseLLM):
             try:
                 response = await asyncio.to_thread(
                     self._model.generate_content,
-                    prompt,
+                    contents,
                     generation_config=generation_config,
                     tools=gemini_tools,
                 )
                 return self._parse_response(response)
 
             except Exception as e:
-                if attempt == 0 and "timeout" in str(e).lower():
+                if attempt == 0 and ("timeout" in str(e).lower() or "deadline" in str(e).lower()):
                     logger.warning("Gemini timeout, retrying once... (error: %s)", e)
-                    await asyncio.sleep(1.0)
+                    await asyncio.sleep(1.5)
                     continue
-                logger.error("Gemini generation failed: %s", e)
+                logger.error("Gemini generation failed: %s", e, exc_info=True)
                 raise
 
         return LLMResponse(content="", tool_calls=[], usage=UsageStats())
+
+    def _build_contents(
+        self,
+        prompt: str,
+        messages: Optional[List[Dict[str, str]]],
+        system_prompt: Optional[str],
+    ) -> Any:
+        """Build Gemini-compatible contents from various input formats.
+
+        Gemini expects either:
+        - A string prompt
+        - A list of Content objects for multi-turn
+        """
+        # If messages provided, build multi-turn content
+        if messages:
+            parts = []
+            # Add system prompt as first user context if provided
+            if system_prompt:
+                parts.append({"role": "user", "parts": [f"[System Instructions]\n{system_prompt}\n[End System Instructions]"]})
+                parts.append({"role": "model", "parts": ["Understood. I will follow these instructions."]})
+
+            for msg in messages:
+                role = msg.get("role", "user")
+                content = msg.get("content", "")
+                # Gemini uses "user" and "model" (not "assistant")
+                gemini_role = "model" if role in ("assistant", "model", "system") else "user"
+                parts.append({"role": gemini_role, "parts": [content]})
+
+            return parts
+
+        # Simple prompt mode
+        if system_prompt:
+            return f"{system_prompt}\n\n{prompt}"
+        return prompt
 
     def _convert_tools(self, tools: List[Dict[str, Any]]) -> List[Any]:
         """Convert generic tool definitions to Gemini format."""
         function_declarations = []
         for tool in tools:
-            func_decl = genai.types.FunctionDeclaration(
-                name=tool.get("name", ""),
-                description=tool.get("description", ""),
-                parameters=tool.get("parameters", {}),
-            )
-            function_declarations.append(func_decl)
+            try:
+                func_decl = genai.types.FunctionDeclaration(
+                    name=tool.get("name", ""),
+                    description=tool.get("description", ""),
+                    parameters=tool.get("parameters", {}),
+                )
+                function_declarations.append(func_decl)
+            except Exception as e:
+                logger.warning("Failed to convert tool %s: %s", tool.get("name"), e)
 
         if function_declarations:
             return [genai.types.Tool(function_declarations=function_declarations)]
@@ -74,8 +127,17 @@ class GeminiLLM(BaseLLM):
         content = ""
         tool_calls: List[ToolCall] = []
 
-        if response.candidates:
-            candidate = response.candidates[0]
+        if not response.candidates:
+            logger.warning("Gemini returned no candidates")
+            return LLMResponse(content="", tool_calls=[], usage=UsageStats())
+
+        candidate = response.candidates[0]
+
+        # Check for safety block
+        if hasattr(candidate, "finish_reason") and candidate.finish_reason not in (None, 1, "STOP"):
+            logger.warning("Gemini response blocked: finish_reason=%s", candidate.finish_reason)
+
+        if hasattr(candidate, "content") and candidate.content and hasattr(candidate.content, "parts"):
             for part in candidate.content.parts:
                 if hasattr(part, "text") and part.text:
                     content += part.text

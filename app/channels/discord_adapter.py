@@ -88,6 +88,13 @@ class DiscordAdapter(ChannelAdapterBase):
 
     async def _on_ready(self) -> None:
         """Bot connected — log status and crawl guild knowledge."""
+        # Set bot presence (shows "online" with activity)
+        activity = nextcord.Activity(
+            type=nextcord.ActivityType.watching,
+            name="your server | @AuraFactory",
+        )
+        await self._bot.change_presence(status=nextcord.Status.online, activity=activity)
+
         logger.info(
             f"✅ AuraFactory connected as {self._bot.user} "
             f"| Guilds: {len(self._bot.guilds)}"
