@@ -1,38 +1,35 @@
-# Skill: Discord Permission Management
+# permissions
 
-## Agent: architect
-## Risk: medium
-## Category: permissions
+## Tools
 
-### Tools
+### set_channel_perms
+- description: Set permission overwrites for a role or member on a specific channel
+- risk: high
+- agent: admin
+- parameters:
+  - guild_id (int, required): Target guild ID
+  - channel_id (int, required): Channel to set permissions on
+  - target_id (int, required): Role or member ID to apply overwrite to
+  - target_type (str, required): Target type — role or member
+  - allow (int, required): Permission bitfield to explicitly allow
+  - deny (int, required): Permission bitfield to explicitly deny
+  - reason (str, optional): Audit log reason
 
-#### set_channel_permission
-- Description: Set permission overwrites for a role/member on a specific channel.
-- Parameters:
-  - guild_id (integer, required): Target guild ID
-  - channel_name (string, required): Channel to modify
-  - target_name (string, required): Role name or user mention to set permissions for
-  - target_type (string, enum: role|member, default: role): Whether target is a role or member
-  - allow (array): Permissions to explicitly allow
-  - deny (array): Permissions to explicitly deny
-- Risk: medium
-- Requires Approval: no
-- Examples:
-  - Input: {"guild_id": 123456, "channel_name": "admin-only", "target_name": "Member", "target_type": "role", "deny": ["view_channel"]}
-  - Output: {"success": true, "channel": "admin-only", "target": "Member"}
+### set_role_perms
+- description: Set the base permission bitfield for a guild role
+- risk: high
+- agent: admin
+- parameters:
+  - guild_id (int, required): Target guild ID
+  - role_id (int, required): Role ID to modify
+  - permissions (int, required): New permission bitfield value
+  - reason (str, optional): Audit log reason
 
-#### sync_permissions
-- Description: Sync channel permissions with its parent category.
-- Parameters:
-  - guild_id (integer, required): Target guild ID
-  - channel_name (string, required): Channel to sync
-- Risk: medium
-- Requires Approval: no
-
-#### get_channel_permissions
-- Description: View current permission overwrites for a channel.
-- Parameters:
-  - guild_id (integer, required): Target guild ID
-  - channel_name (string, required): Channel to inspect
-- Risk: low
-- Requires Approval: no
+### sync
+- description: Sync channel permissions with its parent category
+- risk: medium
+- agent: assistant
+- parameters:
+  - guild_id (int, required): Target guild ID
+  - channel_id (int, required): Channel to sync permissions for
+  - reason (str, optional): Audit log reason

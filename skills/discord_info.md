@@ -1,53 +1,42 @@
-# Skill: Discord Server Info
+# info
 
-## Agent: assistant
-## Risk: low
-## Category: info
+## Tools
 
-### Tools
+### get_guild_info
+- description: Get comprehensive guild information including name, owner, member count, features, and verification level
+- risk: low
+- agent: fast_track
+- parameters:
+  - guild_id (int, required): Target guild ID
 
-#### get_guild_info
-- Description: Get comprehensive server information (name, members, boosts, features).
-- Parameters:
-  - guild_id (integer, required): Target guild ID
-- Risk: low
-- Requires Approval: no
+### list_channels
+- description: List all channels in the guild with type, category, topic, and position
+- risk: low
+- agent: fast_track
+- parameters:
+  - guild_id (int, required): Target guild ID
+  - channel_type (str, optional): Filter by type (text, voice, stage, forum)
+  - category_id (int, optional): Filter by parent category
 
-#### server_snapshot
-- Description: Get a full snapshot of server structure (categories, channels, roles, member count).
-- Parameters:
-  - guild_id (integer, required): Target guild ID
-  - include_permissions (boolean, default: false): Include permission details per channel
-- Risk: low
-- Requires Approval: no
+### list_roles
+- description: List all roles in the guild with color, permissions, and position
+- risk: low
+- agent: fast_track
+- parameters:
+  - guild_id (int, required): Target guild ID
+  - include_permissions (bool, optional): Whether to include permission bitfield details (default false)
 
-#### list_members
-- Description: List server members with their roles.
-- Parameters:
-  - guild_id (integer, required): Target guild ID
-  - limit (integer, default: 100): Max members to return
-  - role_filter (string): Only show members with this role
-- Risk: low
-- Requires Approval: no
+### list_categories
+- description: List all categories in the guild with their child channels
+- risk: low
+- agent: fast_track
+- parameters:
+  - guild_id (int, required): Target guild ID
 
-#### list_invites
-- Description: List all active invite links.
-- Parameters:
-  - guild_id (integer, required): Target guild ID
-- Risk: low
-- Requires Approval: no
-
-#### list_emojis
-- Description: List all custom emojis in the server.
-- Parameters:
-  - guild_id (integer, required): Target guild ID
-- Risk: low
-- Requires Approval: no
-
-#### list_threads
-- Description: List active and archived threads.
-- Parameters:
-  - guild_id (integer, required): Target guild ID
-  - include_archived (boolean, default: false): Include archived threads
-- Risk: low
-- Requires Approval: no
+### get_channel_info
+- description: Get detailed information about a specific channel including topic, permissions, and settings
+- risk: low
+- agent: fast_track
+- parameters:
+  - guild_id (int, required): Target guild ID
+  - channel_id (int, required): Channel ID to get info for

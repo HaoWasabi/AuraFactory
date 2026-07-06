@@ -1,5 +1,6 @@
-# app/config/__init__.py
 """Configuration module."""
-from app.config.settings import settings
 
-__all__ = ["settings"]
+from .settings import Settings
+from .guild_config import GuildConfig
+
+__all__ = ["Settings", "GuildConfig"]

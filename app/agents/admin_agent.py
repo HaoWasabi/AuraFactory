@@ -1,562 +1,658 @@
 # app/agents/admin_agent.py
 """
-AdminAgent — Setup Wizard + Admin CRUD Commands.
+AdminAgent — ReAct loop for complex multi-step admin operations.
 
-Responsibilities:
-- SETUP MODE: Guide admin through first-time server configuration
-- ADMIN MODE: Execute CRUD operations via ReAct loop + MCP tools
-
-Permission: Only accessible by users with admin role.
-Uses ReAct pattern: Think → Act → Observe → Repeat.
-Integrates SkillRegistry for tool discovery + SkillValidator for safety.
+Pattern: Thought → Action → Observation → repeat (max 5 iterations).
+Generates ExecutionPlan for multi-step requests.
+HITL gate: if plan contains HIGH/CRITICAL risk → store in approvals table → return approval_required=True.
+For bulk ops (≥5 steps): delegate to ArchitectAgent.
+Progress reporting: if >5 steps, report every 3 steps.
 """
 import json
 import asyncio
 import logging
-from typing import Dict, Any, List, Optional
+import time
+from typing import Any, Dict, List, Optional
+from uuid import uuid4
 
-from app.agents.contracts import AgentRole
-from app.infra.llm.base import LLMProvider
-from app.infra.observability.tracer import Tracer
-from app.infra.observability.metrics import metrics
-from app.knowledge.store import ServerKnowledgeStore
-from app.mcp import MCPClient
-from app.gateway.pipeline import GatewayContext
+from app.agents.base import BaseAgent, LLM_OVERLOAD_MESSAGE
+from app.agents.contracts import (
+    AgentRole,
+    IntentType,
+    TaskAssignment,
+    TaskResult,
+    PlanStep,
+    ExecutionPlan,
+)
 
 logger = logging.getLogger(__name__)
 
-MAX_ITERATIONS = 3
-LOOP_TIMEOUT_SECONDS = 30
+# Configuration
+MAX_REACT_ITERATIONS: int = 5
+LOOP_TIMEOUT_SECONDS: int = 45
+APPROVAL_TTL_MINUTES: int = 30
+BULK_THRESHOLD: int = 5  # ≥5 steps → delegate to Architect
+PROGRESS_REPORT_INTERVAL: int = 3  # Report every N steps
 
 
 # ============================================================
-# PROMPTS
+# REACT SYSTEM PROMPT
 # ============================================================
 
-SETUP_SYSTEM_PROMPT = """You are AuraFactory — AI that helps set up Discord servers.
+ADMIN_REACT_PROMPT: str = """You are AuraFactory AdminAgent — executing Discord server management commands via ReAct pattern.
 
-Server: {server_context}
+Each turn you MUST respond with EXACTLY this format (no other text):
 
-Rules:
-- Ask what the server is for, propose channels/roles structure.
-- Format plan: 📁 Category > #channels. 🎭 Roles list.
-- End with: "✅ Tạo luôn | ✏️ Chỉnh sửa"
-- Respond in the same language the user used.
-"""
+Thought: <your reasoning about what to do next — always in English>
+Action: <tool_name OR FINISH OR CLARIFY>
+Action Input: <JSON params for the tool, or message for FINISH/CLARIFY>
 
-ADMIN_REACT_PROMPT = """You are AuraFactory in Admin Mode — executing server management commands.
-
-Each turn you MUST respond with this exact JSON (no other text):
-{{
-  "thought": "your reasoning about what to do next (always in English)",
-  "action": "tool_name",
-  "action_input": {{"param": "value"}}
-}}
-
-Or if you're done:
-{{
-  "thought": "summary of what was accomplished (English)",
-  "action": "FINISH",
-  "message": "response to show the user (in user's language)"
-}}
-
-Or if you need more info:
-{{
-  "thought": "what's unclear (English)",
-  "action": "CLARIFY",
-  "message": "question to ask (in user's language)"
-}}
-
-## Risk Assessment:
-Each tool has a risk level shown below. Follow these rules:
-- LOW: Execute immediately.
-- MEDIUM: Execute, but note what you're doing in thought.
-- HIGH: Use action "CONFIRM" to ask user before executing.
-- CRITICAL: Use action "CONFIRM" with explicit warning message.
+## Terminal Actions:
+- Action: FINISH → Action Input: {{"message": "response to show user (in user's language)"}}
+- Action: CLARIFY → Action Input: {{"message": "question to ask user (in user's language)"}}
 
 ## Rules:
 - ONE action per turn only.
 - Observe the result before deciding next action.
-- If a tool fails, try an alternative approach.
-- Keep "message" concise — under 2000 characters.
+- If a tool fails, try alternative or FINISH with error explanation.
 - Max {max_iter} turns allowed.
+- Keep messages under 2000 characters.
+
+## Risk Assessment:
+- LOW/MEDIUM: Execute immediately.
+- HIGH/CRITICAL: List the risky steps and use FINISH with approval_required flag.
 
 ## Server Context:
 {server_context}
 
-## Available Tools (name | risk | description):
+## Available Tools:
 {tools_block}
 
-## Language Rule:
-- "thought" field: always English
-- "message" field: same language as user's original message
+## Language:
+- "Thought" field: always English.
+- "Action Input.message" field: same language as user's message.
 """
 
 
-class AdminAgent:
+class AdminAgent(BaseAgent):
     """
-    AdminAgent — handles Setup Mode and Admin Mode.
+    AdminAgent — handles complex admin operations via ReAct loop.
 
-    Both modes share the ReAct loop + MCP tools.
-    Difference is only in the system prompt and initial behavior.
+    Responsibilities:
+    - Setup commands (server structure creation)
+    - Moderation (kick/ban/mute with reasoning)
+    - Multi-tool tasks (create channels + roles + permissions)
+    - HITL approval for dangerous operations
+    - Delegation to ArchitectAgent for bulk ops
 
-    Setup Mode: Conversational wizard → confirm → execute → mark complete
-    Admin Mode: Direct command execution via ReAct
-
-    Integration:
-    - SkillRegistry: provides filtered tool list with risk metadata
-    - SkillValidator: validates params before MCP execution
-    - Memory (working): persists pending plans across turns
+    ReAct Loop:
+    - Parse LLM response for "Thought:", "Action:", "Action Input:" patterns
+    - Execute tool via MCP
+    - Feed observation back to LLM
+    - Repeat until FINISH or max iterations
     """
 
     def __init__(
         self,
-        llm: LLMProvider,
-        tracer: Tracer,
-        knowledge_store: ServerKnowledgeStore,
-    ):
-        self._llm = llm
-        self._tracer = tracer
-        self._knowledge = knowledge_store
-        self._mcp: Optional[MCPClient] = None
-        self._specialists: Dict[str, Any] = {}
-        # Injected later
-        self._skill_registry = None
-        self._skill_validator = None
-        self._memory = None
+        llm: Any,
+        mcp_client: Any = None,
+        memory: Any = None,
+        knowledge_store: Any = None,
+        settings: Optional[Dict[str, Any]] = None,
+        skill_registry: Any = None,
+    ) -> None:
+        super().__init__(
+            llm=llm,
+            mcp_client=mcp_client,
+            memory=memory,
+            knowledge_store=knowledge_store,
+            settings=settings,
+            skill_registry=skill_registry,
+        )
+        self._architect: Optional[Any] = None
+        self._db: Any = None  # For approval persistence
 
-    def set_mcp_client(self, mcp_client: MCPClient) -> None:
-        """Inject MCP client for tool access."""
-        self._mcp = mcp_client
+    def set_architect(self, architect: Any) -> None:
+        """Inject ArchitectAgent for bulk delegation."""
+        self._architect = architect
 
-    def set_skill_registry(self, registry, validator=None) -> None:
-        """Inject SkillRegistry + Validator for safe tool access."""
-        self._skill_registry = registry
-        self._skill_validator = validator
-
-    def set_memory(self, memory) -> None:
-        """Inject MemoryService for session persistence."""
-        self._memory = memory
-
-    def register_specialist(self, role: str, agent) -> None:
-        """Register a specialist (e.g., architect) for delegation."""
-        self._specialists[role] = agent
+    def set_db(self, db: Any) -> None:
+        """Inject database connection for approvals table."""
+        self._db = db
 
     # ============================================================
-    # SETUP MODE
+    # MAIN EXECUTE
     # ============================================================
 
-    async def handle_setup(
-        self,
-        prompt: str,
-        guild_id: int,
-        guild=None,
-        context: GatewayContext = None,
-    ) -> Dict[str, Any]:
+    async def execute(self, task: TaskAssignment) -> TaskResult:
         """
-        Setup Mode — first-time server configuration wizard.
-        Conversational until user confirms, then executes via ReAct loop.
+        Execute a complex admin task via ReAct loop.
+
+        Args:
+            task: TaskAssignment with message, context, user role.
+
+        Returns:
+            TaskResult with content, tools called, and approval status.
         """
-        trace_id = context.trace_id if context else "no-trace"
-        session_id = context.session_id if context else ""
-        logger.info(f"[{trace_id}] AdminAgent SETUP MODE for guild {guild_id}")
+        trace_id = task.trace_id
+        prompt = task.prompt
+        guild_id = task.guild_id
 
-        server_context = await self._get_server_context(guild_id, guild)
+        logger.info(f"[{trace_id}] AdminAgent executing: '{prompt[:60]}...'")
 
-        # Check for pending plan in memory (HITL resume)
-        pending_plan = await self._get_pending_plan(session_id)
+        # Get server context for the system prompt
+        server_context = await self._get_server_context(guild_id)
+        tools_block = self._build_tools_block()
 
-        # Check if this looks like a confirmation to execute
-        confirm_keywords = ("tạo", "ok", "confirm", "yes", "đồng ý", "tạo luôn", "✅", "làm đi", "execute", "go")
-        is_confirmation = any(kw in prompt.lower() for kw in confirm_keywords)
-
-        if is_confirmation and self._mcp:
-            # User confirmed → execute plan via ReAct loop
-            # Inject pending plan context if available
-            exec_prompt = prompt
-            if pending_plan:
-                exec_prompt = f"User confirmed execution. Previous plan:\n{pending_plan}\n\nUser said: {prompt}"
-                await self._clear_pending_plan(session_id)
-
-            result = await self._run_react_loop(exec_prompt, trace_id, guild_id, guild, server_context, session_id, mode="setup")
-            # Mark setup as complete after successful execution
-            if result.get("status") == "response":
-                await self._knowledge.mark_setup_complete(guild_id)
-                logger.info(f"[{trace_id}] Setup marked complete for guild {guild_id}")
-            return result
-        else:
-            # Conversational phase — propose plan / answer questions
-            system_prompt = SETUP_SYSTEM_PROMPT.format(server_context=server_context)
-
-            # Include conversation history for continuity
-            messages = await self._build_messages_with_history(prompt, session_id)
-
-            response = await self._llm.generate(
-                messages=messages,
-                system_prompt=system_prompt,
-                temperature=0.7,
-                max_tokens=1500,
-            )
-
-            metrics.count_request(response.model, "admin_setup", "success")
-            metrics.count_tokens(response.model, response.input_tokens, response.output_tokens)
-
-            # Persist proposed plan if response contains a plan
-            if self._looks_like_plan(response.content):
-                await self._save_pending_plan(session_id, response.content)
-
-            return {
-                "status": "response",
-                "content": response.content,
-                "trace_id": trace_id,
-                "mode": "setup",
-            }
-
-    # ============================================================
-    # ADMIN MODE
-    # ============================================================
-
-    async def handle_admin(
-        self,
-        prompt: str,
-        guild_id: int,
-        guild=None,
-        context: GatewayContext = None,
-    ) -> Dict[str, Any]:
-        """
-        Admin Mode — execute CRUD commands via ReAct loop.
-        Only accessible by admin-role users (permission gate in orchestrator).
-        """
-        trace_id = context.trace_id if context else "no-trace"
-        session_id = context.session_id if context else ""
-        logger.info(f"[{trace_id}] AdminAgent ADMIN MODE for guild {guild_id}")
-
-        server_context = await self._get_server_context(guild_id, guild)
-        return await self._run_react_loop(prompt, trace_id, guild_id, guild, server_context, session_id)
-
-    # ============================================================
-    # REACT LOOP (shared by both modes)
-    # ============================================================
-
-    async def _run_react_loop(
-        self, prompt: str, trace_id: str, guild_id: int, guild, server_context: str, session_id: str = "", mode: str = "admin"
-    ) -> Dict[str, Any]:
-        """
-        ReAct loop: Think → Act → Observe → Repeat.
-        Max MAX_ITERATIONS turns. One tool call per turn.
-        Uses SkillRegistry for tool list + Validator before execution.
-        """
-        if not self._mcp:
-            return {
-                "status": "response",
-                "content": "❌ System error: MCP not configured.",
-                "trace_id": trace_id,
-                "mode": "admin",
-            }
-
-        # Build tools block from SkillRegistry (with risk metadata)
-        tools_block = self._build_tools_block(mode=mode)
-
+        # Build system prompt
         system_prompt = ADMIN_REACT_PROMPT.format(
-            max_iter=MAX_ITERATIONS,
-            tools_block=tools_block,
+            max_iter=MAX_REACT_ITERATIONS,
             server_context=server_context,
+            tools_block=tools_block,
         )
 
-        # Include conversation history for continuity
-        messages = await self._build_messages_with_history(prompt, session_id)
-        consecutive_failures = 0
+        # Run ReAct loop
+        return await self._react_loop(
+            prompt=prompt,
+            system_prompt=system_prompt,
+            trace_id=trace_id,
+            guild_id=guild_id,
+        )
 
-        for iteration in range(MAX_ITERATIONS):
-            # Generate next action
-            response = await self._llm.generate(
+    # ============================================================
+    # REACT LOOP
+    # ============================================================
+
+    async def _react_loop(
+        self,
+        prompt: str,
+        system_prompt: str,
+        trace_id: str,
+        guild_id: Optional[int],
+    ) -> TaskResult:
+        """
+        ReAct loop: Thought → Action → Observation → repeat.
+        Max MAX_REACT_ITERATIONS iterations.
+        """
+        messages: List[Dict[str, str]] = [
+            {"role": "user", "content": prompt},
+        ]
+        tools_called: List[str] = []
+        total_input_tokens: int = 0
+        total_output_tokens: int = 0
+
+        for iteration in range(MAX_REACT_ITERATIONS):
+            # Call LLM
+            response = await self._call_llm(
+                prompt="",
                 messages=messages,
                 system_prompt=system_prompt if iteration == 0 else None,
                 temperature=0.2,
-                max_tokens=1000,
+                max_tokens=1200,
             )
 
-            raw_output = response.content.strip()
-            metrics.count_request(response.model, "admin_react", "success")
-            metrics.count_tokens(response.model, response.input_tokens, response.output_tokens)
+            if not response:
+                return self._error_result(trace_id, LLM_OVERLOAD_MESSAGE)
 
-            # Parse JSON response
-            try:
-                parsed = self._parse_react_output(raw_output)
-            except (json.JSONDecodeError, ValueError) as e:
-                logger.warning(f"[{trace_id}] Failed to parse ReAct output iter {iteration}: {e}")
-                consecutive_failures += 1
-                if consecutive_failures >= 3:
-                    return {
-                        "status": "response",
-                        "content": "❌ Đã xảy ra lỗi khi xử lý. Vui lòng thử lại.",
-                        "trace_id": trace_id,
-                        "mode": "admin",
-                    }
+            raw_output = response.content.strip()
+            total_input_tokens += response.input_tokens
+            total_output_tokens += response.output_tokens
+
+            # Parse ReAct format
+            parsed = self._parse_react_output(raw_output)
+            if not parsed:
+                logger.warning(f"[{trace_id}] Failed to parse ReAct output at iter {iteration}")
+                # Give LLM another chance
                 messages.append({"role": "assistant", "content": raw_output})
                 messages.append({
                     "role": "user",
-                    "content": "Error: Response must be valid JSON with 'thought' and 'action' fields. Try again.",
+                    "content": (
+                        "Error: Your response must follow the exact format:\n"
+                        "Thought: <reasoning>\nAction: <tool_name>\nAction Input: <json>\n"
+                        "Try again."
+                    ),
                 })
                 continue
 
-            consecutive_failures = 0
-            thought = parsed.get("thought", "")
-            action = parsed.get("action", "")
+            thought = parsed["thought"]
+            action = parsed["action"]
+            action_input = parsed["action_input"]
 
-            self._tracer.log_reasoning(trace_id, "admin_react", f"[iter {iteration}] {thought}")
-            logger.info(f"[{trace_id}] ReAct iter {iteration}: action={action}")
+            logger.info(
+                f"[{trace_id}] ReAct iter {iteration}: "
+                f"thought='{thought[:80]}...' action={action}"
+            )
 
-            # ─── Terminal actions ───
-            if action == "FINISH":
-                return {
-                    "status": "response",
-                    "content": parsed.get("message", "Done!"),
-                    "trace_id": trace_id,
-                    "mode": "admin",
-                    "iterations": iteration + 1,
-                }
+            # ─── Terminal: FINISH ───
+            if action.upper() == "FINISH":
+                message = action_input.get("message", thought) if isinstance(action_input, dict) else str(action_input)
+                cost_info = self._log_cost(trace_id, total_input_tokens, total_output_tokens, response.model)
+                return TaskResult(
+                    trace_id=trace_id,
+                    content=message,
+                    status="success",
+                    tools_called=tools_called,
+                    cost=cost_info,
+                    iterations=iteration + 1,
+                )
 
-            if action == "CLARIFY":
-                return {
-                    "status": "clarify",
-                    "content": parsed.get("message", "Could you clarify?"),
-                    "trace_id": trace_id,
-                    "mode": "admin",
-                }
+            # ─── Terminal: CLARIFY ───
+            if action.upper() == "CLARIFY":
+                message = action_input.get("message", thought) if isinstance(action_input, dict) else str(action_input)
+                return TaskResult(
+                    trace_id=trace_id,
+                    content=message,
+                    status="success",
+                    tools_called=tools_called,
+                    iterations=iteration + 1,
+                    metadata={"needs_clarification": True},
+                )
 
-            if action == "CONFIRM":
-                # Persist the plan so we can resume after user confirms
-                plan_content = parsed.get("message", "")
-                await self._save_pending_plan(session_id, f"Action: {thought}\n{plan_content}")
-                return {
-                    "status": "confirm",
-                    "content": parsed.get("message", "Please confirm."),
-                    "trace_id": trace_id,
-                    "mode": "admin",
-                }
+            # ─── Check risk level ───
+            risk = self._get_risk_level(action)
+            if risk in ("high", "critical"):
+                # HITL gate — store pending approval
+                approval_id = await self._store_approval(
+                    trace_id=trace_id,
+                    guild_id=guild_id,
+                    action=action,
+                    params=action_input if isinstance(action_input, dict) else {},
+                    thought=thought,
+                )
+                return TaskResult(
+                    trace_id=trace_id,
+                    content=(
+                        f"⚠️ Thao tác **{action}** có rủi ro {'cao' if risk == 'high' else 'rất cao'}. "
+                        f"Cần xác nhận từ admin.\n"
+                        f"Approval ID: `{approval_id}`\n"
+                        f"⏱️ Hết hạn sau {APPROVAL_TTL_MINUTES} phút."
+                    ),
+                    status="needs_approval",
+                    approval_required=True,
+                    approval_id=approval_id,
+                    tools_called=tools_called,
+                    iterations=iteration + 1,
+                )
 
-            # ─── Delegation to specialist ───
-            if action == "delegate_architect":
-                observation = await self._delegate("architect", parsed.get("action_input", {}), guild_id, guild)
-            else:
-                # ─── Tool execution via MCP (with validation) ───
-                action_input = parsed.get("action_input", {})
-                observation = await self._execute_tool(action, action_input, trace_id, guild_id)
+            # ─── Check bulk threshold → delegate to Architect ───
+            if self._should_delegate_to_architect(action_input):
+                return await self._delegate_to_architect(
+                    task_description=f"{thought}\nAction: {action}\nParams: {json.dumps(action_input, ensure_ascii=False)}",
+                    trace_id=trace_id,
+                    guild_id=guild_id,
+                )
 
-            # Append to conversation for next iteration
+            # ─── Execute tool via MCP ───
+            params = action_input if isinstance(action_input, dict) else {}
+            params = self._inject_guild_id(params, guild_id)
+            observation = await self._execute_tool(action, params, trace_id)
+            tools_called.append(action)
+
+            # Append to messages for next iteration
             messages.append({"role": "assistant", "content": raw_output})
-            obs_str = json.dumps(observation, ensure_ascii=False) if isinstance(observation, dict) else str(observation)
-            messages.append({"role": "user", "content": f"Observation: {obs_str}"})
+            messages.append({"role": "user", "content": f"Observation: {observation}"})
 
         # Max iterations reached
+        cost_info = self._log_cost(trace_id, total_input_tokens, total_output_tokens, "unknown")
+        return TaskResult(
+            trace_id=trace_id,
+            content="⚠️ Đã đạt giới hạn xử lý. Một số thao tác có thể chưa hoàn thành.",
+            status="success",
+            tools_called=tools_called,
+            cost=cost_info,
+            iterations=MAX_REACT_ITERATIONS,
+        )
+
+    # ============================================================
+    # HITL: RESUME APPROVED PLAN
+    # ============================================================
+
+    async def resume_plan(self, approval_id: str, guild_id: Optional[int] = None) -> TaskResult:
+        """
+        Resume execution of an approved plan.
+        Called after admin approves a pending high-risk operation.
+
+        Args:
+            approval_id: The approval ID from the pending plan.
+            guild_id: Guild context for tool execution.
+
+        Returns:
+            TaskResult with execution outcome.
+        """
+        # Load plan from DB
+        plan_data = await self._load_approval(approval_id)
+        if not plan_data:
+            return TaskResult(
+                trace_id=approval_id,
+                content="❌ Không tìm thấy plan hoặc đã hết hạn.",
+                status="failed",
+            )
+
+        trace_id = plan_data.get("trace_id", approval_id)
+        action = plan_data.get("action", "")
+        params = plan_data.get("params", {})
+
+        logger.info(f"[{trace_id}] Resuming approved plan: {action}")
+
+        # Execute the previously blocked tool
+        params = self._inject_guild_id(params, guild_id)
+        observation = await self._execute_tool(action, params, trace_id)
+
+        # Clean up approval
+        await self._delete_approval(approval_id)
+
+        if "Error" in str(observation):
+            return TaskResult(
+                trace_id=trace_id,
+                content=f"❌ Thực hiện thất bại: {observation}",
+                status="failed",
+                tools_called=[action],
+            )
+
+        return TaskResult(
+            trace_id=trace_id,
+            content=f"✅ Đã thực hiện **{action}** sau khi được duyệt.",
+            status="success",
+            tools_called=[action],
+        )
+
+    # ============================================================
+    # REACT PARSER
+    # ============================================================
+
+    def _parse_react_output(self, raw: str) -> Optional[Dict[str, Any]]:
+        """
+        Parse LLM ReAct output for Thought:, Action:, Action Input: patterns.
+
+        Expected format:
+            Thought: <reasoning>
+            Action: <tool_name>
+            Action Input: <json or text>
+
+        Returns:
+            Dict with {thought, action, action_input} or None if parse fails.
+        """
+        thought = ""
+        action = ""
+        action_input: Any = {}
+
+        lines = raw.strip().split("\n")
+
+        # Extract Thought
+        thought_lines: List[str] = []
+        action_line_idx = -1
+
+        for i, line in enumerate(lines):
+            if line.strip().startswith("Thought:"):
+                thought = line.split("Thought:", 1)[1].strip()
+            elif line.strip().startswith("Action:"):
+                action = line.split("Action:", 1)[1].strip()
+                action_line_idx = i
+            elif line.strip().startswith("Action Input:"):
+                # Everything after "Action Input:" is the input
+                input_text = line.split("Action Input:", 1)[1].strip()
+                # Might continue on next lines
+                remaining_lines = lines[i + 1:]
+                full_input = input_text + "\n" + "\n".join(remaining_lines)
+                full_input = full_input.strip()
+
+                # Try to parse as JSON
+                try:
+                    if "{" in full_input:
+                        start = full_input.index("{")
+                        end = full_input.rindex("}") + 1
+                        action_input = json.loads(full_input[start:end])
+                    else:
+                        action_input = {"message": full_input}
+                except (json.JSONDecodeError, ValueError):
+                    action_input = {"message": full_input}
+                break
+
+        # Fallback: try parsing as JSON if the output is raw JSON
+        if not action and "{" in raw:
+            try:
+                start = raw.index("{")
+                end = raw.rindex("}") + 1
+                parsed_json = json.loads(raw[start:end])
+                if "action" in parsed_json:
+                    return {
+                        "thought": parsed_json.get("thought", ""),
+                        "action": parsed_json["action"],
+                        "action_input": parsed_json.get("action_input", parsed_json.get("message", {})),
+                    }
+            except (json.JSONDecodeError, ValueError):
+                pass
+
+        if not action:
+            return None
+
         return {
-            "status": "response",
-            "content": "⚠️ Đã đạt giới hạn xử lý. Một số thao tác có thể chưa hoàn thành.",
-            "trace_id": trace_id,
-            "mode": "admin",
-            "iterations": MAX_ITERATIONS,
+            "thought": thought,
+            "action": action,
+            "action_input": action_input,
         }
 
     # ============================================================
-    # TOOL EXECUTION (with validation)
+    # TOOL EXECUTION
     # ============================================================
 
     async def _execute_tool(
-        self, tool_name: str, params: Dict[str, Any], trace_id: str, guild_id: int
-    ) -> Any:
-        """
-        Execute a tool with validation gate:
-        1. Validate params via SkillValidator
-        2. Check risk level
-        3. Execute via MCP
-        """
-        # --- Step 1: Validate ---
-        # Auto-inject guild_id (LLM doesn't need to know this)
-        if guild_id and "guild_id" not in params:
-            params["guild_id"] = guild_id
+        self, tool_name: str, params: Dict[str, Any], trace_id: str
+    ) -> str:
+        """Execute a tool via MCP client with timeout."""
+        if not self._mcp_client:
+            return "Error: MCP client not configured"
 
-        # Auto-coerce guild_id to int if string
-        if "guild_id" in params and isinstance(params["guild_id"], str):
-            try:
-                params["guild_id"] = int(params["guild_id"])
-            except ValueError:
-                pass
-
-        if self._skill_validator:
-            result = self._skill_validator.validate(tool_name, params)
-            if not result.is_valid:
-                logger.warning(f"[{trace_id}] Validation failed for {tool_name}: {result.error_message}")
-                return f"Validation Error: {result.error_message}"
-            # Use sanitized params
-            params = result.sanitized_params
-            if result.warnings:
-                logger.info(f"[{trace_id}] Validation warnings for {tool_name}: {result.warnings}")
-
-        # --- Step 2: Risk check (log only — actual gate is in LLM prompt) ---
-        if self._skill_registry:
-            risk = self._skill_registry.get_risk_level(tool_name)
-            if risk in ("high", "critical"):
-                logger.warning(f"[{trace_id}] HIGH RISK tool executed: {tool_name} (risk={risk})")
-                metrics.increment("high_risk_tool_executed", labels={"tool": tool_name})
-
-        # --- Step 3: Execute via MCP ---
         try:
             result = await asyncio.wait_for(
-                self._mcp.call_tool(tool_name, params),
+                self._mcp_client.call_tool(tool_name, params),
                 timeout=LOOP_TIMEOUT_SECONDS,
             )
-            return result
+
+            # Format observation
+            if isinstance(result, dict):
+                if result.get("success") is False:
+                    return f"Error: {result.get('error', 'Unknown error')}"
+                # Summarize successful result
+                msg = result.get("message", json.dumps(result, ensure_ascii=False, default=str))
+                return f"OK: {str(msg)[:200]}"
+            return f"OK: {str(result)[:200]}"
+
         except asyncio.TimeoutError:
             return f"Error: Tool '{tool_name}' timed out after {LOOP_TIMEOUT_SECONDS}s"
         except Exception as e:
             return f"Error: {str(e)}"
 
     # ============================================================
-    # TOOLS BLOCK BUILDER
+    # ARCHITECT DELEGATION
     # ============================================================
 
-    def _build_tools_block(self, mode: str = "admin") -> str:
-        """Build tools list for LLM prompt — filtered by mode."""
-        if self._skill_registry and self._skill_registry.is_loaded:
-            tools = self._skill_registry.get_all_tools()
+    def _should_delegate_to_architect(self, action_input: Any) -> bool:
+        """Check if the task should be delegated to ArchitectAgent."""
+        if not self._architect:
+            return False
+        if not isinstance(action_input, dict):
+            return False
+        # Check if it's a bulk operation with many steps
+        steps = action_input.get("steps", [])
+        if isinstance(steps, list) and len(steps) >= BULK_THRESHOLD:
+            return True
+        return False
 
-            # Setup mode: only creation tools (save tokens)
-            setup_names = {
-                "create_channel", "create_category", "create_role", "assign_role",
-                "setup_welcome",
-            }
-            # Admin mode: broader set
-            admin_names = {
-                "create_channel", "create_category", "create_role", "assign_role",
-                "edit_channel", "delete_channel", "delete_role",
-                "list_channels", "list_roles", "get_guild_info",
-                "set_channel_permission", "kick_member", "ban_member",
-                "create_automod_rule", "create_invite", "backup_server",
-            }
+    async def _delegate_to_architect(
+        self, task_description: str, trace_id: str, guild_id: Optional[int]
+    ) -> TaskResult:
+        """Delegate bulk execution to ArchitectAgent."""
+        if not self._architect:
+            return self._error_result(trace_id, "Architect agent not available")
 
-            allowed = setup_names if mode == "setup" else admin_names
-            filtered = [t for t in tools if t.name in allowed]
-            if not filtered:
-                filtered = tools[:10]
-            lines = []
-            for t in filtered:
-                lines.append(f"- {t.name} [{t.risk_level}]: {t.description}")
-            return "\n".join(lines)
+        logger.info(f"[{trace_id}] Delegating to ArchitectAgent (bulk operation)")
+
+        # Create task for architect
+        task = TaskAssignment(
+            trace_id=trace_id,
+            intent=IntentType.ADMIN_COMPLEX,
+            agent_role=AgentRole.ARCHITECT,
+            message=task_description,
+            guild_id=guild_id,
+            context={"delegated_from": "admin_agent"},
+        )
+        return await self._architect.execute(task)
+
+    # ============================================================
+    # HITL: APPROVAL PERSISTENCE
+    # ============================================================
+
+    async def _store_approval(
+        self,
+        trace_id: str,
+        guild_id: Optional[int],
+        action: str,
+        params: Dict[str, Any],
+        thought: str,
+    ) -> str:
+        """
+        Store pending approval in DB `approvals` table with TTL 30 min.
+        Returns approval_id.
+        """
+        approval_id = str(uuid4())[:12]
+
+        if self._db:
+            try:
+                await self._db.execute(
+                    """
+                    INSERT INTO approvals (approval_id, trace_id, guild_id, action, params, thought, expires_at)
+                    VALUES ($1, $2, $3, $4, $5, $6, NOW() + INTERVAL '30 minutes')
+                    """,
+                    approval_id, trace_id, guild_id,
+                    action, json.dumps(params, ensure_ascii=False), thought,
+                )
+            except Exception as e:
+                logger.error(f"Failed to store approval: {e}")
         else:
-            # Fallback to raw MCP list
-            tools = self._mcp.to_llm_format()
-            return "\n".join(f"- {t['name']}: {t['description']}" for t in tools)
+            # In-memory fallback (development only)
+            if not hasattr(self, "_pending_approvals"):
+                self._pending_approvals: Dict[str, Dict] = {}
+            self._pending_approvals[approval_id] = {
+                "trace_id": trace_id,
+                "guild_id": guild_id,
+                "action": action,
+                "params": params,
+                "thought": thought,
+                "created_at": time.time(),
+            }
 
-    # ============================================================
-    # MEMORY / PENDING PLAN (HITL resume)
-    # ============================================================
+        logger.info(f"[{trace_id}] Stored approval {approval_id}: action={action}")
+        return approval_id
 
-    async def _save_pending_plan(self, session_id: str, plan: str) -> None:
-        """Persist a proposed plan so it survives across message turns."""
-        if self._memory and session_id:
-            await self._memory.working.set(
-                f"pending_plan:{session_id}", plan, ttl_seconds=600  # 10 min TTL
-            )
-
-    async def _get_pending_plan(self, session_id: str) -> Optional[str]:
-        """Retrieve pending plan from working memory."""
-        if self._memory and session_id:
-            return await self._memory.working.get(f"pending_plan:{session_id}")
+    async def _load_approval(self, approval_id: str) -> Optional[Dict[str, Any]]:
+        """Load pending approval from DB or memory."""
+        if self._db:
+            try:
+                row = await self._db.fetchrow(
+                    """
+                    SELECT trace_id, guild_id, action, params, thought
+                    FROM approvals
+                    WHERE approval_id = $1 AND expires_at > NOW()
+                    """,
+                    approval_id,
+                )
+                if row:
+                    return {
+                        "trace_id": row["trace_id"],
+                        "guild_id": row["guild_id"],
+                        "action": row["action"],
+                        "params": json.loads(row["params"]) if row["params"] else {},
+                        "thought": row["thought"],
+                    }
+            except Exception as e:
+                logger.error(f"Failed to load approval: {e}")
+        else:
+            # In-memory fallback
+            if hasattr(self, "_pending_approvals"):
+                data = self._pending_approvals.get(approval_id)
+                if data:
+                    # Check TTL (30 min)
+                    if time.time() - data["created_at"] < APPROVAL_TTL_MINUTES * 60:
+                        return data
+                    else:
+                        del self._pending_approvals[approval_id]
         return None
 
-    async def _clear_pending_plan(self, session_id: str) -> None:
-        """Remove pending plan after execution."""
-        if self._memory and session_id:
-            await self._memory.working.delete(f"pending_plan:{session_id}")
-
-    # ============================================================
-    # CONVERSATION HISTORY
-    # ============================================================
-
-    async def _build_messages_with_history(self, prompt: str, session_id: str) -> List[Dict[str, str]]:
-        """Build message list with conversation history for continuity."""
-        messages = []
-
-        # Inject recent history from memory
-        if self._memory and session_id:
+    async def _delete_approval(self, approval_id: str) -> None:
+        """Remove approval after execution."""
+        if self._db:
             try:
-                history = await self._memory.get_conversation_history(session_id, limit=6)
-                if history:
-                    for msg in history[-6:]:
-                        messages.append({
-                            "role": msg.get("role", "user"),
-                            "content": msg.get("content", "")[:500],
-                        })
-            except Exception:
-                pass
-
-        # Current message
-        messages.append({"role": "user", "content": prompt})
-        return messages
+                await self._db.execute(
+                    "DELETE FROM approvals WHERE approval_id = $1",
+                    approval_id,
+                )
+            except Exception as e:
+                logger.error(f"Failed to delete approval: {e}")
+        else:
+            if hasattr(self, "_pending_approvals"):
+                self._pending_approvals.pop(approval_id, None)
 
     # ============================================================
     # HELPERS
     # ============================================================
 
-    async def _get_server_context(self, guild_id: int, guild) -> str:
-        """Get server context string for prompts."""
-        if guild_id:
-            ctx = await self._knowledge.get_summary_string(guild_id)
-            if ctx != "No server knowledge available.":
-                return ctx
+    def _build_tools_block(self) -> str:
+        """Build tools list for LLM prompt from skill registry or MCP."""
+        if self._skill_registry and hasattr(self._skill_registry, "get_all_tools"):
+            tools = self._skill_registry.get_all_tools()
+            if tools:
+                lines = []
+                for t in tools:
+                    name = getattr(t, "name", str(t))
+                    risk = getattr(t, "risk_level", "low")
+                    desc = getattr(t, "description", "")
+                    lines.append(f"- {name} [{risk}]: {desc}")
+                return "\n".join(lines)
 
-        # Fallback: minimal context from guild object
-        if guild:
-            return (
-                f"Server: {guild.name}\n"
-                f"Members: {guild.member_count}\n"
-                f"Channels: {len(guild.channels)}\n"
-                f"Roles: {len(guild.roles)}\n"
-            )
-        return "No server context available."
+        # Fallback: get from MCP client
+        if self._mcp_client and hasattr(self._mcp_client, "to_llm_format"):
+            tools = self._mcp_client.to_llm_format()
+            return "\n".join(f"- {t['name']}: {t.get('description', '')}" for t in tools)
 
-    def _parse_react_output(self, raw: str) -> dict:
-        """Parse ReAct JSON from LLM output."""
-        text = raw.strip()
-        # Strip markdown code block
-        if text.startswith("```"):
-            lines = text.split("\n")
-            lines = lines[1:]
-            if lines and lines[-1].strip() == "```":
-                lines = lines[:-1]
-            text = "\n".join(lines)
+        return "No tools available."
 
-        # Find JSON in text
-        if "{" in text:
-            start = text.index("{")
-            end = text.rindex("}") + 1
-            text = text[start:end]
+    def _get_risk_level(self, tool_name: str) -> str:
+        """Get risk level for a tool."""
+        if self._skill_registry and hasattr(self._skill_registry, "get_risk_level"):
+            return self._skill_registry.get_risk_level(tool_name)
+        # Default high-risk tools
+        high_risk = {"kick_member", "ban_member", "delete_channel", "delete_role"}
+        critical = {"delete_guild", "prune_members"}
+        if tool_name in critical:
+            return "critical"
+        if tool_name in high_risk:
+            return "high"
+        return "low"
 
-        parsed = json.loads(text)
-        if "thought" not in parsed:
-            raise ValueError("Missing 'thought' field")
-        if "action" not in parsed and "message" not in parsed:
-            raise ValueError("Missing 'action' or 'message' field")
-        return parsed
+    def _inject_guild_id(self, params: Dict[str, Any], guild_id: Optional[int]) -> Dict[str, Any]:
+        """Auto-inject guild_id into params."""
+        if guild_id and "guild_id" not in params:
+            params["guild_id"] = guild_id
+        if "guild_id" in params and isinstance(params["guild_id"], str):
+            try:
+                params["guild_id"] = int(params["guild_id"])
+            except ValueError:
+                pass
+        return params
 
-    async def _delegate(self, role: str, task_input: dict, guild_id: int, guild) -> str:
-        """Delegate to a specialist agent."""
-        agent = self._specialists.get(role)
-        if not agent:
-            return f"Error: No specialist '{role}' registered"
+    async def _get_server_context(self, guild_id: Optional[int]) -> str:
+        """Get server context from knowledge store."""
+        if not guild_id or not self._knowledge_store:
+            return "No server context available."
         try:
-            result = await agent.run_task(
-                task_description=task_input.get("task", ""),
-                trace_id="",
-                guild_id=guild_id,
-                guild=guild,
-            )
-            return result.get("message", "Task completed.")
-        except Exception as e:
-            return f"Delegation error: {str(e)}"
+            return await self._knowledge_store.get_summary_string(guild_id)
+        except Exception:
+            return "No server context available."
 
-    def _looks_like_plan(self, content: str) -> bool:
-        """Detect if response contains a proposed plan."""
-        plan_indicators = ("📋", "Proposed", "Category:", "#", "Roles:", "✅ Tạo", "Tạo luôn")
-        return any(indicator in content for indicator in plan_indicators)
+    # ============================================================
+    # BASE AGENT INTERFACE
+    # ============================================================
+
+    def get_agent_role(self) -> AgentRole:
+        return AgentRole.ADMIN

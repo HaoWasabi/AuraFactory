@@ -1,24 +1,22 @@
 # Python
 __pycache__/
 *.py[cod]
+*$py.class
 *.so
 *.egg-info/
 dist/
 build/
 .eggs/
 
-# Environment & Secrets
-.env
-.env.*
-!.env.example
-*.pem
-*.key
-*.cert
-
-# Virtual environments
-.venv/
+# Virtual environment
 venv/
+.venv/
 env/
+
+# Environment variables
+.env
+.env.local
+.env.production
 
 # IDE
 .vscode/
@@ -26,21 +24,23 @@ env/
 *.swp
 *.swo
 
-# Runtime data (may contain server-specific info)
-data/knowledge/*.json
-data/chroma/
-logs/
-*.log
-
 # OS
 .DS_Store
 Thumbs.db
-desktop.ini
+
+# Logs
+logs/*.log
+logs/traces/*.json
+
+# Data (local only)
+data/knowledge/*.json
+data/*.db
 
 # Docker
 postgres_data/
 
-# Test artifacts
+# Testing
 .pytest_cache/
 htmlcov/
 .coverage
+*.jsonl

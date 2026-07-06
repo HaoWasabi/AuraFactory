@@ -1,107 +1,51 @@
-# app/infra/vectorstore/chroma.py
-"""
-ChromaDB implementation — Phase 1 vector store.
-Phase 2: Replace with OpenSearchVectorStore (same ABC).
-"""
-import logging
-from typing import List, Optional
+"""ChromaDB vector store placeholder (disabled in Phase 1)."""
 
-from app.infra.vectorstore.base import VectorStore
+import logging
+from typing import Any, Dict, List, Optional
+
+from .base import VectorStoreBase
 
 logger = logging.getLogger(__name__)
 
 
-class ChromaVectorStore(VectorStore):
-    """ChromaDB persistent vector store."""
+class DisabledError(Exception):
+    """Raised when a disabled component is accessed."""
 
-    def __init__(self, path: str = "./data/chroma"):
-        import chromadb
+    def __init__(self, component: str = "VectorStore") -> None:
+        super().__init__(
+            f"{component} is disabled in Phase 1. "
+            f"Enable it by configuring the appropriate environment variables."
+        )
 
-        self._client = chromadb.PersistentClient(path=path)
-        logger.info(f"ChromaDB initialized at {path}")
 
-    def _get_collection(self, name: str):
-        """Get or create a collection."""
-        return self._client.get_or_create_collection(name)
+class ChromaVectorStore(VectorStoreBase):
+    """ChromaDB vector store - disabled placeholder for Phase 1.
+
+    All operations raise DisabledError. This will be implemented
+    when vector search is enabled in a later phase.
+    """
+
+    def __init__(self) -> None:
+        logger.warning("ChromaVectorStore instantiated but is disabled in Phase 1")
 
     async def add(
         self,
-        collection: str,
-        id: str,
-        text: str,
-        embedding: List[float],
-        metadata: Optional[dict] = None,
-    ) -> None:
-        col = self._get_collection(collection)
-        col.add(
-            ids=[id],
-            documents=[text],
-            embeddings=[embedding],
-            metadatas=[metadata or {}],
-        )
-
-    async def add_batch(
-        self,
-        collection: str,
-        ids: List[str],
         texts: List[str],
-        embeddings: List[List[float]],
-        metadatas: Optional[List[dict]] = None,
-    ) -> None:
-        col = self._get_collection(collection)
-        col.add(
-            ids=ids,
-            documents=texts,
-            embeddings=embeddings,
-            metadatas=metadatas or [{} for _ in ids],
-        )
+        metadatas: Optional[List[Dict[str, Any]]] = None,
+        ids: Optional[List[str]] = None,
+    ) -> List[str]:
+        """Disabled - raises DisabledError."""
+        raise DisabledError("ChromaVectorStore.add")
 
-    async def query(
+    async def search(
         self,
-        collection: str,
-        embedding: List[float],
+        query: str,
         top_k: int = 5,
-        filter: Optional[dict] = None,
-    ) -> List[dict]:
-        col = self._get_collection(collection)
-        kwargs = {
-            "query_embeddings": [embedding],
-            "n_results": top_k,
-        }
-        if filter:
-            kwargs["where"] = filter
+        filter_metadata: Optional[Dict[str, Any]] = None,
+    ) -> List[Dict[str, Any]]:
+        """Disabled - raises DisabledError."""
+        raise DisabledError("ChromaVectorStore.search")
 
-        results = col.query(**kwargs)
-        return self._format_results(results)
-
-    async def delete(self, collection: str, id: str) -> None:
-        col = self._get_collection(collection)
-        col.delete(ids=[id])
-
-    async def delete_collection(self, collection: str) -> None:
-        self._client.delete_collection(collection)
-
-    async def count(self, collection: str) -> int:
-        col = self._get_collection(collection)
-        return col.count()
-
-    def _format_results(self, results: dict) -> List[dict]:
-        """Convert ChromaDB results to standardized format."""
-        formatted = []
-        if not results or not results.get("ids"):
-            return formatted
-
-        ids = results["ids"][0]
-        documents = results.get("documents", [[]])[0]
-        metadatas = results.get("metadatas", [[]])[0]
-        distances = results.get("distances", [[]])[0]
-
-        for i, doc_id in enumerate(ids):
-            formatted.append({
-                "id": doc_id,
-                "text": documents[i] if i < len(documents) else "",
-                "metadata": metadatas[i] if i < len(metadatas) else {},
-                "score": 1.0 - (distances[i] if i < len(distances) else 0.0),
-            })
-
-        return formatted
+    async def delete(self, ids: List[str]) -> None:
+        """Disabled - raises DisabledError."""
+        raise DisabledError("ChromaVectorStore.delete")

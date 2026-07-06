@@ -1,68 +1,66 @@
-# app/infra/llm/base.py
-"""
-LLM Provider interface — all providers implement this.
-Backward-compatible with existing app/providers/base.py signature.
-"""
+"""Base LLM provider interface."""
+
+import logging
 from abc import ABC, abstractmethod
-from typing import List, Dict, Any, Optional
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+from typing import Any, Dict, List, Optional
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
-class LLMMessage:
-    """Structured message for LLM conversations."""
-    role: str       # "system" | "user" | "assistant"
-    content: str
+class ToolCall:
+    """Represents a tool/function call returned by the LLM."""
+
+    name: str
+    arguments: Dict[str, Any] = field(default_factory=dict)
+
+
+@dataclass
+class UsageStats:
+    """Token usage statistics from an LLM response."""
+
+    prompt_tokens: int = 0
+    completion_tokens: int = 0
+    total_tokens: int = 0
 
 
 @dataclass
 class LLMResponse:
-    """Standardized LLM response across all providers."""
-    content: str
-    model: str
-    input_tokens: int = 0
-    output_tokens: int = 0
-    latency_ms: float = 0.0
-    finish_reason: str = "stop"  # "stop" | "length" | "error"
-    raw_response: Any = None
+    """Standardized response from any LLM provider."""
+
+    content: str = ""
+    tool_calls: List[ToolCall] = field(default_factory=list)
+    usage: UsageStats = field(default_factory=UsageStats)
+
+    @property
+    def has_tool_calls(self) -> bool:
+        """Check if the response contains tool calls."""
+        return len(self.tool_calls) > 0
 
 
-class LLMProvider(ABC):
-    """
-    Abstract interface for all LLM providers.
-    Phase 1: Gemini, Groq, OpenRouter, Ollama.
-    Phase 2: Add AWS Bedrock — same ABC.
-    """
+class BaseLLM(ABC):
+    """Abstract base class for all LLM providers."""
+
+    def __init__(self, model: str = "", api_key: str = "") -> None:
+        self.model = model
+        self.api_key = api_key
 
     @abstractmethod
     async def generate(
         self,
-        messages: List[Dict[str, str]],
-        system_prompt: str = "",
-        temperature: float = 0.3,
-        max_tokens: int = 4096,
-        tools: Optional[List[Dict]] = None,
+        prompt: str,
+        tools: Optional[List[Dict[str, Any]]] = None,
+        temperature: float = 0.7,
     ) -> LLMResponse:
-        """Generate a completion from message history."""
-        ...
+        """Generate a response from the LLM.
 
-    @abstractmethod
-    async def generate_with_tools(
-        self,
-        messages: List[Dict[str, str]],
-        system_prompt: str,
-        tools: List[Dict],
-        temperature: float = 0.3,
-    ) -> Dict[str, Any]:
-        """Generate with function calling / tool use."""
-        ...
+        Args:
+            prompt: The input prompt text.
+            tools: Optional list of tool definitions for function calling.
+            temperature: Sampling temperature (0.0 to 1.0).
 
-    @property
-    @abstractmethod
-    def model_name(self) -> str:
-        """Return the model identifier string."""
+        Returns:
+            LLMResponse with content, tool_calls, and usage stats.
+        """
         ...
-
-    async def count_tokens(self, text: str) -> int:
-        """Estimate token count. Default: rough word-based estimate."""
-        return len(text.split()) * 4 // 3  # ~1.33 tokens per word

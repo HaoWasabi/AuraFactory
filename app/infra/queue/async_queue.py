@@ -1,74 +1,54 @@
-# app/infra/queue/async_queue.py
-"""
-asyncio.PriorityQueue-based message queue — Phase 1.
-Phase 2: Replace with SQSBackend (same ABC).
-"""
+"""Async task queue using asyncio.Queue."""
+
 import asyncio
 import logging
-from typing import Callable, Dict
+from typing import Any, Optional
 
-from app.infra.queue.base import MessageQueue
+from .base import QueueBase
 
 logger = logging.getLogger(__name__)
 
 
-class AsyncQueueBackend(MessageQueue):
-    """In-process async message queue using asyncio.PriorityQueue."""
+class AsyncTaskQueue(QueueBase):
+    """Async task queue backed by asyncio.Queue."""
 
-    def __init__(self, max_size: int = 1000):
-        self._queues: Dict[str, asyncio.PriorityQueue] = {}
-        self._handlers: Dict[str, Callable] = {}
-        self._consumers: Dict[str, asyncio.Task] = {}
-        self._max_size = max_size
-        self._running = True
+    def __init__(self, maxsize: int = 0) -> None:
+        """Initialize the queue.
 
-    async def publish(self, topic: str, message: dict, priority: int = 0) -> None:
-        if topic not in self._queues:
-            self._queues[topic] = asyncio.PriorityQueue(maxsize=self._max_size)
+        Args:
+            maxsize: Maximum queue size (0 = unlimited).
+        """
+        self._queue: asyncio.Queue[Any] = asyncio.Queue(maxsize=maxsize)
+        logger.info("AsyncTaskQueue initialized (maxsize=%d)", maxsize)
 
-        await self._queues[topic].put((priority, message))
-        logger.debug(f"Published to '{topic}' (priority={priority})")
+    async def put(self, item: Any) -> None:
+        """Add an item to the queue. Blocks if the queue is full."""
+        await self._queue.put(item)
+        logger.debug("Item added to queue (size=%d)", self._queue.qsize())
 
-    async def subscribe(self, topic: str, handler: Callable) -> None:
-        self._handlers[topic] = handler
-        if topic not in self._queues:
-            self._queues[topic] = asyncio.PriorityQueue(maxsize=self._max_size)
+    async def get(self) -> Any:
+        """Remove and return an item from the queue. Blocks if empty."""
+        item = await self._queue.get()
+        self._queue.task_done()
+        return item
 
-        # Start consumer task
-        if topic not in self._consumers or self._consumers[topic].done():
-            self._consumers[topic] = asyncio.create_task(self._consume(topic))
-            logger.info(f"Consumer started for topic '{topic}'")
+    async def get_nowait(self) -> Optional[Any]:
+        """Remove and return an item without blocking. Returns None if empty."""
+        try:
+            item = self._queue.get_nowait()
+            self._queue.task_done()
+            return item
+        except asyncio.QueueEmpty:
+            return None
 
-    async def unsubscribe(self, topic: str) -> None:
-        if topic in self._consumers:
-            self._consumers[topic].cancel()
-            del self._consumers[topic]
-        self._handlers.pop(topic, None)
-        logger.info(f"Unsubscribed from topic '{topic}'")
+    def size(self) -> int:
+        """Return the current number of items in the queue."""
+        return self._queue.qsize()
 
-    async def _consume(self, topic: str) -> None:
-        """Background consumer loop."""
-        queue = self._queues[topic]
-        while self._running:
-            try:
-                priority, message = await asyncio.wait_for(queue.get(), timeout=1.0)
-                handler = self._handlers.get(topic)
-                if handler:
-                    try:
-                        if asyncio.iscoroutinefunction(handler):
-                            await handler(message)
-                        else:
-                            handler(message)
-                    except Exception as e:
-                        logger.error(f"Handler error for '{topic}': {e}")
-            except asyncio.TimeoutError:
-                continue
-            except asyncio.CancelledError:
-                break
+    def is_empty(self) -> bool:
+        """Check if the queue is empty."""
+        return self._queue.empty()
 
-    async def shutdown(self) -> None:
-        """Gracefully stop all consumers."""
-        self._running = False
-        for task in self._consumers.values():
-            task.cancel()
-        self._consumers.clear()
+    async def join(self) -> None:
+        """Block until all items have been processed."""
+        await self._queue.join()

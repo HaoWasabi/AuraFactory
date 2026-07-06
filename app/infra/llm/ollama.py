@@ -1,222 +1,95 @@
-# app/infra/llm/ollama.py
-"""
-Ollama LLM Provider — Local inference, completely free.
-Migrated from app/providers/ollama.py — logic preserved.
-"""
-import time
+"""Ollama LLM provider using httpx to localhost:11434."""
+
 import json
-from typing import List, Dict, Any, Optional
+import logging
+from typing import Any, Dict, List, Optional
 
-import aiohttp
+import httpx
 
-from app.infra.llm.base import LLMProvider, LLMResponse
+from .base import BaseLLM, LLMResponse, ToolCall, UsageStats
+
+logger = logging.getLogger(__name__)
+
+OLLAMA_BASE_URL = "http://localhost:11434"
 
 
-class OllamaProvider(LLMProvider):
-    """Ollama local inference implementation."""
+class OllamaLLM(BaseLLM):
+    """Ollama local LLM provider."""
 
-    def __init__(
-        self,
-        base_url: str = "http://localhost:11434",
-        model_id: str = "qwen2.5:7b",
-    ):
-        self._base_url = base_url.rstrip("/")
-        self._model_id = model_id
-
-    @property
-    def model_name(self) -> str:
-        return f"ollama/{self._model_id}"
+    def __init__(self, model: str = "llama3.1", api_key: str = "") -> None:
+        super().__init__(model=model, api_key=api_key)
+        self._base_url = OLLAMA_BASE_URL
+        logger.info("OllamaLLM initialized (model=%s)", self.model)
 
     async def generate(
         self,
-        messages: List[Dict[str, str]],
-        system_prompt: str = "",
-        temperature: float = 0.3,
-        max_tokens: int = 4096,
-        tools: Optional[List[Dict]] = None,
+        prompt: str,
+        tools: Optional[List[Dict[str, Any]]] = None,
+        temperature: float = 0.7,
     ) -> LLMResponse:
-        start = time.time()
-
-        payload_messages = []
-        if system_prompt:
-            payload_messages.append({"role": "system", "content": system_prompt})
-        payload_messages.extend(messages)
-
-        payload = {
-            "model": self._model_id,
-            "messages": payload_messages,
-            "stream": False,
-            "options": {
-                "temperature": temperature,
-                "num_predict": max_tokens,
-            },
-        }
-
-        async with aiohttp.ClientSession() as session:
-            async with session.post(
-                f"{self._base_url}/api/chat",
-                json=payload,
-                timeout=aiohttp.ClientTimeout(total=120),
-            ) as resp:
-                if resp.status != 200:
-                    text = await resp.text()
-                    raise Exception(f"Ollama error ({resp.status}): {text}")
-                data = await resp.json()
-
-        message = data.get("message", {})
-        input_tokens = data.get("prompt_eval_count", 0)
-        output_tokens = data.get("eval_count", 0)
-
-        return LLMResponse(
-            content=message.get("content", ""),
-            model=self._model_id,
-            input_tokens=input_tokens,
-            output_tokens=output_tokens,
-            latency_ms=(time.time() - start) * 1000,
-            raw_response=data,
-        )
-
-    async def generate_with_tools(
-        self,
-        messages: List[Dict[str, str]],
-        system_prompt: str,
-        tools: List[Dict],
-        temperature: float = 0.3,
-    ) -> Dict[str, Any]:
-        """Ollama 0.4+ supports native tool calling with fallback."""
-        start = time.time()
-
-        payload_messages = []
-        if system_prompt:
-            payload_messages.append({"role": "system", "content": system_prompt})
-        payload_messages.extend(messages)
-
-        ollama_tools = []
-        for tool in tools:
-            ollama_tools.append({
-                "type": "function",
-                "function": {
-                    "name": tool["name"],
-                    "description": tool.get("description", ""),
-                    "parameters": tool.get("parameters", {"type": "object", "properties": {}}),
-                },
-            })
-
-        payload = {
-            "model": self._model_id,
-            "messages": payload_messages,
-            "tools": ollama_tools,
+        """Generate a response using Ollama."""
+        payload: Dict[str, Any] = {
+            "model": self.model,
+            "messages": [{"role": "user", "content": prompt}],
             "stream": False,
             "options": {"temperature": temperature},
         }
 
-        async with aiohttp.ClientSession() as session:
-            async with session.post(
-                f"{self._base_url}/api/chat",
-                json=payload,
-                timeout=aiohttp.ClientTimeout(total=120),
-            ) as resp:
-                if resp.status != 200:
-                    text = await resp.text()
-                    if "tools" in text.lower() or "unknown field" in text.lower():
-                        return await self._generate_with_tools_fallback(
-                            messages, system_prompt, tools, temperature
-                        )
-                    raise Exception(f"Ollama error ({resp.status}): {text}")
-                data = await resp.json()
+        if tools:
+            payload["tools"] = self._convert_tools(tools)
 
+        try:
+            async with httpx.AsyncClient(timeout=120.0) as client:
+                response = await client.post(
+                    f"{self._base_url}/api/chat",
+                    json=payload,
+                )
+                response.raise_for_status()
+                data = response.json()
+                return self._parse_response(data)
+
+        except httpx.ConnectError:
+            logger.error("Cannot connect to Ollama at %s. Is it running?", self._base_url)
+            raise ConnectionError(f"Ollama not available at {self._base_url}")
+        except Exception as e:
+            logger.error("Ollama generation failed: %s", e)
+            raise
+
+    def _convert_tools(self, tools: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        """Convert generic tool definitions to Ollama format."""
+        converted = []
+        for tool in tools:
+            converted.append({
+                "type": "function",
+                "function": {
+                    "name": tool.get("name", ""),
+                    "description": tool.get("description", ""),
+                    "parameters": tool.get("parameters", {}),
+                },
+            })
+        return converted
+
+    def _parse_response(self, data: Dict[str, Any]) -> LLMResponse:
+        """Parse Ollama JSON response into standardized LLMResponse."""
         message = data.get("message", {})
-        tool_calls = []
+        content = message.get("content", "") or ""
+        tool_calls: List[ToolCall] = []
 
-        if message.get("tool_calls"):
-            for tc in message["tool_calls"]:
-                func = tc.get("function", {})
-                tool_calls.append({
-                    "name": func.get("name", ""),
-                    "arguments": func.get("arguments", {}),
-                })
+        raw_tool_calls = message.get("tool_calls", [])
+        for tc in raw_tool_calls:
+            func = tc.get("function", {})
+            tool_calls.append(
+                ToolCall(
+                    name=func.get("name", ""),
+                    arguments=func.get("arguments", {}),
+                )
+            )
 
-        return {
-            "content": message.get("content", "") or "",
-            "tool_calls": tool_calls,
-            "latency_ms": (time.time() - start) * 1000,
-            "model": self._model_id,
-        }
-
-    async def _generate_with_tools_fallback(
-        self,
-        messages: List[Dict[str, str]],
-        system_prompt: str,
-        tools: List[Dict],
-        temperature: float,
-    ) -> Dict[str, Any]:
-        """Fallback for older Ollama: embed tool schema in system prompt."""
-        tools_desc = json.dumps(
-            [
-                {
-                    "name": t["name"],
-                    "description": t.get("description", ""),
-                    "parameters": t.get("parameters", {}),
-                }
-                for t in tools
-            ],
-            indent=2,
+        # Ollama provides eval_count and prompt_eval_count
+        usage = UsageStats(
+            prompt_tokens=data.get("prompt_eval_count", 0),
+            completion_tokens=data.get("eval_count", 0),
+            total_tokens=data.get("prompt_eval_count", 0) + data.get("eval_count", 0),
         )
 
-        enhanced_prompt = f"""{system_prompt}
-
-## Available Tools
-{tools_desc}
-
-## Response Format
-If you need to call a tool, respond with ONLY this JSON (no extra text):
-{{"tool_call": {{"name": "tool_name", "arguments": {{...}}}}}}
-
-If no tool is needed, respond normally with text."""
-
-        response = await self.generate(
-            messages=messages,
-            system_prompt=enhanced_prompt,
-            temperature=temperature,
-        )
-
-        content = response.content.strip()
-        tool_calls = []
-
-        try:
-            if content.startswith("{") and "tool_call" in content:
-                parsed = json.loads(content)
-                if "tool_call" in parsed:
-                    tool_calls.append({
-                        "name": parsed["tool_call"]["name"],
-                        "arguments": parsed["tool_call"].get("arguments", {}),
-                    })
-                    content = ""
-        except (json.JSONDecodeError, KeyError):
-            pass
-
-        return {
-            "content": content,
-            "tool_calls": tool_calls,
-            "latency_ms": response.latency_ms,
-            "model": self._model_id,
-        }
-
-    async def is_available(self) -> bool:
-        """Check if Ollama is running and model is available."""
-        try:
-            async with aiohttp.ClientSession() as session:
-                async with session.get(
-                    f"{self._base_url}/api/tags",
-                    timeout=aiohttp.ClientTimeout(total=3),
-                ) as resp:
-                    if resp.status == 200:
-                        data = await resp.json()
-                        models = [m["name"] for m in data.get("models", [])]
-                        return any(
-                            self._model_id in m or self._model_id.split(":")[0] in m
-                            for m in models
-                        )
-                    return False
-        except Exception:
-            return False
+        return LLMResponse(content=content, tool_calls=tool_calls, usage=usage)

@@ -1,63 +1,71 @@
-# Skill: Discord Channel Management
+# channels
 
-## Agent: architect
-## Risk: medium
-## Category: channels
+## Tools
 
-### Tools
+### create
+- description: Create a new text or voice channel in the guild
+- risk: medium
+- agent: assistant
+- parameters:
+  - guild_id (int, required): Target guild ID
+  - name (str, required): Channel name (auto-slugified)
+  - channel_type (str, required): Channel type — text, voice, stage, forum
+  - category_id (int, optional): Parent category ID to nest under
+  - topic (str, optional): Channel topic (text channels only)
+  - nsfw (bool, optional): Whether the channel is NSFW
+  - slowmode (int, optional): Slowmode delay in seconds (0-21600)
+  - position (int, optional): Channel position in the list
+  - reason (str, optional): Audit log reason
 
-#### create_channel
-- Description: Create a new channel in the Discord server.
-- Parameters:
-  - guild_id (integer, required): Target guild ID
-  - name (string, required): Channel name (auto-formatted to lowercase-hyphenated)
-  - channel_type (string, enum: text|voice|forum|stage|announcement, default: text): Channel type
-  - category (string): Category name to place the channel under
-  - topic (string): Channel topic/description
-  - is_private (boolean, default: false): Whether channel is private
-  - slowmode (integer, default: 0): Slowmode delay in seconds (0-21600)
-- Risk: medium
-- Requires Approval: no
-- Examples:
-  - Input: {"guild_id": 123456, "name": "general", "channel_type": "text", "category": "THÔNG TIN"}
-  - Output: {"channel_id": 789012, "name": "general", "type": "text"}
+### delete
+- description: Delete an existing channel from the guild
+- risk: high
+- agent: admin
+- parameters:
+  - guild_id (int, required): Target guild ID
+  - channel_id (int, required): Channel ID to delete
+  - reason (str, optional): Audit log reason
 
-#### delete_channel
-- Description: Delete a channel — THIS CANNOT BE UNDONE. All messages will be lost.
-- Parameters:
-  - guild_id (integer, required): Target guild ID
-  - channel_name (string, required): Name or ID of channel to delete
-  - reason (string, default: AI Agent Request): Audit log reason
-- Risk: high
-- Requires Approval: yes
+### rename
+- description: Rename an existing channel
+- risk: medium
+- agent: assistant
+- parameters:
+  - guild_id (int, required): Target guild ID
+  - channel_id (int, required): Channel ID to rename
+  - name (str, required): New channel name
+  - reason (str, optional): Audit log reason
 
-#### edit_channel
-- Description: Modify channel settings (name, topic, slowmode, etc.).
-- Parameters:
-  - guild_id (integer, required): Target guild ID
-  - channel_name (string, required): Current channel name
-  - new_name (string): New name for the channel
-  - new_topic (string): New topic/description
-  - slowmode (integer): New slowmode delay in seconds
-  - nsfw (boolean): Mark as NSFW
-- Risk: medium
-- Requires Approval: no
+### move
+- description: Move a channel to a different category or position
+- risk: medium
+- agent: assistant
+- parameters:
+  - guild_id (int, required): Target guild ID
+  - channel_id (int, required): Channel ID to move
+  - category_id (int, optional): New parent category ID (null to remove from category)
+  - position (int, optional): New position within category
+  - reason (str, optional): Audit log reason
 
-#### list_channels
-- Description: List all channels in the server, optionally filtered by type.
-- Parameters:
-  - guild_id (integer, required): Target guild ID
-  - channel_type (string, enum: text|voice|forum|stage|all, default: all): Filter by type
-  - category (string): Filter by category name
-- Risk: low
-- Requires Approval: no
+### edit
+- description: Edit channel properties (topic, slowmode, nsfw, bitrate, user_limit)
+- risk: medium
+- agent: assistant
+- parameters:
+  - guild_id (int, required): Target guild ID
+  - channel_id (int, required): Channel ID to edit
+  - topic (str, optional): New channel topic
+  - nsfw (bool, optional): NSFW flag
+  - slowmode (int, optional): Slowmode delay in seconds
+  - bitrate (int, optional): Voice channel bitrate
+  - user_limit (int, optional): Voice channel user limit
+  - reason (str, optional): Audit log reason
 
-#### move_channel
-- Description: Move a channel to a different category.
-- Parameters:
-  - guild_id (integer, required): Target guild ID
-  - channel_name (string, required): Channel to move
-  - target_category (string, required): Destination category name
-  - position (integer): Position within category
-- Risk: medium
-- Requires Approval: no
+### list
+- description: List all channels in the guild or a specific category
+- risk: low
+- agent: fast_track
+- parameters:
+  - guild_id (int, required): Target guild ID
+  - category_id (int, optional): Filter by parent category ID
+  - channel_type (str, optional): Filter by type (text, voice, stage, forum)

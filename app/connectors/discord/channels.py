@@ -1,162 +1,361 @@
-# tools/discord_channel.py
-import json
+"""
+Discord Channels Connector — Channel CRUD operations.
+
+Actions: create, delete, rename, move, edit, list
+"""
+
+from __future__ import annotations
+
+import logging
+from typing import Any, Dict, List, Optional
+
 import nextcord
-from typing import Optional, List, Dict, Any, Union
 
-class DiscordChannel:
-    """
-    Bộ công cụ tối ưu hóa dựa trên luồng kiểm thử thực tế của hệ thống Agentic AI.
-    """
+from app.connectors.base import BaseConnector
+from app.mcp.protocol import ToolDefinition
 
-    @staticmethod
-    def _build_overwrites(guild: nextcord.Guild, kwargs: Dict[str, Any]) -> Optional[Dict[Any, nextcord.PermissionOverwrite]]:
-        """Tự động bóc tách và build ma trận quyền từ kwargs để giảm tải cho hàm chính"""
-        is_private = kwargs.pop('is_private', False)
-        allowed_role_ids = kwargs.pop('allowed_role_ids', [])
-        allowed_user_ids = kwargs.pop('allowed_user_ids', [])
-        advanced_permissions = kwargs.pop('advanced_permissions', None)
+logger = logging.getLogger(__name__)
 
-        if not is_private and not advanced_permissions:
-            return None
 
-        overwrites = {}
-        custom_overwrite = nextcord.PermissionOverwrite()
-        if advanced_permissions:
-            for perm, val in advanced_permissions.items():
-                if hasattr(custom_overwrite, perm): setattr(custom_overwrite, perm, val)
+class ChannelsConnector(BaseConnector):
+    """Manages Discord guild channels."""
 
-        if is_private:
-            overwrites[guild.default_role] = nextcord.PermissionOverwrite(view_channel=False)
-            setattr(custom_overwrite, "view_channel", True)
-            
-            for r_id in allowed_role_ids:
-                role = guild.get_role(r_id)
-                if role: overwrites[role] = custom_overwrite if advanced_permissions else nextcord.PermissionOverwrite(view_channel=True)
-                    
-            for u_id in allowed_user_ids:
-                member = guild.get_member(u_id)
-                if member: overwrites[member] = custom_overwrite if advanced_permissions else nextcord.PermissionOverwrite(view_channel=True)
-        else:
-            overwrites[guild.default_role] = custom_overwrite
+    def __init__(self, bot: nextcord.Bot) -> None:
+        self._bot = bot
 
-        overwrites[guild.me] = nextcord.PermissionOverwrite(view_channel=True, manage_channels=True)
-        return overwrites
+    # ------------------------------------------------------------------
+    # Actions
+    # ------------------------------------------------------------------
 
-    @staticmethod
-    async def create_channel(guild: nextcord.Guild, channel_name: str, channel_type: str, **kwargs) -> str:
+    async def create(
+        self,
+        guild: nextcord.Guild,
+        name: str,
+        type: str = "text",
+        category_id: Optional[int] = None,
+        topic: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """Create a new channel in the guild.
+
+        Args:
+            guild: The target guild.
+            name: Channel name.
+            type: Channel type ('text' or 'voice').
+            category_id: Optional parent category ID.
+            topic: Optional channel topic (text channels only).
+
+        Returns:
+            Dict with created channel info.
         """
-        Tối ưu bằng **kwargs: Agent có thể truyền bất kỳ tham số nâng cao nào (slowmode_delay, nsfw, user_limit...)
-        Nếu không truyền, Nextcord sẽ tự dùng giá trị mặc định của Discord -> Code siêu sạch!
-        """
+        if not name or not name.strip():
+            raise ValueError("Channel name cannot be empty")
+
+        category = None
+        if category_id is not None:
+            category = guild.get_channel(int(category_id))
+            if category is None or not isinstance(category, nextcord.CategoryChannel):
+                raise ValueError(f"Category '{category_id}' not found")
+
         try:
-            # 1. Trích xuất các tham số cốt lõi
-            category_id = kwargs.pop('category_id', None)
-            category = guild.get_channel(category_id) if category_id else None
-            topic = kwargs.get('topic', None)
-            
-            # 2. Xử lý quyền tự động từ kwargs còn lại
-            overwrites = DiscordChannel._build_overwrites(guild, kwargs)
-            if overwrites: kwargs['overwrites'] = overwrites
-            if category: kwargs['category'] = category
-
-            c_type = channel_type.lower().strip()
-            channel = None
-
-            # 3. Khởi tạo kênh động bằng cách rải ngược kwargs vào hàm của Nextcord
-            if c_type == "text":
-                channel = await guild.create_text_channel(name=channel_name, **kwargs)
-            elif c_type == "voice":
-                # Tự động lọc bỏ 'topic' nếu Agent lỡ truyền nhầm vào kênh voice
-                kwargs.pop('topic', None) 
-                channel = await guild.create_voice_channel(name=channel_name, **kwargs)
-            elif c_type == "stage":
-                if "COMMUNITY" not in guild.features:
-                    return json.dumps({"status": "error", "message": "Thất bại: Máy chủ phải kích hoạt tính năng 'Cộng đồng'."}, ensure_ascii=False)
-                kwargs.pop('topic', None)
-                channel = await guild.create_stage_channel(name=channel_name, **kwargs)
-                try: await channel.create_instance(topic=topic if topic else "Welcome!")
-                except Exception: pass
-            elif c_type == "forum":
-                channel = await guild.create_forum_channel(name=channel_name, **kwargs)
-                try: await channel.create_instance(topic=topic if topic else "Welcome!")
-                except Exception: pass
-            elif c_type in ["news", "announcement"]:
-                if "COMMUNITY" not in guild.features:
-                    return json.dumps({"status": "error", "message": "Thất bại: Máy chủ phải kích hoạt tính năng 'Cộng đồng'."}, ensure_ascii=False)
-                channel = await guild.create_news_channel(name=channel_name, **kwargs)
+            if type == "voice":
+                channel = await guild.create_voice_channel(
+                    name=name,
+                    category=category,
+                )
             else:
-                return json.dumps({"status": "error", "message": f"Loại kênh '{channel_type}' không hợp lệ."}, ensure_ascii=False)
+                channel = await guild.create_text_channel(
+                    name=name,
+                    category=category,
+                    topic=topic,
+                )
+            logger.info("Created channel '%s' (id=%s) in guild '%s'", name, channel.id, guild.name)
+            return {
+                "id": str(channel.id),
+                "name": channel.name,
+                "type": str(channel.type),
+                "category_id": str(channel.category_id) if channel.category_id else None,
+            }
+        except nextcord.errors.Forbidden:
+            raise PermissionError("manage_channels")
+        except nextcord.errors.HTTPException as exc:
+            raise RuntimeError(f"Failed to create channel: {exc}")
 
-            # 4. Đồng bộ quyền tự động nếu là kênh công khai nằm trong mục
-            if category and channel and 'overwrites' not in kwargs:
-                await channel.edit(sync_permissions=True)
+    async def delete(
+        self,
+        guild: nextcord.Guild,
+        channel_id: int,
+    ) -> Dict[str, Any]:
+        """Delete a channel by ID.
 
-            return json.dumps({
-                "status": "success", "action": "create_channel",
-                "channel_name": channel.name, "channel_id": channel.id, "channel_type": c_type
-            }, ensure_ascii=False)
+        Args:
+            guild: The target guild.
+            channel_id: ID of the channel to delete.
 
-        except nextcord.Forbidden:
-            return json.dumps({"status": "error", "message": "Bot thiếu quyền 'Manage Channels'."}, ensure_ascii=False)
-        except Exception as e:
-            return json.dumps({"status": "error", "message": f"Thất bại: {str(e)}"}, ensure_ascii=False)
-
-    @staticmethod
-    async def modify_channel(guild: nextcord.Guild, channel_id: int, **kwargs) -> str:
+        Returns:
+            Dict confirming deletion.
         """
-        Tối ưu tuyệt đối cho hàm Sửa: Chỉ cần truyền những gì cần sửa qua **kwargs giống như file test của bạn.
+        channel = guild.get_channel(int(channel_id))
+        if channel is None:
+            raise ValueError(f"Channel '{channel_id}' not found in guild")
+
+        try:
+            name = channel.name
+            await channel.delete()
+            logger.info("Deleted channel '%s' (id=%s) from guild '%s'", name, channel_id, guild.name)
+            return {"deleted": True, "channel_id": str(channel_id), "name": name}
+        except nextcord.errors.Forbidden:
+            raise PermissionError("manage_channels")
+        except nextcord.errors.HTTPException as exc:
+            raise RuntimeError(f"Failed to delete channel: {exc}")
+
+    async def rename(
+        self,
+        guild: nextcord.Guild,
+        channel_id: int,
+        new_name: str,
+    ) -> Dict[str, Any]:
+        """Rename a channel.
+
+        Args:
+            guild: The target guild.
+            channel_id: ID of the channel to rename.
+            new_name: The new channel name.
+
+        Returns:
+            Dict with old and new names.
         """
+        if not new_name or not new_name.strip():
+            raise ValueError("New channel name cannot be empty")
+
+        channel = guild.get_channel(int(channel_id))
+        if channel is None:
+            raise ValueError(f"Channel '{channel_id}' not found in guild")
+
         try:
-            channel = guild.get_channel(channel_id)
-            if not channel:
-                return json.dumps({"status": "error", "message": "Không tìm thấy ID kênh."}, ensure_ascii=False)
+            old_name = channel.name
+            await channel.edit(name=new_name)
+            logger.info("Renamed channel '%s' -> '%s' (id=%s)", old_name, new_name, channel_id)
+            return {
+                "channel_id": str(channel_id),
+                "old_name": old_name,
+                "new_name": new_name,
+            }
+        except nextcord.errors.Forbidden:
+            raise PermissionError("manage_channels")
+        except nextcord.errors.HTTPException as exc:
+            raise RuntimeError(f"Failed to rename channel: {exc}")
 
-            # Chuẩn hóa tên tham số từ file test của bạn thành chuẩn Nextcord
-            if 'new_name' in kwargs: kwargs['name'] = kwargs.pop('new_name')
-            if 'new_topic' in kwargs: kwargs['topic'] = kwargs.pop('new_topic')
-            
-            sync_permissions = kwargs.pop('sync_permissions', False)
-            update_permissions = kwargs.pop('update_permissions', None)
+    async def move(
+        self,
+        guild: nextcord.Guild,
+        channel_id: int,
+        category_id: int,
+        position: Optional[int] = None,
+    ) -> Dict[str, Any]:
+        """Move a channel to a different category.
 
-            # Lọc an toàn: Chỉ giữ lại các tham số mà loại kênh này THỰC SỰ HỖ TRỢ
-            valid_kwargs = {}
-            for key, val in kwargs.items():
-                if val is not None and hasattr(channel, key):
-                    valid_kwargs[key] = val
+        Args:
+            guild: The target guild.
+            channel_id: ID of the channel to move.
+            category_id: Destination category ID.
+            position: Optional position within the category.
 
-            # Xử lý đồng bộ hoặc cập nhật quyền
-            if sync_permissions and channel.category:
-                valid_kwargs['overwrites'] = channel.category.overwrites
-            elif update_permissions:
-                target = guild.get_role(update_permissions.get("target_id")) or guild.get_member(update_permissions.get("target_id"))
-                if target:
-                    overwrite_obj = channel.overwrites_for(target)
-                    for p_key, p_val in update_permissions.get("permissions", {}).items():
-                        if hasattr(overwrite_obj, p_key): setattr(overwrite_obj, p_key, p_val)
-                    await channel.set_permissions(target, overwrite=overwrite_obj)
+        Returns:
+            Dict confirming the move.
+        """
+        channel = guild.get_channel(int(channel_id))
+        if channel is None:
+            raise ValueError(f"Channel '{channel_id}' not found in guild")
 
-            # Thực thi chỉnh sửa một loạt bài bản
-            if valid_kwargs:
-                await channel.edit(**valid_kwargs)
+        category = guild.get_channel(int(category_id))
+        if category is None or not isinstance(category, nextcord.CategoryChannel):
+            raise ValueError(f"Category '{category_id}' not found")
 
-            return json.dumps({
-                "status": "success", "action": "modify_channel", 
-                "channel_id": channel_id, "updated_fields": list(valid_kwargs.keys())
-            }, ensure_ascii=False)
-            
-        except nextcord.Forbidden:
-            return json.dumps({"status": "error", "message": "Bot thiếu quyền sửa kênh."}, ensure_ascii=False)
-        except Exception as e:
-            return json.dumps({"status": "error", "message": f"Lỗi: {str(e)}"}, ensure_ascii=False)
-
-    @staticmethod
-    async def delete_channel_or_category(guild: nextcord.Guild, target_id: int, reason: str = "AI Agent Request") -> str:
-        """Giữ nguyên cấu hình gọn gàng từ bài test của bạn"""
         try:
-            channel = guild.get_channel(target_id)
-            if not channel: return json.dumps({"status": "error", "message": "Mục tiêu không tồn tại."}, ensure_ascii=False)
-            t_name = channel.name
-            await channel.delete(reason=reason)
-            return json.dumps({"status": "success", "action": "delete", "target_id": target_id, "target_name": t_name}, ensure_ascii=False)
-        except nextcord.Forbidden: return json.dumps({"status": "error", "message": "Bot thiếu quyền xóa."}, ensure_ascii=False)
-        except Exception as e: return json.dumps({"status": "error", "message": f"Lỗi: {str(e)}"}, ensure_ascii=False)
+            kwargs: Dict[str, Any] = {"category": category}
+            if position is not None:
+                kwargs["position"] = int(position)
+            await channel.edit(**kwargs)
+            logger.info(
+                "Moved channel '%s' to category '%s'",
+                channel.name,
+                category.name,
+            )
+            return {
+                "channel_id": str(channel_id),
+                "new_category_id": str(category_id),
+                "position": position,
+            }
+        except nextcord.errors.Forbidden:
+            raise PermissionError("manage_channels")
+        except nextcord.errors.HTTPException as exc:
+            raise RuntimeError(f"Failed to move channel: {exc}")
+
+    async def edit(
+        self,
+        guild: nextcord.Guild,
+        channel_id: int,
+        **kwargs: Any,
+    ) -> Dict[str, Any]:
+        """Edit channel properties.
+
+        Args:
+            guild: The target guild.
+            channel_id: ID of the channel to edit.
+            **kwargs: Properties to update (name, topic, nsfw, slowmode_delay, etc.).
+
+        Returns:
+            Dict with updated properties.
+        """
+        channel = guild.get_channel(int(channel_id))
+        if channel is None:
+            raise ValueError(f"Channel '{channel_id}' not found in guild")
+
+        if not kwargs:
+            raise ValueError("No edit parameters provided")
+
+        try:
+            await channel.edit(**kwargs)
+            logger.info("Edited channel '%s' (id=%s): %s", channel.name, channel_id, list(kwargs.keys()))
+            return {
+                "channel_id": str(channel_id),
+                "updated_fields": list(kwargs.keys()),
+            }
+        except nextcord.errors.Forbidden:
+            raise PermissionError("manage_channels")
+        except nextcord.errors.HTTPException as exc:
+            raise RuntimeError(f"Failed to edit channel: {exc}")
+
+    async def list(
+        self,
+        guild: nextcord.Guild,
+    ) -> Dict[str, Any]:
+        """List all channels in the guild.
+
+        Args:
+            guild: The target guild.
+
+        Returns:
+            Dict with channel list.
+        """
+        channels = []
+        for ch in guild.channels:
+            channels.append({
+                "id": str(ch.id),
+                "name": ch.name,
+                "type": str(ch.type),
+                "category_id": str(ch.category_id) if ch.category_id else None,
+                "position": ch.position,
+            })
+        return {"channels": channels, "count": len(channels)}
+
+    # ------------------------------------------------------------------
+    # BaseConnector interface
+    # ------------------------------------------------------------------
+
+    async def execute(self, action: str, **params: Any) -> Dict[str, Any]:
+        """Dispatch to the appropriate action method."""
+        actions = {
+            "create": self.create,
+            "delete": self.delete,
+            "rename": self.rename,
+            "move": self.move,
+            "edit": self.edit,
+            "list": self.list,
+        }
+        handler = actions.get(action)
+        if handler is None:
+            raise ValueError(
+                f"Unknown action '{action}' for ChannelsConnector. "
+                f"Available: {list(actions.keys())}"
+            )
+        return await handler(**params)
+
+    def get_tool_definitions(self) -> List[ToolDefinition]:
+        """Return tool definitions for channel operations."""
+        return [
+            ToolDefinition(
+                name="discord.channels.create",
+                description="Create a new text or voice channel in the guild.",
+                parameters={
+                    "type": "object",
+                    "properties": {
+                        "guild_id": {"type": "string", "description": "Target guild ID."},
+                        "name": {"type": "string", "description": "Channel name."},
+                        "type": {"type": "string", "enum": ["text", "voice"], "description": "Channel type."},
+                        "category_id": {"type": "string", "description": "Parent category ID (optional)."},
+                        "topic": {"type": "string", "description": "Channel topic (text only, optional)."},
+                    },
+                    "required": ["guild_id", "name"],
+                },
+                risk_level="medium",
+            ),
+            ToolDefinition(
+                name="discord.channels.delete",
+                description="Delete a channel from the guild. Irreversible.",
+                parameters={
+                    "type": "object",
+                    "properties": {
+                        "guild_id": {"type": "string", "description": "Target guild ID."},
+                        "channel_id": {"type": "string", "description": "Channel ID to delete."},
+                    },
+                    "required": ["guild_id", "channel_id"],
+                },
+                risk_level="high",
+            ),
+            ToolDefinition(
+                name="discord.channels.rename",
+                description="Rename an existing channel.",
+                parameters={
+                    "type": "object",
+                    "properties": {
+                        "guild_id": {"type": "string", "description": "Target guild ID."},
+                        "channel_id": {"type": "string", "description": "Channel ID to rename."},
+                        "new_name": {"type": "string", "description": "The new name."},
+                    },
+                    "required": ["guild_id", "channel_id", "new_name"],
+                },
+                risk_level="medium",
+            ),
+            ToolDefinition(
+                name="discord.channels.move",
+                description="Move a channel to a different category.",
+                parameters={
+                    "type": "object",
+                    "properties": {
+                        "guild_id": {"type": "string", "description": "Target guild ID."},
+                        "channel_id": {"type": "string", "description": "Channel ID to move."},
+                        "category_id": {"type": "string", "description": "Destination category ID."},
+                        "position": {"type": "integer", "description": "Position within category (optional)."},
+                    },
+                    "required": ["guild_id", "channel_id", "category_id"],
+                },
+                risk_level="medium",
+            ),
+            ToolDefinition(
+                name="discord.channels.edit",
+                description="Edit channel properties (topic, nsfw, slowmode, etc.).",
+                parameters={
+                    "type": "object",
+                    "properties": {
+                        "guild_id": {"type": "string", "description": "Target guild ID."},
+                        "channel_id": {"type": "string", "description": "Channel ID to edit."},
+                    },
+                    "required": ["guild_id", "channel_id"],
+                    "additionalProperties": True,
+                },
+                risk_level="medium",
+            ),
+            ToolDefinition(
+                name="discord.channels.list",
+                description="List all channels in the guild.",
+                parameters={
+                    "type": "object",
+                    "properties": {
+                        "guild_id": {"type": "string", "description": "Target guild ID."},
+                    },
+                    "required": ["guild_id"],
+                },
+                risk_level="low",
+            ),
+        ]

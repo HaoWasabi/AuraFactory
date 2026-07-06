@@ -1,207 +1,229 @@
-# app/knowledge/store.py
+"""ServerKnowledgeStore — Postgres-backed guild knowledge storage.
+
+Stores guild snapshots as JSON and provides keyword search over
+the stored data for context injection into LLM prompts.
 """
-Server Knowledge Store — persist and query per-guild knowledge.
-Phase 1: JSON file storage (simple, debug-friendly).
-Phase 2: Swap to Bedrock Knowledge Base / DynamoDB.
-"""
+
+from __future__ import annotations
+
 import json
 import logging
-from pathlib import Path
-from typing import Optional
-
-from app.knowledge.models import ServerKnowledge, ChannelInfo, RoleInfo, PinnedMessage, ScheduledEvent
+from typing import Any
 
 logger = logging.getLogger(__name__)
 
-# Default storage directory
-DEFAULT_STORAGE_DIR = Path("data/knowledge")
+CREATE_TABLE_SQL: str = """
+CREATE TABLE IF NOT EXISTS knowledge_store (
+    guild_id    BIGINT PRIMARY KEY,
+    snapshot    JSONB NOT NULL,
+    summary     TEXT,
+    created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+"""
 
 
 class ServerKnowledgeStore:
-    """
-    Persists ServerKnowledge per guild.
+    """Postgres-backed knowledge store for guild snapshots.
 
-    Phase 1: JSON files (one per guild).
-    Phase 2: DynamoDB (structured) + Bedrock KB (vector/RAG).
-
-    Interface is stable — only implementation changes in Phase 2.
+    Stores complete guild structure as JSONB and provides keyword
+    search plus formatted context strings for LLM injection.
     """
 
-    def __init__(self, storage_dir: Optional[Path] = None):
-        self._storage_dir = storage_dir or DEFAULT_STORAGE_DIR
-        self._storage_dir.mkdir(parents=True, exist_ok=True)
-        # In-memory cache for fast access
-        self._cache: dict[int, ServerKnowledge] = {}
-        self._summary_cache: dict[int, str] = {}
+    def __init__(self, db: Any) -> None:
+        """Initialize with database connection pool.
 
-    def _guild_path(self, guild_id: int) -> Path:
-        """Path to a guild's knowledge JSON file."""
-        return self._storage_dir / f"guild_{guild_id}.json"
+        Args:
+            db: asyncpg connection pool instance.
+        """
+        self._db = db
+        logger.info("ServerKnowledgeStore initialized")
 
-    async def save(self, knowledge: ServerKnowledge) -> None:
-        """Persist server knowledge to storage."""
-        self._cache[knowledge.guild_id] = knowledge
-        # Invalidate summary cache on save
-        self._summary_cache.pop(knowledge.guild_id, None)
+    async def ensure_table(self) -> None:
+        """Create the knowledge_store table if it does not exist."""
+        async with self._db.acquire() as conn:
+            await conn.execute(CREATE_TABLE_SQL)
+        logger.info("Ensured knowledge_store table exists")
 
-        data = self._serialize(knowledge)
-        path = self._guild_path(knowledge.guild_id)
+    async def save_snapshot(self, guild_id: int, snapshot: dict[str, Any]) -> None:
+        """Save or update a guild knowledge snapshot.
 
-        try:
-            path.write_text(json.dumps(data, indent=2, ensure_ascii=False), encoding="utf-8")
-            logger.info(f"Saved knowledge for guild {knowledge.guild_id}")
-        except Exception as e:
-            logger.error(f"Failed to save knowledge for guild {knowledge.guild_id}: {e}")
+        Args:
+            guild_id: Discord guild identifier.
+            snapshot: Full guild knowledge dict (from GuildKnowledge.to_dict()).
+        """
+        summary = self._build_summary(snapshot)
+        query = """
+            INSERT INTO knowledge_store (guild_id, snapshot, summary, updated_at)
+            VALUES ($1, $2::jsonb, $3, NOW())
+            ON CONFLICT (guild_id) DO UPDATE SET
+                snapshot = EXCLUDED.snapshot,
+                summary = EXCLUDED.summary,
+                updated_at = NOW()
+        """
+        async with self._db.acquire() as conn:
+            await conn.execute(query, guild_id, json.dumps(snapshot), summary)
+        logger.info("Saved knowledge snapshot for guild=%d", guild_id)
 
-    async def load(self, guild_id: int) -> Optional[ServerKnowledge]:
-        """Load server knowledge from storage."""
-        # Check cache first
-        if guild_id in self._cache:
-            return self._cache[guild_id]
+    async def get_snapshot(self, guild_id: int) -> dict[str, Any] | None:
+        """Retrieve the stored snapshot for a guild.
 
-        path = self._guild_path(guild_id)
-        if not path.exists():
+        Args:
+            guild_id: Discord guild identifier.
+
+        Returns:
+            Snapshot dict or None if not found.
+        """
+        query = "SELECT snapshot FROM knowledge_store WHERE guild_id = $1"
+        async with self._db.acquire() as conn:
+            row = await conn.fetchrow(query, guild_id)
+
+        if row is None:
             return None
 
-        try:
-            data = json.loads(path.read_text(encoding="utf-8"))
-            knowledge = self._deserialize(data)
-            self._cache[guild_id] = knowledge
-            return knowledge
-        except Exception as e:
-            logger.error(f"Failed to load knowledge for guild {guild_id}: {e}")
-            return None
+        snapshot = row["snapshot"]
+        if isinstance(snapshot, str):
+            return json.loads(snapshot)
+        return snapshot
 
-    async def exists(self, guild_id: int) -> bool:
-        """Check if knowledge exists for a guild (= bot has been set up)."""
-        if guild_id in self._cache:
-            return True
-        return self._guild_path(guild_id).exists()
+    async def search(self, guild_id: int, query: str) -> list[dict[str, Any]]:
+        """Keyword search over stored snapshot JSON.
 
-    async def is_setup_complete(self, guild_id: int) -> bool:
-        """Check if initial setup has been completed for this guild."""
-        knowledge = await self.load(guild_id)
-        if knowledge is None:
-            return False
-        return knowledge.setup_complete
+        Searches channel names, role names, category names, and rules
+        for keyword matches.
 
-    async def mark_setup_complete(self, guild_id: int) -> None:
-        """Mark guild setup as complete."""
-        knowledge = await self.load(guild_id)
-        if knowledge:
-            knowledge.setup_complete = True
-            await self.save(knowledge)
+        Args:
+            guild_id: Discord guild identifier.
+            query: Search keyword(s).
 
-    async def get_context_string(self, guild_id: int) -> str:
-        """Get the knowledge as a context string for LLM prompts."""
-        knowledge = await self.load(guild_id)
-        if knowledge is None:
-            return "No server knowledge available."
-        return knowledge.to_context_string()
+        Returns:
+            List of matching items with type and name/value.
+        """
+        snapshot = await self.get_snapshot(guild_id)
+        if snapshot is None:
+            return []
+
+        query_lower = query.lower()
+        results: list[dict[str, Any]] = []
+
+        # Search channels
+        for channel in snapshot.get("channels", []):
+            name = channel.get("name", "")
+            topic = channel.get("topic", "") or ""
+            if query_lower in name.lower() or query_lower in topic.lower():
+                results.append({"type": "channel", "data": channel})
+
+        # Search roles
+        for role in snapshot.get("roles", []):
+            name = role.get("name", "")
+            if query_lower in name.lower():
+                results.append({"type": "role", "data": role})
+
+        # Search categories
+        for category in snapshot.get("categories", []):
+            name = category.get("name", "")
+            if query_lower in name.lower():
+                results.append({"type": "category", "data": category})
+
+        # Search rules
+        for rule in snapshot.get("rules", []):
+            if query_lower in rule.lower():
+                results.append({"type": "rule", "data": {"text": rule}})
+
+        logger.debug("Knowledge search guild=%d query='%s' found=%d", guild_id, query, len(results))
+        return results
 
     async def get_summary_string(self, guild_id: int) -> str:
-        """Get compact cached summary for LLM prompts (~200 tokens)."""
-        # Return from cache if available
-        if guild_id in self._summary_cache:
-            return self._summary_cache[guild_id]
+        """Get compact summary string (~200 tokens) for context injection.
 
-        knowledge = await self.load(guild_id)
-        if knowledge is None:
-            return "New server — no knowledge yet."
+        Args:
+            guild_id: Discord guild identifier.
 
-        summary = knowledge.to_summary_string()
-        self._summary_cache[guild_id] = summary
-        return summary
-
-    async def query(self, guild_id: int, question: str) -> str:
+        Returns:
+            Compact summary or 'No knowledge available' if not found.
         """
-        Simple keyword-based query against server knowledge.
-        Phase 1: string matching on context.
-        Phase 2: vector search via Bedrock KB.
+        query = "SELECT summary FROM knowledge_store WHERE guild_id = $1"
+        async with self._db.acquire() as conn:
+            row = await conn.fetchrow(query, guild_id)
+
+        if row is None or row["summary"] is None:
+            return "No knowledge available for this guild."
+        return row["summary"]
+
+    async def get_context_string(self, guild_id: int) -> str:
+        """Get full context dump for rich LLM context injection.
+
+        Args:
+            guild_id: Discord guild identifier.
+
+        Returns:
+            Detailed context string with all guild info.
         """
-        knowledge = await self.load(guild_id)
-        if knowledge is None:
-            return "I don't have information about this server yet."
+        snapshot = await self.get_snapshot(guild_id)
+        if snapshot is None:
+            return "No knowledge available for this guild."
 
-        # Simple approach: return full context (LLM will filter)
-        # Phase 2: embed question, search vector store, return top-k chunks
-        return knowledge.to_context_string()
+        parts: list[str] = []
+        parts.append(f"Guild: {snapshot.get('guild_name', 'Unknown')} (ID: {guild_id})")
+        parts.append(f"Members: {snapshot.get('member_count', 0)}")
 
-    async def delete(self, guild_id: int) -> None:
-        """Remove knowledge for a guild (e.g., bot removed from server)."""
-        self._cache.pop(guild_id, None)
-        path = self._guild_path(guild_id)
-        if path.exists():
-            path.unlink()
-            logger.info(f"Deleted knowledge for guild {guild_id}")
+        # Categories
+        categories = snapshot.get("categories", [])
+        if categories:
+            parts.append(f"\nCategories ({len(categories)}):")
+            for cat in categories:
+                parts.append(f"  - {cat.get('name', '?')}")
 
-    # --- Serialization ---
+        # Channels
+        channels = snapshot.get("channels", [])
+        if channels:
+            parts.append(f"\nChannels ({len(channels)}):")
+            for ch in channels:
+                topic_str = f" — {ch['topic']}" if ch.get("topic") else ""
+                parts.append(f"  - #{ch.get('name', '?')} [{ch.get('type', '?')}]{topic_str}")
 
-    def _serialize(self, knowledge: ServerKnowledge) -> dict:
-        """Convert ServerKnowledge to JSON-serializable dict."""
-        return {
-            "guild_id": knowledge.guild_id,
-            "guild_name": knowledge.guild_name,
-            "description": knowledge.description,
-            "member_count": knowledge.member_count,
-            "categories": knowledge.categories,
-            "rules_text": knowledge.rules_text,
-            "last_crawled": knowledge.last_crawled,
-            "setup_complete": knowledge.setup_complete,
-            "channels": [
-                {
-                    "id": ch.id, "name": ch.name, "type": ch.type,
-                    "category": ch.category, "description": ch.description,
-                    "position": ch.position,
-                }
-                for ch in knowledge.channels
-            ],
-            "roles": [
-                {
-                    "id": r.id, "name": r.name, "color": r.color,
-                    "member_count": r.member_count, "is_admin": r.is_admin,
-                    "position": r.position,
-                }
-                for r in knowledge.roles
-            ],
-            "pinned_messages": [
-                {
-                    "channel_name": p.channel_name, "content": p.content,
-                    "author": p.author, "pinned_at": p.pinned_at,
-                }
-                for p in knowledge.pinned_messages
-            ],
-            "events": [
-                {
-                    "name": e.name, "description": e.description,
-                    "start_time": e.start_time, "end_time": e.end_time,
-                    "location": e.location,
-                }
-                for e in knowledge.events
-            ],
-        }
+        # Roles
+        roles = snapshot.get("roles", [])
+        if roles:
+            parts.append(f"\nRoles ({len(roles)}):")
+            for role in roles:
+                parts.append(f"  - @{role.get('name', '?')}")
 
-    def _deserialize(self, data: dict) -> ServerKnowledge:
-        """Convert dict back to ServerKnowledge."""
-        return ServerKnowledge(
-            guild_id=data["guild_id"],
-            guild_name=data["guild_name"],
-            description=data.get("description", ""),
-            member_count=data.get("member_count", 0),
-            categories=data.get("categories", []),
-            rules_text=data.get("rules_text", ""),
-            last_crawled=data.get("last_crawled"),
-            setup_complete=data.get("setup_complete", False),
-            channels=[
-                ChannelInfo(**ch) for ch in data.get("channels", [])
-            ],
-            roles=[
-                RoleInfo(**r) for r in data.get("roles", [])
-            ],
-            pinned_messages=[
-                PinnedMessage(**p) for p in data.get("pinned_messages", [])
-            ],
-            events=[
-                ScheduledEvent(**e) for e in data.get("events", [])
-            ],
-        )
+        # Rules
+        rules = snapshot.get("rules", [])
+        if rules:
+            parts.append(f"\nRules ({len(rules)}):")
+            for i, rule in enumerate(rules, 1):
+                parts.append(f"  {i}. {rule}")
+
+        parts.append(f"\nCrawled at: {snapshot.get('crawled_at', 'unknown')}")
+        return "\n".join(parts)
+
+    @staticmethod
+    def _build_summary(snapshot: dict[str, Any]) -> str:
+        """Build a compact summary from snapshot data (~200 tokens).
+
+        Args:
+            snapshot: Full guild knowledge dict.
+
+        Returns:
+            Compact summary string.
+        """
+        guild_name = snapshot.get("guild_name", "Unknown")
+        member_count = snapshot.get("member_count", 0)
+        channels = snapshot.get("channels", [])
+        roles = snapshot.get("roles", [])
+        categories = snapshot.get("categories", [])
+        rules = snapshot.get("rules", [])
+
+        channel_names = [ch.get("name", "") for ch in channels[:10]]
+        role_names = [r.get("name", "") for r in roles[:10]]
+
+        parts = [
+            f"Guild '{guild_name}' | {member_count} members",
+            f"{len(channels)} channels: {', '.join(channel_names)}",
+            f"{len(roles)} roles: {', '.join(role_names)}",
+            f"{len(categories)} categories",
+            f"{len(rules)} rules",
+        ]
+        return " | ".join(parts)

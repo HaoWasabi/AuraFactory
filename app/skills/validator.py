@@ -1,189 +1,201 @@
-# app/skills/validator.py
-"""
-Skill Validator — validates tool call parameters against schema
-before passing to MCP for execution.
-Catches invalid params early, prevents hallucinated tool calls.
-"""
-import logging
-from typing import Dict, Any, Tuple, List, Optional
-from dataclasses import dataclass
+"""SkillValidator — validates tool invocation parameters.
 
-from app.skills.registry import SkillRegistry, SkillTool
+Checks required params are present, performs basic type coercion,
+and validates enum values before tool execution.
+"""
+
+from __future__ import annotations
+
+import logging
+from typing import Any
+
+from app.skills.loader import SkillParameter, SkillTool
+from app.skills.registry import SkillRegistry
 
 logger = logging.getLogger(__name__)
 
-
-@dataclass
-class ValidationResult:
-    """Result of parameter validation."""
-    is_valid: bool
-    errors: List[str]
-    warnings: List[str]
-    sanitized_params: Dict[str, Any]
-
-    @property
-    def error_message(self) -> str:
-        return "; ".join(self.errors) if self.errors else ""
-
-    def __bool__(self) -> bool:
-        return self.is_valid
+# Type coercion mappings
+TYPE_COERCIONS: dict[str, type] = {
+    "str": str,
+    "string": str,
+    "int": int,
+    "integer": int,
+    "float": float,
+    "number": float,
+    "bool": bool,
+    "boolean": bool,
+    "list": list,
+    "array": list,
+    "dict": dict,
+    "object": dict,
+}
 
 
 class SkillValidator:
+    """Validates tool invocation parameters before execution.
+
+    Checks:
+    - All required parameters are present
+    - Parameter types can be coerced to expected types
+    - Unknown parameters are flagged as warnings
     """
-    Validates tool calls against their schema.
-    Used by Gateway/Orchestrator before executing any tool.
-    """
 
-    def __init__(self, registry: SkillRegistry):
-        self._registry = registry
+    def validate_params(
+        self, tool_name: str, params: dict[str, Any], registry: SkillRegistry
+    ) -> tuple[bool, list[str]]:
+        """Validate parameters for a tool invocation.
 
-    def validate(self, tool_name: str, params: Dict[str, Any]) -> ValidationResult:
+        Args:
+            tool_name: Full MCP tool name (e.g., discord.channels.create).
+            params: Dict of parameter name -> value to validate.
+            registry: SkillRegistry to look up tool definitions.
+
+        Returns:
+            Tuple of (is_valid: bool, errors: list[str]).
+            If is_valid is True, errors will be empty.
         """
-        Validate parameters for a tool call.
+        errors: list[str] = []
 
-        Checks:
-        1. Tool exists in registry
-        2. Required parameters present
-        3. Parameter types match schema
-        4. Enum values are valid
-        5. No dangerous patterns in string params
-        """
-        errors = []
-        warnings = []
-        sanitized = dict(params)
+        # Look up tool definition
+        tool = registry.get_tool(tool_name)
+        if tool is None:
+            errors.append(f"Unknown tool: {tool_name}")
+            return False, errors
 
-        # 1. Tool exists?
-        tool = self._registry.get_tool(tool_name)
-        if not tool:
-            return ValidationResult(
-                is_valid=False,
-                errors=[f"Unknown tool: '{tool_name}'"],
-                warnings=[],
-                sanitized_params=sanitized,
-            )
+        # Check required parameters
+        for param_def in tool.parameters:
+            if param_def.required and param_def.name not in params:
+                errors.append(f"Missing required parameter: {param_def.name}")
 
-        schema = tool.input_schema
-        properties = schema.get("properties", {})
-        required = schema.get("required", [])
-
-        # 2. Required params present?
-        for param_name in required:
-            if param_name not in params or params[param_name] is None:
-                errors.append(f"Missing required parameter: '{param_name}'")
-
-        # 3. Type validation
-        for param_name, value in params.items():
-            if param_name.startswith("_"):
-                continue  # Skip internal params
-            if param_name not in properties:
-                warnings.append(f"Unknown parameter: '{param_name}' (ignored)")
+        # Validate provided parameters
+        param_names = {p.name for p in tool.parameters}
+        for key, value in params.items():
+            # Check for unknown parameters
+            if key not in param_names:
+                errors.append(f"Unknown parameter: {key}")
                 continue
 
-            prop_schema = properties[param_name]
-            expected_type = prop_schema.get("type", "string")
-            type_error = self._check_type(value, expected_type)
+            # Find parameter definition
+            param_def = self._find_param(tool, key)
+            if param_def is None:
+                continue
+
+            # Type validation
+            type_error = self._validate_type(key, value, param_def)
             if type_error:
-                errors.append(f"Parameter '{param_name}': {type_error}")
+                errors.append(type_error)
 
-        # 4. Enum validation
-        for param_name, value in params.items():
-            if param_name in properties:
-                enum_values = properties[param_name].get("enum")
-                if enum_values and value not in enum_values:
-                    errors.append(
-                        f"Parameter '{param_name}' must be one of: {enum_values}, got '{value}'"
-                    )
+        is_valid = len(errors) == 0
+        if not is_valid:
+            logger.warning("Validation failed for %s: %s", tool_name, errors)
+        else:
+            logger.debug("Validation passed for %s with %d params", tool_name, len(params))
 
-        # 5. String sanitization (anti-injection)
-        for param_name, value in params.items():
-            if isinstance(value, str):
-                sanitized_value = self._sanitize_string(value)
-                if sanitized_value != value:
-                    warnings.append(f"Parameter '{param_name}' was sanitized")
-                    sanitized[param_name] = sanitized_value
+        return is_valid, errors
 
-        return ValidationResult(
-            is_valid=len(errors) == 0,
-            errors=errors,
-            warnings=warnings,
-            sanitized_params=sanitized,
-        )
+    def coerce_params(
+        self, tool_name: str, params: dict[str, Any], registry: SkillRegistry
+    ) -> dict[str, Any]:
+        """Attempt to coerce parameters to their expected types.
 
-    def validate_quick(self, tool_name: str, params: Dict[str, Any]) -> Tuple[bool, str]:
+        Args:
+            tool_name: Full MCP tool name.
+            params: Raw parameter dict.
+            registry: SkillRegistry for lookup.
+
+        Returns:
+            New dict with coerced values (original preserved on failure).
         """
-        Quick validation — returns simple (is_valid, error_message) tuple.
-        For backward compatibility with existing code.
+        tool = registry.get_tool(tool_name)
+        if tool is None:
+            return params
+
+        coerced: dict[str, Any] = {}
+        for key, value in params.items():
+            param_def = self._find_param(tool, key)
+            if param_def is None:
+                coerced[key] = value
+                continue
+
+            coerced[key] = self._coerce_value(value, param_def.type)
+
+        return coerced
+
+    @staticmethod
+    def _find_param(tool: SkillTool, name: str) -> SkillParameter | None:
+        """Find a parameter definition by name.
+
+        Args:
+            tool: SkillTool to search.
+            name: Parameter name.
+
+        Returns:
+            SkillParameter or None.
         """
-        result = self.validate(tool_name, params)
-        return result.is_valid, result.error_message
+        for param in tool.parameters:
+            if param.name == name:
+                return param
+        return None
 
-    def _check_type(self, value: Any, expected_type: str) -> Optional[str]:
-        """Check if value matches expected JSON Schema type."""
-        type_map = {
-            "string": str,
-            "integer": int,
-            "number": (int, float),
-            "boolean": bool,
-            "array": list,
-            "object": dict,
-        }
+    @staticmethod
+    def _validate_type(name: str, value: Any, param_def: SkillParameter) -> str | None:
+        """Validate value type against parameter definition.
 
-        if expected_type not in type_map:
-            return None  # Unknown type, skip
+        Args:
+            name: Parameter name.
+            value: Value to validate.
+            param_def: Parameter definition.
 
-        expected = type_map[expected_type]
+        Returns:
+            Error string or None if valid.
+        """
+        expected_type = TYPE_COERCIONS.get(param_def.type.lower())
+        if expected_type is None:
+            return None  # Unknown type, skip validation
 
-        # Allow int for number type
-        if expected_type == "number" and isinstance(value, (int, float)):
+        # None is allowed for optional params
+        if value is None and not param_def.required:
             return None
 
-        # Allow None (optional params)
-        if value is None:
-            return None
-
-        if not isinstance(value, expected):
-            return f"expected {expected_type}, got {type(value).__name__}"
+        # Try coercion
+        try:
+            if expected_type == bool:
+                # Special handling for bool — don't coerce strings to bool normally
+                if not isinstance(value, bool) and not isinstance(value, int):
+                    if isinstance(value, str) and value.lower() in ("true", "false", "1", "0"):
+                        pass  # Valid bool string
+                    else:
+                        return f"Parameter '{name}' expected bool, got {type(value).__name__}"
+            else:
+                expected_type(value)
+        except (ValueError, TypeError):
+            return f"Parameter '{name}' expected {param_def.type}, got {type(value).__name__}: {value!r}"
 
         return None
 
-    def _sanitize_string(self, value: str) -> str:
-        """
-        Basic sanitization for string parameters.
-        Remove potential injection patterns.
-        """
-        # Remove null bytes
-        value = value.replace("\x00", "")
+    @staticmethod
+    def _coerce_value(value: Any, type_str: str) -> Any:
+        """Attempt to coerce a value to the expected type.
 
-        # Truncate overly long strings (Discord limits)
-        max_len = 1000
-        if len(value) > max_len:
-            value = value[:max_len]
+        Args:
+            value: Raw value.
+            type_str: Expected type string.
 
-        return value
+        Returns:
+            Coerced value or original on failure.
+        """
+        target_type = TYPE_COERCIONS.get(type_str.lower())
+        if target_type is None:
+            return value
 
-    # ── Batch validation ───────────────────────────────────────
+        if value is None:
+            return value
 
-    def validate_plan(self, plan: List[Dict[str, Any]]) -> List[ValidationResult]:
-        """
-        Validate a multi-step execution plan.
-        Each item: {"tool": "tool_name", "params": {...}}
-        """
-        results = []
-        for step in plan:
-            tool_name = step.get("tool", "")
-            params = step.get("params", {})
-            results.append(self.validate(tool_name, params))
-        return results
-
-    def plan_is_safe(self, plan: List[Dict[str, Any]]) -> Tuple[bool, List[str]]:
-        """
-        Check if entire plan is valid and within risk tolerance.
-        Returns (all_valid, list_of_errors).
-        """
-        all_errors = []
-        for i, step in enumerate(plan):
-            result = self.validate(step.get("tool", ""), step.get("params", {}))
-            if not result.is_valid:
-                all_errors.append(f"Step {i+1} ({step.get('tool', '?')}): {result.error_message}")
-        return len(all_errors) == 0, all_errors
+        try:
+            if target_type == bool:
+                if isinstance(value, str):
+                    return value.lower() in ("true", "1", "yes")
+                return bool(value)
+            return target_type(value)
+        except (ValueError, TypeError):
+            return value

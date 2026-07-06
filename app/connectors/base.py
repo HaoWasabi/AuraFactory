@@ -1,51 +1,55 @@
-# app/connectors/base.py
 """
-ConnectorBase ABC — interface for all external connectors.
-Each connector wraps a set of related API operations (e.g. Discord, GitHub).
+Base Connector — Abstract base class for all connectors.
+
+Every connector (Discord, future Slack, etc.) inherits from this
+and implements the execute() method for unified dispatching.
 """
-from abc import ABC, abstractmethod
-from typing import Dict, Any, List, Optional
+
+from __future__ import annotations
+
 import logging
+from abc import ABC, abstractmethod
+from typing import Any, Dict, List
+
+from app.mcp.protocol import ToolDefinition
+
 logger = logging.getLogger(__name__)
 
 
-class ConnectorBase(ABC):
+class BaseConnector(ABC):
+    """Abstract base class for service connectors.
+
+    Subclasses must implement:
+    - execute(): Dispatch a tool call by action name.
+    - get_tool_definitions(): Return all tools this connector exposes.
     """
-    Abstract base for external service connectors.
-    A connector wraps tools for a specific external service.
-    """
-
-    @property
-    @abstractmethod
-    def name(self) -> str:
-        """Connector identifier (e.g. 'discord', 'github')."""
-        ...
-
-    @property
-    @abstractmethod
-    def tools(self) -> List[Dict[str, Any]]:
-        """List of tool definitions this connector provides."""
-        ...
 
     @abstractmethod
-    async def execute(self, tool_name: str, parameters: Dict[str, Any], **kwargs) -> Dict[str, Any]:
-        """
-        Execute a tool by name with given parameters.
-        Returns a dict with at least 'status' and 'data' keys.
+    async def execute(self, action: str, **params: Any) -> Dict[str, Any]:
+        """Execute a named action with the given parameters.
+
+        Args:
+            action: The action name (e.g. 'create', 'delete', 'list').
+            **params: Action-specific parameters.
+
+        Returns:
+            Dict with the action result.
+
+        Raises:
+            ValueError: If parameters are invalid.
+            PermissionError: If the bot lacks required permissions.
         """
         ...
 
-    async def health_check(self) -> bool:
-        """Check if the connector's external service is reachable."""
-        return True
+    @abstractmethod
+    def get_tool_definitions(self) -> List[ToolDefinition]:
+        """Return tool definitions for all actions this connector supports.
 
-    def get_tool(self, tool_name: str) -> Optional[Dict[str, Any]]:
-        """Get a specific tool definition by name."""
-        for tool in self.tools:
-            if tool["name"] == tool_name:
-                return tool
-        return None
+        Returns:
+            List of ToolDefinition instances.
+        """
+        ...
 
-    def list_tool_names(self) -> List[str]:
-        """List all tool names this connector provides."""
-        return [t["name"] for t in self.tools]
+    def get_connector_name(self) -> str:
+        """Return the connector's name (defaults to class name)."""
+        return self.__class__.__name__

@@ -1,184 +1,188 @@
 # app/agents/orchestrator.py
 """
-Orchestrator — Thin Router.
+OrchestratorAgent — Pure Thin Router (ENTRY POINT after gateway).
 
-Classify → Permission Gate → Route to correct track:
-- Fast Track: simple commands (1 LLM call → execute)
-- ReAct Track: complex commands (multi-step reasoning)
-- Assistant: Q&A, conversation (1 LLM call, no tools)
+Flow: classify intent → permission check → route to correct agent → return result.
+
+Routes:
+- FAST_TRACK → FastTrackExecutor
+- ADMIN_COMPLEX → AdminAgent
+- ASSISTANT → AssistantAgent
+
+Does NOT do any reasoning itself — pure routing logic only.
+Permission denied at gateway → never reaches agents.
 """
-import time
 import logging
-from typing import Dict, Any, Optional
+from typing import Any, Dict, Optional
 
-from app.agents.classifier import IntentClassifier, ClassifyResult
-from app.agents.admin_agent import AdminAgent
-from app.agents.assistant_agent import AssistantAgent
-from app.agents.fast_track import FastTrackExecutor
+from app.agents.base import BaseAgent
+from app.agents.contracts import (
+    AgentRole,
+    IntentType,
+    TaskAssignment,
+    TaskResult,
+)
+from app.agents.classifier import IntentClassifier
 from app.infra.llm.base import LLMProvider
-from app.infra.observability.tracer import Tracer
-from app.infra.observability.metrics import metrics
-from app.knowledge.store import ServerKnowledgeStore
-from app.gateway.pipeline import GatewayContext
 
 logger = logging.getLogger(__name__)
 
-PERMISSION_DENIED = "⛔ Bạn không có quyền thực hiện thao tác này. Chỉ admin mới có thể quản lý server."
+# Permission error messages
+PERMISSION_DENIED_MSG: str = (
+    "⛔ Bạn không có quyền thực hiện thao tác này. "
+    "Chỉ admin/moderator mới có thể quản lý server."
+)
 
 
-class OrchestratorAgent:
+class OrchestratorAgent(BaseAgent):
     """
-    Thin Router — classify + route. No business logic.
+    Thin Router — classify intent + permission gate + route.
+
+    This is the ENTRY POINT called immediately after the Gateway pipeline.
+    It does NO reasoning, NO tool calling, NO LLM generation.
+    Pure routing based on classification result + user role.
 
     Routes:
-    - simple command + admin → FastTrackExecutor (1 LLM call)
-    - complex command + admin → AdminAgent ReAct (max 3 loops)
-    - command + non-admin → reject
-    - server_query / conversation → AssistantAgent (1 LLM call)
-    - setup not complete + admin → AdminAgent setup mode
+    - FAST_TRACK (admin/mod only) → FastTrackExecutor
+    - ADMIN_COMPLEX (admin/mod only) → AdminAgent
+    - ASSISTANT (anyone) → AssistantAgent
+    - Permission mismatch → deny immediately
     """
 
     def __init__(
         self,
         llm: LLMProvider,
-        tracer: Tracer,
-        knowledge_store: ServerKnowledgeStore,
-        memory=None,
-    ):
-        self._tracer = tracer
-        self._knowledge = knowledge_store
-        self._memory = memory
+        mcp_client: Any = None,
+        memory: Any = None,
+        knowledge_store: Any = None,
+        settings: Optional[Dict[str, Any]] = None,
+        skill_registry: Any = None,
+    ) -> None:
+        super().__init__(
+            llm=llm,
+            mcp_client=mcp_client,
+            memory=memory,
+            knowledge_store=knowledge_store,
+            settings=settings,
+            skill_registry=skill_registry,
+        )
         self._classifier = IntentClassifier(llm)
 
         # Sub-agents (injected after construction)
-        self._admin_agent: Optional[AdminAgent] = None
-        self._assistant_agent: Optional[AssistantAgent] = None
-        self._fast_track: Optional[FastTrackExecutor] = None
+        self._fast_track: Optional[Any] = None  # FastTrackExecutor
+        self._admin_agent: Optional[Any] = None  # AdminAgent
+        self._assistant_agent: Optional[Any] = None  # AssistantAgent
 
-    def set_admin_agent(self, agent: AdminAgent) -> None:
+    # ============================================================
+    # AGENT INJECTION
+    # ============================================================
+
+    def set_fast_track(self, agent: Any) -> None:
+        """Inject FastTrackExecutor sub-agent."""
+        self._fast_track = agent
+
+    def set_admin_agent(self, agent: Any) -> None:
+        """Inject AdminAgent sub-agent."""
         self._admin_agent = agent
 
-    def set_assistant_agent(self, agent: AssistantAgent) -> None:
+    def set_assistant_agent(self, agent: Any) -> None:
+        """Inject AssistantAgent sub-agent."""
         self._assistant_agent = agent
-
-    def set_fast_track(self, executor: FastTrackExecutor) -> None:
-        self._fast_track = executor
 
     # ============================================================
     # MAIN ENTRY POINT
     # ============================================================
 
-    async def handle(
-        self,
-        prompt: str,
-        user_id: str,
-        guild_id: int = None,
-        trace_id: str = "",
-        session_id: str = "",
-        context: GatewayContext = None,
-    ) -> Dict[str, Any]:
-        """Main entry — called by message handler after Gateway."""
-        start_time = time.time()
+    async def execute(self, task: TaskAssignment) -> TaskResult:
+        """
+        Main entry point — called after Gateway passes the message.
 
-        if context is None:
-            context = GatewayContext(session_id=session_id, trace_id=trace_id)
+        Flow:
+        1. Classify intent (LLM + heuristic fallback)
+        2. Permission check (admin-only routes need admin/moderator/owner)
+        3. Route to correct sub-agent
+        4. Return result from sub-agent
 
-        # Store user message in memory
-        if self._memory:
-            await self._memory.add_message(
-                session_id=context.session_id,
-                user_id=user_id,
-                role="user",
-                content=prompt,
-                guild_id=guild_id,
-            )
+        Args:
+            task: TaskAssignment containing message, user_role, context.
 
-        # ─── Route ───
-        result = await self._route(prompt, guild_id, context)
+        Returns:
+            TaskResult from the routed sub-agent.
+        """
+        trace_id = task.trace_id
+        user_role = task.user_role
+        prompt = task.prompt
 
-        # Store agent response in memory
-        if self._memory and result.get("content"):
-            try:
-                await self._memory.add_message(
-                    session_id=context.session_id,
-                    user_id="assistant",
-                    role="assistant",
-                    content=result["content"][:500],
-                )
-            except Exception:
-                pass
-
-        # Track total time
-        total_ms = (time.time() - start_time) * 1000
-        metrics.observe("request_total_ms", total_ms)
         logger.info(
-            f"[{context.trace_id}] Orchestrator completed in {total_ms:.0f}ms "
-            f"→ mode={result.get('mode')}"
+            f"[{trace_id}] Orchestrator received: "
+            f"role={user_role}, prompt='{prompt[:50]}...'"
         )
 
-        return result
+        # ─── Step 1: Classify Intent ───
+        intent = await self._classifier.classify(prompt, user_role)
+        logger.info(f"[{trace_id}] Classified intent: {intent.value}")
 
-    async def _route(
-        self, prompt: str, guild_id: int, context: GatewayContext
-    ) -> Dict[str, Any]:
-        """Core routing logic."""
-
-        # ─── Step 1: Bot State Check ───
-        setup_complete = True
-        if guild_id:
-            setup_complete = await self._knowledge.is_setup_complete(guild_id)
-
-        if not setup_complete:
-            if context.user_role == "admin":
-                return await self._admin_agent.handle_setup(
-                    prompt=prompt, guild_id=guild_id, context=context
+        # ─── Step 2: Permission Check ───
+        if intent in (IntentType.FAST_TRACK, IntentType.ADMIN_COMPLEX):
+            if user_role not in ("owner", "admin", "moderator"):
+                logger.warning(
+                    f"[{trace_id}] Permission denied: "
+                    f"user_role={user_role}, intent={intent.value}"
                 )
-            else:
-                return await self._assistant_agent.handle(
-                    prompt=prompt, guild_id=guild_id, context=context
+                return TaskResult(
+                    trace_id=trace_id,
+                    content=PERMISSION_DENIED_MSG,
+                    status="denied",
                 )
 
-        # ─── Step 2: Classify (1 LLM call → intent + complexity) ───
-        classify_result = await self._classifier.classify(prompt)
-        self._tracer.log_reasoning(
-            context.trace_id, "orchestrator",
-            f"Intent: {classify_result.intent}, Complexity: {classify_result.complexity}"
-        )
-        metrics.increment("intent_classified", labels={
-            "intent": classify_result.intent,
-            "complexity": classify_result.complexity,
-        })
+        # ─── Step 3: Route to Correct Agent ───
+        # Update task with classified intent
+        task.intent = intent
 
-        # ─── Step 3: Permission Gate + Route ───
-
-        if classify_result.intent == "command":
-            # Permission check
-            if context.user_role != "admin":
-                return {
-                    "status": "response",
-                    "content": PERMISSION_DENIED,
-                    "trace_id": context.trace_id,
-                    "mode": "rejected",
-                }
-
-            # Route by complexity
-            if classify_result.is_fast_track and self._fast_track:
-                # Fast Track: 1 LLM call → extract → execute
-                server_context = await self._knowledge.get_summary_string(guild_id)
-                return await self._fast_track.handle(
-                    prompt=prompt,
-                    guild_id=guild_id,
-                    server_context=server_context,
-                    context=context,
-                )
-            else:
-                # ReAct Track: multi-step reasoning
-                return await self._admin_agent.handle_admin(
-                    prompt=prompt, guild_id=guild_id, context=context
-                )
-
+        if intent == IntentType.FAST_TRACK:
+            return await self._route_fast_track(task)
+        elif intent == IntentType.ADMIN_COMPLEX:
+            return await self._route_admin(task)
         else:
-            # conversation / server_query → Assistant (1 LLM call, no tools)
-            return await self._assistant_agent.handle(
-                prompt=prompt, guild_id=guild_id, context=context
-            )
+            return await self._route_assistant(task)
+
+    # ============================================================
+    # ROUTING METHODS
+    # ============================================================
+
+    async def _route_fast_track(self, task: TaskAssignment) -> TaskResult:
+        """Route to FastTrackExecutor for single-action commands."""
+        if not self._fast_track:
+            logger.error(f"[{task.trace_id}] FastTrackExecutor not configured")
+            return self._error_result(task.trace_id, "System error: FastTrack agent unavailable.")
+
+        logger.info(f"[{task.trace_id}] Routing → FastTrackExecutor")
+        task.agent_role = AgentRole.FAST_TRACK
+        return await self._fast_track.execute(task)
+
+    async def _route_admin(self, task: TaskAssignment) -> TaskResult:
+        """Route to AdminAgent for complex multi-step operations."""
+        if not self._admin_agent:
+            logger.error(f"[{task.trace_id}] AdminAgent not configured")
+            return self._error_result(task.trace_id, "System error: Admin agent unavailable.")
+
+        logger.info(f"[{task.trace_id}] Routing → AdminAgent")
+        task.agent_role = AgentRole.ADMIN
+        return await self._admin_agent.execute(task)
+
+    async def _route_assistant(self, task: TaskAssignment) -> TaskResult:
+        """Route to AssistantAgent for Q&A and conversation."""
+        if not self._assistant_agent:
+            logger.error(f"[{task.trace_id}] AssistantAgent not configured")
+            return self._error_result(task.trace_id, "System error: Assistant agent unavailable.")
+
+        logger.info(f"[{task.trace_id}] Routing → AssistantAgent")
+        task.agent_role = AgentRole.ASSISTANT
+        return await self._assistant_agent.execute(task)
+
+    # ============================================================
+    # BASE AGENT INTERFACE
+    # ============================================================
+
+    def get_agent_role(self) -> AgentRole:
+        return AgentRole.ORCHESTRATOR

@@ -1,95 +1,173 @@
-# app/memory/working.py
+"""WorkingMemory — in-memory, session-scoped short-term storage.
+
+Stores conversation buffers, pending HITL plans, and transient context
+that does not persist across bot restarts.
 """
-Working Memory — current session context (volatile).
-Phase 1: In-memory dict. Phase 2: Redis with TTL.
-"""
-import time
+
+from __future__ import annotations
+
 import logging
-from typing import Dict, List, Any, Optional
-from collections import defaultdict
+from collections import deque
+from dataclasses import dataclass, field
+from typing import Any
 
 logger = logging.getLogger(__name__)
 
+MAX_CONVERSATION_BUFFER: int = 10
+
+
+@dataclass
+class Message:
+    """A single conversation message."""
+
+    role: str
+    content: str
+
+
+@dataclass
+class SessionData:
+    """All working memory data for a single session."""
+
+    plan: dict[str, Any] | None = None
+    context: dict[str, Any] = field(default_factory=dict)
+    conversation: deque[Message] = field(default_factory=lambda: deque(maxlen=MAX_CONVERSATION_BUFFER))
+
 
 class WorkingMemory:
+    """In-memory working memory — session-scoped, non-persistent.
+
+    Holds pending HITL plans, transient context variables, and
+    conversation buffers (last 10 messages per session).
     """
-    Fast-access session context.
-    Stores conversation history and working state per session.
-    """
 
-    def __init__(self, cache=None, max_messages: int = 20):
-        self._cache = cache  # CacheBackend (Phase 2: Redis)
-        self._max_messages = max_messages
-        # In-memory storage (Phase 1)
-        self._sessions: Dict[str, Dict[str, Any]] = {}
-        self._messages: Dict[str, List[dict]] = defaultdict(list)
+    def __init__(self) -> None:
+        self._sessions: dict[str, SessionData] = {}
+        logger.info("WorkingMemory initialized (in-memory)")
 
-    async def get_context(self, session_id: str) -> dict:
-        """Get full working context for a session."""
-        return self._sessions.get(session_id, {})
-
-    async def set(self, key: str, value: Any, ttl_seconds: int = 0) -> None:
-        """Set a key-value pair in working memory (e.g., pending plans)."""
-        self._sessions.setdefault("_kv_store", {})[key] = {
-            "value": value,
-            "expires_at": time.time() + ttl_seconds if ttl_seconds > 0 else 0,
-        }
-
-    async def get(self, key: str) -> Optional[Any]:
-        """Get a value by key. Returns None if expired or missing."""
-        kv = self._sessions.get("_kv_store", {})
-        entry = kv.get(key)
-        if entry is None:
-            return None
-        if entry["expires_at"] > 0 and time.time() > entry["expires_at"]:
-            kv.pop(key, None)
-            return None
-        return entry["value"]
-
-    async def delete(self, key: str) -> None:
-        """Delete a key from working memory."""
-        self._sessions.get("_kv_store", {}).pop(key, None)
-
-    async def update(self, session_id: str, key: str, value: Any) -> None:
-        """Update a working memory slot."""
+    def _ensure_session(self, session_id: str) -> SessionData:
+        """Get or create session data."""
         if session_id not in self._sessions:
-            self._sessions[session_id] = {}
-        self._sessions[session_id][key] = value
+            self._sessions[session_id] = SessionData()
+        return self._sessions[session_id]
 
-    async def add_message(
-        self,
-        session_id: str,
-        user_id: str,
-        role: str,
-        content: str,
-        guild_id: Optional[int] = None,
-    ) -> None:
-        """Add a message to session conversation history."""
-        msg = {
-            "role": role,
-            "content": content,
-            "user_id": user_id,
-            "guild_id": guild_id,
-            "timestamp": time.time(),
-        }
-        self._messages[session_id].append(msg)
+    # ── Plan Management ─────────────────────────────────────────────
 
-        # Trim to max
-        if len(self._messages[session_id]) > self._max_messages:
-            self._messages[session_id] = self._messages[session_id][-self._max_messages:]
+    def store_plan(self, session_id: str, plan: dict[str, Any]) -> None:
+        """Store a HITL pending plan for the session.
 
-    async def get_conversation_history(
-        self, session_id: str, limit: int = 10
-    ) -> List[dict]:
-        """Get recent conversation messages."""
-        return self._messages.get(session_id, [])[-limit:]
+        Args:
+            session_id: Unique session identifier.
+            plan: Plan dict (steps, metadata, etc.).
+        """
+        session = self._ensure_session(session_id)
+        session.plan = plan
+        logger.debug("Stored plan for session=%s", session_id)
 
-    async def clear_session(self, session_id: str) -> None:
-        """Clear all working memory for a session."""
-        self._sessions.pop(session_id, None)
-        self._messages.pop(session_id, None)
+    def get_plan(self, session_id: str) -> dict[str, Any] | None:
+        """Retrieve pending plan for session.
 
-    @property
-    def session_count(self) -> int:
-        """Number of active sessions."""
-        return len(self._messages)
+        Args:
+            session_id: Unique session identifier.
+
+        Returns:
+            Plan dict or None if no plan stored.
+        """
+        session = self._sessions.get(session_id)
+        if session is None:
+            return None
+        return session.plan
+
+    def clear_plan(self, session_id: str) -> None:
+        """Clear the pending plan for session.
+
+        Args:
+            session_id: Unique session identifier.
+        """
+        session = self._sessions.get(session_id)
+        if session is not None:
+            session.plan = None
+            logger.debug("Cleared plan for session=%s", session_id)
+
+    # ── Context Management ──────────────────────────────────────────
+
+    def store_context(self, session_id: str, key: str, value: Any) -> None:
+        """Store a transient context variable.
+
+        Args:
+            session_id: Unique session identifier.
+            key: Context key.
+            value: Context value (any serializable type).
+        """
+        session = self._ensure_session(session_id)
+        session.context[key] = value
+        logger.debug("Stored context key='%s' for session=%s", key, session_id)
+
+    def get_context(self, session_id: str) -> dict[str, Any]:
+        """Get all context variables for session.
+
+        Args:
+            session_id: Unique session identifier.
+
+        Returns:
+            Dict of context key-value pairs (empty if no session).
+        """
+        session = self._sessions.get(session_id)
+        if session is None:
+            return {}
+        return dict(session.context)
+
+    # ── Conversation Buffer ─────────────────────────────────────────
+
+    def get_conversation_buffer(self, session_id: str) -> list[dict[str, str]]:
+        """Get last N messages for session.
+
+        Args:
+            session_id: Unique session identifier.
+
+        Returns:
+            List of message dicts with 'role' and 'content' keys.
+        """
+        session = self._sessions.get(session_id)
+        if session is None:
+            return []
+        return [{"role": msg.role, "content": msg.content} for msg in session.conversation]
+
+    def add_message(self, session_id: str, role: str, content: str) -> None:
+        """Add a message to the conversation buffer.
+
+        Buffer is capped at MAX_CONVERSATION_BUFFER (10) messages.
+        Oldest messages are automatically evicted.
+
+        Args:
+            session_id: Unique session identifier.
+            role: Message role (user, assistant, system).
+            content: Message text content.
+        """
+        session = self._ensure_session(session_id)
+        session.conversation.append(Message(role=role, content=content))
+        logger.debug(
+            "Added message role='%s' to session=%s (buffer=%d)",
+            role,
+            session_id,
+            len(session.conversation),
+        )
+
+    # ── Session Management ──────────────────────────────────────────
+
+    def clear(self, session_id: str) -> None:
+        """Clear all working memory for a session.
+
+        Args:
+            session_id: Unique session identifier.
+        """
+        if session_id in self._sessions:
+            del self._sessions[session_id]
+            logger.info("Cleared all working memory for session=%s", session_id)
+
+    def active_sessions(self) -> list[str]:
+        """List all active session IDs.
+
+        Returns:
+            List of session ID strings.
+        """
+        return list(self._sessions.keys())

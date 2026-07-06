@@ -1,215 +1,373 @@
-# tools/discord_management.py
-import json
+"""
+Discord Members Connector — Member moderation operations.
+
+Actions: kick, ban, unban, mute, timeout, list
+"""
+
+from __future__ import annotations
+
+import logging
+from datetime import timedelta
+from typing import Any, Dict, List, Optional
+
 import nextcord
-from datetime import datetime, timedelta
-from typing import Optional, List, Dict, Any, Union
 
-class DiscordMember:
-    """
-    Tập hợp các bộ công cụ (Tools) dành cho Agentic AI đóng vai trò làm "Quản trị viên ảo" (Virtual Moderator),
-    giúp tự động hóa việc kiểm soát thành viên, làm sạch kênh chat và điều hành máy chủ.
-    """
+from app.connectors.base import BaseConnector
+from app.mcp.protocol import ToolDefinition
 
-    @staticmethod
-    async def kick_member(guild: nextcord.Guild, member_id: int, reason: Optional[str] = "Được yêu cầu bởi AI Agent") -> str:
+logger = logging.getLogger(__name__)
+
+
+class MembersConnector(BaseConnector):
+    """Manages Discord guild members (moderation actions)."""
+
+    def __init__(self, bot: nextcord.Bot) -> None:
+        self._bot = bot
+
+    # ------------------------------------------------------------------
+    # Actions
+    # ------------------------------------------------------------------
+
+    async def kick(
+        self,
+        guild: nextcord.Guild,
+        member_id: int,
+        reason: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """Kick a member from the guild.
+
+        Args:
+            guild: The target guild.
+            member_id: ID of the member to kick.
+            reason: Optional reason for the kick.
+
+        Returns:
+            Dict confirming the kick.
         """
-        Công cụ trục xuất (Kick) một thành viên ra khỏi máy chủ.
-        """
+        member = guild.get_member(int(member_id))
+        if member is None:
+            raise ValueError(f"Member '{member_id}' not found in guild")
+
         try:
-            member = guild.get_member(member_id) or await guild.fetch_member(member_id)
-            if not member:
-                return json.dumps({"status": "error", "message": "Không tìm thấy thành viên này trong máy chủ."}, ensure_ascii=False)
-
-            # Kiểm tra phân cấp quyền: Bot không thể kick người có chức vụ cao hơn hoặc bằng nó, hoặc chủ server
-            if member.top_role >= guild.me.top_role or member.id == guild.owner_id:
-                return json.dumps({"status": "error", "message": "Không thể kick thành viên này do phân cấp quyền (Họ là Chủ server hoặc có Vai trò cao hơn Bot)."}, ensure_ascii=False)
-
-            member_name = member.name
+            display_name = member.display_name
             await member.kick(reason=reason)
+            logger.info(
+                "Kicked member '%s' (id=%s) from guild '%s'. Reason: %s",
+                display_name,
+                member_id,
+                guild.name,
+                reason,
+            )
+            return {
+                "kicked": True,
+                "member_id": str(member_id),
+                "member_name": display_name,
+                "reason": reason,
+            }
+        except nextcord.errors.Forbidden:
+            raise PermissionError("kick_members")
+        except nextcord.errors.HTTPException as exc:
+            raise RuntimeError(f"Failed to kick member: {exc}")
 
-            return json.dumps({
-                "status": "success",
-                "action": "kick",
-                "member_id": member_id,
-                "member_name": member_name,
-                "reason": reason
-            }, ensure_ascii=False)
+    async def ban(
+        self,
+        guild: nextcord.Guild,
+        member_id: int,
+        reason: Optional[str] = None,
+        delete_days: int = 0,
+    ) -> Dict[str, Any]:
+        """Ban a member from the guild.
 
-        except nextcord.Forbidden:
-            return json.dumps({"status": "error", "message": "Bot thiếu quyền 'Kick Members' hoặc Vai trò của Bot xếp dưới Vai trò của đối tượng."}, ensure_ascii=False)
-        except Exception as e:
-            return json.dumps({"status": "error", "message": f"Thất bại khi thực hiện lệnh kick: {str(e)}"}, ensure_ascii=False)
+        Args:
+            guild: The target guild.
+            member_id: ID of the member to ban.
+            reason: Optional reason for the ban.
+            delete_days: Number of days of messages to delete (0-7).
 
-    @staticmethod
-    async def ban_member(guild: nextcord.Guild, member_id: int, delete_message_seconds: int = 0, reason: Optional[str] = "Được yêu cầu bởi AI Agent") -> str:
+        Returns:
+            Dict confirming the ban.
         """
-        Công cụ cấm (Ban) một thành viên khỏi máy chủ, hỗ trợ xóa tin nhắn cũ của họ.
-        - delete_message_seconds: Số giây tin nhắn cũ của user đó cần xóa (Discord hỗ trợ tối đa 7 ngày = 604800 giây).
+        member = guild.get_member(int(member_id))
+        if member is None:
+            raise ValueError(f"Member '{member_id}' not found in guild")
+
+        if not 0 <= delete_days <= 7:
+            raise ValueError("delete_days must be between 0 and 7")
+
+        try:
+            display_name = member.display_name
+            await member.ban(reason=reason, delete_message_days=delete_days)
+            logger.info(
+                "Banned member '%s' (id=%s) from guild '%s'. Reason: %s",
+                display_name,
+                member_id,
+                guild.name,
+                reason,
+            )
+            return {
+                "banned": True,
+                "member_id": str(member_id),
+                "member_name": display_name,
+                "reason": reason,
+                "delete_days": delete_days,
+            }
+        except nextcord.errors.Forbidden:
+            raise PermissionError("ban_members")
+        except nextcord.errors.HTTPException as exc:
+            raise RuntimeError(f"Failed to ban member: {exc}")
+
+    async def unban(
+        self,
+        guild: nextcord.Guild,
+        user_id: int,
+    ) -> Dict[str, Any]:
+        """Unban a user from the guild.
+
+        Args:
+            guild: The target guild.
+            user_id: ID of the user to unban.
+
+        Returns:
+            Dict confirming the unban.
         """
         try:
-            # Tìm trong guild trước, nếu họ đã thoát/bị kick trước đó thì dùng fetch_user để ban từ xa
-            member = guild.get_member(member_id)
-            if member:
-                if member.top_role >= guild.me.top_role or member.id == guild.owner_id:
-                    return json.dumps({"status": "error", "message": "Không thể ban thành viên này do phân cấp quyền (Họ là Chủ server hoặc có Vai trò cao hơn Bot)."}, ensure_ascii=False)
-                member_name = member.name
-            else:
-                # Tìm user từ hệ thống Discord nếu họ không có trong server
-                try:
-                    user = await guild.files_bot.fetch_user(member_id) if hasattr(guild, 'files_bot') else None
-                    # Fallback thông thường nếu không lấy được bot instance
-                    user = await guild.me.roles[0].guild.files_bot.fetch_user(member_id) if not user else user
-                    member_name = user.name if user else f"User ID: {member_id}"
-                except:
-                    member_name = f"User ID: {member_id}"
+            user = await self._bot.fetch_user(int(user_id))
+            await guild.unban(user)
+            logger.info("Unbanned user '%s' (id=%s) from guild '%s'", user.name, user_id, guild.name)
+            return {
+                "unbanned": True,
+                "user_id": str(user_id),
+                "user_name": user.name,
+            }
+        except nextcord.errors.NotFound:
+            raise ValueError(f"User '{user_id}' not found or not banned")
+        except nextcord.errors.Forbidden:
+            raise PermissionError("ban_members")
+        except nextcord.errors.HTTPException as exc:
+            raise RuntimeError(f"Failed to unban user: {exc}")
 
-            await guild.ban(nextcord.Object(id=member_id), delete_message_seconds=delete_message_seconds, reason=reason)
+    async def mute(
+        self,
+        guild: nextcord.Guild,
+        member_id: int,
+        duration_seconds: int,
+    ) -> Dict[str, Any]:
+        """Server-mute a member (voice mute).
 
-            return json.dumps({
-                "status": "success",
-                "action": "ban",
-                "member_id": member_id,
-                "member_name": member_name,
-                "delete_message_seconds": delete_message_seconds,
-                "reason": reason
-            }, ensure_ascii=False)
+        Args:
+            guild: The target guild.
+            member_id: ID of the member to mute.
+            duration_seconds: Duration of the mute in seconds.
 
-        except nextcord.Forbidden:
-            return json.dumps({"status": "error", "message": "Bot thiếu quyền 'Ban Members' hoặc mục tiêu có cấp bậc cao hơn Bot."}, ensure_ascii=False)
-        except Exception as e:
-            return json.dumps({"status": "error", "message": f"Thất bại khi thực hiện lệnh ban: {str(e)}"}, ensure_ascii=False)
-
-    @staticmethod
-    async def unban_member(guild: nextcord.Guild, member_id: int, reason: Optional[str] = "Được yêu cầu bởi AI Agent") -> str:
+        Returns:
+            Dict confirming the mute.
         """
-        Công cụ gỡ cấm (Unban) cho một thành viên bằng ID của họ.
-        """
+        member = guild.get_member(int(member_id))
+        if member is None:
+            raise ValueError(f"Member '{member_id}' not found in guild")
+
+        if duration_seconds <= 0:
+            raise ValueError("duration_seconds must be positive")
+
         try:
-            # Tạo một đối tượng Object giả lập chứa ID để unban mà không cần tìm User đầy đủ
-            user_obj = nextcord.Object(id=member_id)
-            await guild.unban(user_obj, reason=reason)
+            await member.edit(mute=True)
+            logger.info(
+                "Muted member '%s' (id=%s) in guild '%s' for %ds",
+                member.display_name,
+                member_id,
+                guild.name,
+                duration_seconds,
+            )
+            return {
+                "muted": True,
+                "member_id": str(member_id),
+                "member_name": member.display_name,
+                "duration_seconds": duration_seconds,
+            }
+        except nextcord.errors.Forbidden:
+            raise PermissionError("mute_members")
+        except nextcord.errors.HTTPException as exc:
+            raise RuntimeError(f"Failed to mute member: {exc}")
 
-            return json.dumps({
-                "status": "success",
-                "action": "unban",
-                "member_id": member_id,
-                "reason": reason
-            }, ensure_ascii=False)
+    async def timeout(
+        self,
+        guild: nextcord.Guild,
+        member_id: int,
+        duration_seconds: int,
+        reason: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """Timeout a member (communication disabled).
 
-        except nextcord.NotFound:
-            return json.dumps({"status": "error", "message": "Thành viên này không nằm trong danh sách bị cấm (Ban List) của Server."}, ensure_ascii=False)
-        except nextcord.Forbidden:
-            return json.dumps({"status": "error", "message": "Bot thiếu quyền 'Ban Members' để thực hiện gỡ cấm."}, ensure_ascii=False)
-        except Exception as e:
-            return json.dumps({"status": "error", "message": f"Thất bại khi unban: {str(e)}"}, ensure_ascii=False)
+        Args:
+            guild: The target guild.
+            member_id: ID of the member to timeout.
+            duration_seconds: Duration of the timeout in seconds (max 28 days).
+            reason: Optional reason for the timeout.
 
-    @staticmethod
-    async def timeout_member(guild: nextcord.Guild, member_id: int, duration_minutes: int, reason: Optional[str] = "Được yêu cầu bởi AI Agent") -> str:
+        Returns:
+            Dict confirming the timeout.
         """
-        Công cụ cấm túc (Timeout/Mute) thành viên vi phạm quy định trong một khoảng thời gian (phút).
-        Truyền duration_minutes = 0 để gỡ timeout trước thời hạn.
-        """
+        member = guild.get_member(int(member_id))
+        if member is None:
+            raise ValueError(f"Member '{member_id}' not found in guild")
+
+        max_timeout = 28 * 24 * 60 * 60  # 28 days
+        if duration_seconds <= 0 or duration_seconds > max_timeout:
+            raise ValueError(f"duration_seconds must be between 1 and {max_timeout}")
+
         try:
-            member = guild.get_member(member_id) or await guild.fetch_member(member_id)
-            if not member:
-                return json.dumps({"status": "error", "message": "Không tìm thấy thành viên trên Server."}, ensure_ascii=False)
+            delta = timedelta(seconds=duration_seconds)
+            await member.edit(timeout=delta, reason=reason)
+            logger.info(
+                "Timed out member '%s' (id=%s) in guild '%s' for %ds. Reason: %s",
+                member.display_name,
+                member_id,
+                guild.name,
+                duration_seconds,
+                reason,
+            )
+            return {
+                "timed_out": True,
+                "member_id": str(member_id),
+                "member_name": member.display_name,
+                "duration_seconds": duration_seconds,
+                "reason": reason,
+            }
+        except nextcord.errors.Forbidden:
+            raise PermissionError("moderate_members")
+        except nextcord.errors.HTTPException as exc:
+            raise RuntimeError(f"Failed to timeout member: {exc}")
 
-            if member.top_role >= guild.me.top_role or member.id == guild.owner_id:
-                return json.dumps({"status": "error", "message": "Không thể cấm túc thành viên này do phân cấp quyền hệ thống."}, ensure_ascii=False)
+    async def list(
+        self,
+        guild: nextcord.Guild,
+    ) -> Dict[str, Any]:
+        """List all members in the guild.
 
-            if duration_minutes > 0:
-                # Tính toán mốc thời gian cấm túc
-                delta = timedelta(minutes=duration_minutes)
-                await member.timeout(delta, reason=reason)
-                action_name = "timeout"
-            else:
-                # Nếu truyền bằng 0 hoặc nhỏ hơn, tiến hành gỡ timeout
-                await member.timeout(None, reason=reason)
-                action_name = "untimeout"
+        Args:
+            guild: The target guild.
 
-            return json.dumps({
-                "status": "success",
-                "action": action_name,
-                "member_id": member_id,
-                "member_name": member.name,
-                "duration_minutes": duration_minutes,
-                "reason": reason
-            }, ensure_ascii=False)
-
-        except nextcord.Forbidden:
-            return json.dumps({"status": "error", "message": "Bot thiếu quyền 'Moderate Members' để thực hiện cấm túc đối tượng này."}, ensure_ascii=False)
-        except Exception as e:
-            return json.dumps({"status": "error", "message": f"Thất bại khi xử lý timeout: {str(e)}"}, ensure_ascii=False)
-
-    @staticmethod
-    async def purge_messages(guild: nextcord.Guild, channel_id: int, limit: int = 100, **kwargs) -> str:
+        Returns:
+            Dict with member list.
         """
-        Công cụ dọn dẹp, xóa hàng loạt tin nhắn rác/tin nhắn cũ trong một kênh chat (Purge).
-        Hỗ trợ qua kwargs:
-          - member_id: Chỉ xóa tin nhắn của một thành viên cụ thể (Lọc tin nhắn spam).
-        """
-        try:
-            channel = guild.get_channel(channel_id)
-            if not channel or not isinstance(channel, nextcord.TextChannel):
-                return json.dumps({"status": "error", "message": "Không tìm thấy kênh văn bản hoặc ID truyền vào không phải kênh chat chữ."}, ensure_ascii=False)
+        members = []
+        for member in guild.members:
+            members.append({
+                "id": str(member.id),
+                "name": member.name,
+                "display_name": member.display_name,
+                "bot": member.bot,
+                "roles": [str(r.id) for r in member.roles if r != guild.default_role],
+                "joined_at": member.joined_at.isoformat() if member.joined_at else None,
+            })
+        return {"members": members, "count": len(members)}
 
-            target_member_id = kwargs.pop('member_id', None)
-            deleted_count = 0
+    # ------------------------------------------------------------------
+    # BaseConnector interface
+    # ------------------------------------------------------------------
 
-            # Xây dựng hàm check điều kiện lọc tin nhắn nếu Agent yêu cầu chỉ xóa của 1 người cụ thể
-            def check_condition(msg):
-                if target_member_id:
-                    return msg.author.id == target_member_id
-                return True
+    async def execute(self, action: str, **params: Any) -> Dict[str, Any]:
+        """Dispatch to the appropriate action method."""
+        actions = {
+            "kick": self.kick,
+            "ban": self.ban,
+            "unban": self.unban,
+            "mute": self.mute,
+            "timeout": self.timeout,
+            "list": self.list,
+        }
+        handler = actions.get(action)
+        if handler is None:
+            raise ValueError(
+                f"Unknown action '{action}' for MembersConnector. "
+                f"Available: {list(actions.keys())}"
+            )
+        return await handler(**params)
 
-            # Thực thi xóa tin nhắn hàng loạt theo điều kiện lọc
-            deleted_messages = await channel.purge(limit=limit, check=check_condition)
-            deleted_count = len(deleted_messages)
-
-            return json.dumps({
-                "status": "success",
-                "action": "purge",
-                "channel_id": channel_id,
-                "channel_name": channel.name,
-                "requested_limit": limit,
-                "actually_deleted_count": deleted_count,
-                "filtered_by_member_id": target_member_id
-            }, ensure_ascii=False)
-
-        except nextcord.Forbidden:
-            return json.dumps({"status": "error", "message": "Bot thiếu quyền 'Manage Messages' hoặc 'Read Message History' tại kênh này."}, ensure_ascii=False)
-        except Exception as e:
-            return json.dumps({"status": "error", "message": f"Thất bại khi dọn dẹp tin nhắn: {str(e)}"}, ensure_ascii=False)
-
-    @staticmethod
-    async def modify_member_nickname(guild: nextcord.Guild, member_id: int, new_nickname: Optional[str] = None, reason: Optional[str] = "Được yêu cầu bởi AI Agent") -> str:
-        """
-        Công cụ thay đổi biệt danh (Nickname) của một thành viên trên Server.
-        Truyền new_nickname = None hoặc chuỗi rỗng để xóa biệt danh (Reset về tên gốc).
-        """
-        try:
-            member = guild.get_member(member_id) or await guild.fetch_member(member_id)
-            if not member:
-                return json.dumps({"status": "error", "message": "Không tìm thấy thành viên."}, ensure_ascii=False)
-
-            # Phân cấp: Bot chỉ sửa được nick của người có role thấp hơn nó (Trừ khi tự sửa nick của chính mình)
-            if member.id != guild.me.id and member.top_role >= guild.me.top_role:
-                return json.dumps({"status": "error", "message": "Không thể đổi biệt danh của người có cấp bậc cao hơn hoặc bằng Bot."}, ensure_ascii=False)
-
-            # Tiến hành chỉnh sửa biệt danh
-            nick_to_set = None if not new_nickname or new_nickname.strip() == "" else new_nickname
-            await member.edit(nick=nick_to_set, reason=reason)
-
-            return json.dumps({
-                "status": "success",
-                "action": "modify_nickname",
-                "member_id": member_id,
-                "old_name_or_nick": member.display_name,
-                "new_nickname": nick_to_set if nick_to_set else "Đã reset về tên gốc",
-                "reason": reason
-            }, ensure_ascii=False)
-
-        except nextcord.Forbidden:
-            return json.dumps({"status": "error", "message": "Bot thiếu quyền 'Manage Nicknames' (hoặc quyền 'Change Nickname' nếu tự sửa nick của Bot)."}, ensure_ascii=False)
-        except Exception as e:
-            return json.dumps({"status": "error", "message": f"Lỗi đổi biệt danh: {str(e)}"}, ensure_ascii=False)
+    def get_tool_definitions(self) -> List[ToolDefinition]:
+        """Return tool definitions for member operations."""
+        return [
+            ToolDefinition(
+                name="discord.members.kick",
+                description="Kick a member from the guild.",
+                parameters={
+                    "type": "object",
+                    "properties": {
+                        "guild_id": {"type": "string", "description": "Target guild ID."},
+                        "member_id": {"type": "string", "description": "Member ID to kick."},
+                        "reason": {"type": "string", "description": "Reason for kick (optional)."},
+                    },
+                    "required": ["guild_id", "member_id"],
+                },
+                risk_level="high",
+            ),
+            ToolDefinition(
+                name="discord.members.ban",
+                description="Ban a member from the guild. Most severe moderation action.",
+                parameters={
+                    "type": "object",
+                    "properties": {
+                        "guild_id": {"type": "string", "description": "Target guild ID."},
+                        "member_id": {"type": "string", "description": "Member ID to ban."},
+                        "reason": {"type": "string", "description": "Reason for ban (optional)."},
+                        "delete_days": {"type": "integer", "description": "Days of messages to delete (0-7)."},
+                    },
+                    "required": ["guild_id", "member_id"],
+                },
+                risk_level="critical",
+            ),
+            ToolDefinition(
+                name="discord.members.unban",
+                description="Unban a previously banned user.",
+                parameters={
+                    "type": "object",
+                    "properties": {
+                        "guild_id": {"type": "string", "description": "Target guild ID."},
+                        "user_id": {"type": "string", "description": "User ID to unban."},
+                    },
+                    "required": ["guild_id", "user_id"],
+                },
+                risk_level="high",
+            ),
+            ToolDefinition(
+                name="discord.members.mute",
+                description="Server-mute a member (voice mute).",
+                parameters={
+                    "type": "object",
+                    "properties": {
+                        "guild_id": {"type": "string", "description": "Target guild ID."},
+                        "member_id": {"type": "string", "description": "Member ID to mute."},
+                        "duration_seconds": {"type": "integer", "description": "Mute duration in seconds."},
+                    },
+                    "required": ["guild_id", "member_id", "duration_seconds"],
+                },
+                risk_level="high",
+            ),
+            ToolDefinition(
+                name="discord.members.timeout",
+                description="Timeout a member (disable communication).",
+                parameters={
+                    "type": "object",
+                    "properties": {
+                        "guild_id": {"type": "string", "description": "Target guild ID."},
+                        "member_id": {"type": "string", "description": "Member ID to timeout."},
+                        "duration_seconds": {"type": "integer", "description": "Timeout duration in seconds (max 28 days)."},
+                        "reason": {"type": "string", "description": "Reason for timeout (optional)."},
+                    },
+                    "required": ["guild_id", "member_id", "duration_seconds"],
+                },
+                risk_level="high",
+            ),
+            ToolDefinition(
+                name="discord.members.list",
+                description="List all members in the guild.",
+                parameters={
+                    "type": "object",
+                    "properties": {
+                        "guild_id": {"type": "string", "description": "Target guild ID."},
+                    },
+                    "required": ["guild_id"],
+                },
+                risk_level="low",
+            ),
+        ]

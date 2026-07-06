@@ -1,163 +1,89 @@
-# app/infra/llm/groq.py
-"""
-Groq LLM Provider — Ultra-fast inference.
-Migrated from app/providers/groq.py — logic preserved.
-"""
-import time
-import json
-from typing import List, Dict, Any, Optional
+"""Groq LLM provider using the groq SDK."""
 
-import aiohttp
+import asyncio
+import logging
+from typing import Any, Dict, List, Optional
 
-from app.infra.llm.base import LLMProvider, LLMResponse
+from groq import Groq
+
+from .base import BaseLLM, LLMResponse, ToolCall, UsageStats
+
+logger = logging.getLogger(__name__)
 
 
-class GroqProvider(LLMProvider):
-    """Groq Cloud API implementation (OpenAI-compatible)."""
+class GroqLLM(BaseLLM):
+    """Groq LLM provider for fast inference."""
 
-    BASE_URL = "https://api.groq.com/openai/v1"
-
-    def __init__(self, api_key: str, model_id: str = "llama-3.3-70b-versatile"):
-        self._api_key = api_key
-        self._model_id = model_id
-
-    @property
-    def model_name(self) -> str:
-        return self._model_id
+    def __init__(self, model: str = "llama-3.1-70b-versatile", api_key: str = "") -> None:
+        super().__init__(model=model, api_key=api_key)
+        self._client = Groq(api_key=self.api_key)
+        logger.info("GroqLLM initialized (model=%s)", self.model)
 
     async def generate(
         self,
-        messages: List[Dict[str, str]],
-        system_prompt: str = "",
-        temperature: float = 0.3,
-        max_tokens: int = 4096,
-        tools: Optional[List[Dict]] = None,
+        prompt: str,
+        tools: Optional[List[Dict[str, Any]]] = None,
+        temperature: float = 0.7,
     ) -> LLMResponse:
-        start = time.time()
+        """Generate a response using Groq."""
+        messages = [{"role": "user", "content": prompt}]
 
-        payload_messages = []
-        if system_prompt:
-            payload_messages.append({"role": "system", "content": system_prompt})
-        payload_messages.extend(messages)
-
-        payload = {
-            "model": self._model_id,
-            "messages": payload_messages,
+        kwargs: Dict[str, Any] = {
+            "model": self.model,
+            "messages": messages,
             "temperature": temperature,
-            "max_tokens": max_tokens,
         }
 
-        headers = {
-            "Authorization": f"Bearer {self._api_key}",
-            "Content-Type": "application/json",
-        }
+        if tools:
+            kwargs["tools"] = self._convert_tools(tools)
+            kwargs["tool_choice"] = "auto"
 
-        async with aiohttp.ClientSession() as session:
-            async with session.post(
-                f"{self.BASE_URL}/chat/completions",
-                json=payload,
-                headers=headers,
-            ) as resp:
-                data = await resp.json()
+        try:
+            response = await asyncio.to_thread(
+                self._client.chat.completions.create, **kwargs
+            )
+            return self._parse_response(response)
 
-                if resp.status != 200:
-                    error_msg = data.get("error", {}).get("message", str(data))
-                    raise Exception(f"Groq API error ({resp.status}): {error_msg}")
+        except Exception as e:
+            logger.error("Groq generation failed: %s", e)
+            raise
 
-        choice = data["choices"][0]
-        usage = data.get("usage", {})
-
-        return LLMResponse(
-            content=choice["message"]["content"] or "",
-            model=self._model_id,
-            input_tokens=usage.get("prompt_tokens", 0),
-            output_tokens=usage.get("completion_tokens", 0),
-            latency_ms=(time.time() - start) * 1000,
-            raw_response=data,
-        )
-
-    async def generate_with_tools(
-        self,
-        messages: List[Dict[str, str]],
-        system_prompt: str,
-        tools: List[Dict],
-        temperature: float = 0.3,
-    ) -> Dict[str, Any]:
-        start = time.time()
-
-        payload_messages = []
-        if system_prompt:
-            payload_messages.append({"role": "system", "content": system_prompt})
-        payload_messages.extend(messages)
-
-        openai_tools = []
+    def _convert_tools(self, tools: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        """Convert generic tool definitions to OpenAI-compatible format."""
+        converted = []
         for tool in tools:
-            openai_tools.append({
+            converted.append({
                 "type": "function",
                 "function": {
-                    "name": tool["name"],
+                    "name": tool.get("name", ""),
                     "description": tool.get("description", ""),
-                    "parameters": tool.get("parameters", {"type": "object", "properties": {}}),
+                    "parameters": tool.get("parameters", {}),
                 },
             })
+        return converted
 
-        payload = {
-            "model": self._model_id,
-            "messages": payload_messages,
-            "tools": openai_tools,
-            "tool_choice": "auto",
-            "temperature": temperature,
-        }
+    def _parse_response(self, response: Any) -> LLMResponse:
+        """Parse Groq response into standardized LLMResponse."""
+        choice = response.choices[0]
+        message = choice.message
 
-        headers = {
-            "Authorization": f"Bearer {self._api_key}",
-            "Content-Type": "application/json",
-        }
+        content = message.content or ""
+        tool_calls: List[ToolCall] = []
 
-        async with aiohttp.ClientSession() as session:
-            async with session.post(
-                f"{self.BASE_URL}/chat/completions",
-                json=payload,
-                headers=headers,
-            ) as resp:
-                data = await resp.json()
+        if message.tool_calls:
+            import json
+            for tc in message.tool_calls:
+                tool_calls.append(
+                    ToolCall(
+                        name=tc.function.name,
+                        arguments=json.loads(tc.function.arguments) if tc.function.arguments else {},
+                    )
+                )
 
-                if resp.status != 200:
-                    error_msg = data.get("error", {}).get("message", str(data))
-                    raise Exception(f"Groq API error ({resp.status}): {error_msg}")
+        usage = UsageStats(
+            prompt_tokens=response.usage.prompt_tokens,
+            completion_tokens=response.usage.completion_tokens,
+            total_tokens=response.usage.total_tokens,
+        )
 
-        choice = data["choices"][0]["message"]
-        tool_calls = []
-
-        if choice.get("tool_calls"):
-            for tc in choice["tool_calls"]:
-                tool_calls.append({
-                    "name": tc["function"]["name"],
-                    "arguments": json.loads(tc["function"]["arguments"])
-                    if tc["function"]["arguments"]
-                    else {},
-                })
-
-        return {
-            "content": choice.get("content", "") or "",
-            "tool_calls": tool_calls,
-            "latency_ms": (time.time() - start) * 1000,
-            "model": self._model_id,
-        }
-
-    async def is_available(self) -> bool:
-        """Check if provider is reachable and has quota."""
-        try:
-            headers = {
-                "Authorization": f"Bearer {self._api_key}",
-                "Content-Type": "application/json",
-            }
-            async with aiohttp.ClientSession() as session:
-                async with session.get(
-                    f"{self.BASE_URL}/models",
-                    headers=headers,
-                    timeout=aiohttp.ClientTimeout(total=5),
-                ) as resp:
-                    return resp.status == 200
-        except Exception:
-            return False
+        return LLMResponse(content=content, tool_calls=tool_calls, usage=usage)

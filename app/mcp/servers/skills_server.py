@@ -1,79 +1,156 @@
-# app/mcp/servers/skills_server.py
 """
-Skills MCP Server — exposes higher-level agent skills via MCP.
-Skills = composite workflows (e.g., "setup gaming server", "onboard team").
-Phase 2: Load custom skills from DB/files.
-"""
-import logging
-from typing import Dict, Any, List
+Skills MCP Server — Exposes skill registry operations as MCP tools.
 
+Tools:
+- skills.list: List all available skills (optionally filtered).
+- skills.get_by_category: Get skills in a specific category.
+- skills.validate_params: Validate parameters against a skill's schema.
+"""
+
+from __future__ import annotations
+
+import logging
+from typing import Any, Optional
+
+from app.mcp.protocol import ToolDefinition
 from app.mcp.server import MCPServer
-from app.mcp.protocol import (
-    ToolDefinition,
-    ToolCallRequest,
-    ToolCallResponse,
-    ServerInfo,
-)
 
 logger = logging.getLogger(__name__)
 
 
 class SkillsMCPServer(MCPServer):
-    """MCP Server for composite skills (multi-step workflows)."""
+    """MCP server for skill registry queries.
 
-    def __init__(self):
-        self._skills: Dict[str, Dict[str, Any]] = {}
+    Provides read-only access to the skill registry so agents
+    can discover what tools/skills are available.
+    """
 
-    @property
-    def info(self) -> ServerInfo:
-        return ServerInfo(
-            name="skills",
-            version="1.0.0",
-            description="Composite skills — multi-step workflows for common tasks.",
-            tool_count=len(self._skills),
+    def __init__(self, skill_registry: Any = None) -> None:
+        super().__init__()
+        self._skill_registry = skill_registry
+        self._register_tools()
+
+    def set_skill_registry(self, skill_registry: Any) -> None:
+        """Inject the skill registry (can be set after construction)."""
+        self._skill_registry = skill_registry
+
+    def _get_registry(self) -> Any:
+        """Get skill registry or raise if not configured."""
+        if self._skill_registry is None:
+            raise RuntimeError(
+                "SkillRegistry not configured. Call set_skill_registry() first."
+            )
+        return self._skill_registry
+
+    # ------------------------------------------------------------------
+    # Tool Registration
+    # ------------------------------------------------------------------
+
+    def _register_tools(self) -> None:
+        """Register all skills tools."""
+
+        # skills.list
+        self.register_tool(
+            ToolDefinition(
+                name="skills.list",
+                description=(
+                    "List all available skills in the registry. "
+                    "Optionally filter by risk level or search term."
+                ),
+                parameters={
+                    "type": "object",
+                    "properties": {
+                        "search": {
+                            "type": "string",
+                            "description": "Optional search term to filter skills.",
+                        },
+                        "max_risk": {
+                            "type": "string",
+                            "description": "Max risk level filter (low|medium|high|critical).",
+                        },
+                    },
+                },
+                risk_level="low",
+            ),
+            self._handle_list,
         )
 
-    def register_skill(self, name: str, description: str, parameters: Dict, handler) -> None:
-        """Register a composite skill."""
-        self._skills[name] = {
-            "description": description,
-            "parameters": parameters,
-            "handler": handler,
-        }
-
-    def list_tools(self) -> List[ToolDefinition]:
-        return [
+        # skills.get_by_category
+        self.register_tool(
             ToolDefinition(
-                name=name,
-                description=skill["description"],
-                input_schema=skill["parameters"],
-                server_name="skills",
-            )
-            for name, skill in self._skills.items()
-        ]
+                name="skills.get_by_category",
+                description=(
+                    "Get all skills belonging to a specific category "
+                    "(e.g. 'moderation', 'management', 'information')."
+                ),
+                parameters={
+                    "type": "object",
+                    "properties": {
+                        "category": {
+                            "type": "string",
+                            "description": "The category name to filter by.",
+                        },
+                    },
+                    "required": ["category"],
+                },
+                risk_level="low",
+            ),
+            self._handle_get_by_category,
+        )
 
-    async def call_tool(self, request: ToolCallRequest) -> ToolCallResponse:
-        """Execute a composite skill."""
-        skill = self._skills.get(request.tool_name)
-        if not skill:
-            return ToolCallResponse(
-                id=request.id,
-                success=False,
-                error=f"Skill not found: {request.tool_name}",
-            )
+        # skills.validate_params
+        self.register_tool(
+            ToolDefinition(
+                name="skills.validate_params",
+                description=(
+                    "Validate a set of parameters against a skill's schema. "
+                    "Returns validation result with any errors."
+                ),
+                parameters={
+                    "type": "object",
+                    "properties": {
+                        "skill_name": {
+                            "type": "string",
+                            "description": "The skill/tool name to validate against.",
+                        },
+                        "params": {
+                            "type": "object",
+                            "description": "The parameters to validate.",
+                        },
+                    },
+                    "required": ["skill_name", "params"],
+                },
+                risk_level="low",
+            ),
+            self._handle_validate_params,
+        )
 
-        try:
-            args = dict(request.arguments)
-            args.pop("_context", None)
-            result = await skill["handler"](**args)
-            return ToolCallResponse(
-                id=request.id,
-                success=True,
-                result=result if isinstance(result, dict) else {"result": str(result)},
-            )
-        except Exception as e:
-            return ToolCallResponse(
-                id=request.id,
-                success=False,
-                error=str(e),
-            )
+    # ------------------------------------------------------------------
+    # Handlers
+    # ------------------------------------------------------------------
+
+    async def _handle_list(
+        self,
+        search: Optional[str] = None,
+        max_risk: Optional[str] = None,
+    ) -> dict:
+        registry = self._get_registry()
+        skills = await registry.list_skills(search=search, max_risk=max_risk)
+        return {"skills": skills, "count": len(skills)}
+
+    async def _handle_get_by_category(self, category: str) -> dict:
+        registry = self._get_registry()
+        skills = await registry.get_by_category(category=category)
+        return {"category": category, "skills": skills, "count": len(skills)}
+
+    async def _handle_validate_params(self, skill_name: str, params: dict) -> dict:
+        registry = self._get_registry()
+        result = await registry.validate_params(skill_name=skill_name, params=params)
+        return result
+
+    # ------------------------------------------------------------------
+    # MCPServer interface
+    # ------------------------------------------------------------------
+
+    def get_server_name(self) -> str:
+        return "skills"

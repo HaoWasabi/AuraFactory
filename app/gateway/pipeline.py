@@ -1,166 +1,147 @@
 # app/gateway/pipeline.py
 """
-GatewayPipeline — orchestrates all pre-processing checks.
-Message flows: Channel → Gateway → Orchestrator.
+GatewayPipeline — orchestrates all pre-processing checks before agents.
+Message flow: Discord Layer → Gateway → Orchestrator (Agents).
 
-v2 additions:
-- Role detection (admin/mod/member)
-- Source context detection (DM, #aura-admin, public channel)
+Pipeline order:
+1. rate_limit → 2. guardrails → 3. role_detection → 4. session_resolve → 5. cost_check
+
+If ANY step fails, returns immediately with reason (short-circuit).
 """
 import logging
 from typing import Any, Optional
 from dataclasses import dataclass, field
 
 from app.models.messages import IncomingMessage
-from app.gateway.guardrails import check_injection
 from app.gateway.rate_limiter import RateLimiter
-from app.gateway.session_manager import SessionManager
+from app.gateway.guardrails import Guardrails
+from app.gateway.session_manager import SessionManager, Session
+from app.gateway.cost_tracker import CostTracker
 
 logger = logging.getLogger(__name__)
-
-
-# Admin channel name (created during setup)
-ADMIN_CHANNEL_NAME = "aura-admin"
-
-
-@dataclass
-class GatewayContext:
-    """Enriched context attached to a message after gateway processing."""
-    session_id: str = ""
-    trace_id: str = ""
-    user_role: str = "member"  # "admin", "moderator", "member"
-    source_context: str = "public"  # "admin_channel", "dm", "public"
-    is_first_time_guild: bool = False
-    memory_context: Any = None  # Injected by Orchestrator after recall
 
 
 @dataclass
 class GatewayResult:
     """Result of gateway processing."""
-    allowed: bool
-    message: Optional[IncomingMessage] = None
-    context: Optional[GatewayContext] = None
-    rejection_reason: str = ""
+    passed: bool
+    reason: str = ""
+    session: Optional[Session] = None
+    user_role: str = "member"
+    trace_id: str = ""
 
 
 class GatewayPipeline:
     """
-    Processes incoming messages through safety + context enrichment:
-    1. Rate limiting
-    2. Guardrails (prompt injection detection)
-    3. Role detection (admin/mod/member)
-    4. Source context detection
-    5. Session resolution
-    6. Input sanitization
+    Processes incoming messages through the gateway control plane.
+
+    Pipeline steps (in order):
+    1. Rate Limiting — token bucket, 20 req/min/user
+    2. Guardrails — prompt injection detection
+    3. Role Detection — owner/admin/moderator/member
+    4. Session Resolution — create or load session
+    5. Cost Check — daily budget enforcement per guild
+
+    If any step fails, return immediately with passed=False and reason.
     """
 
     def __init__(
         self,
         rate_limiter: Optional[RateLimiter] = None,
+        guardrails: Optional[Guardrails] = None,
         session_manager: Optional[SessionManager] = None,
-        tracer=None,
-    ):
+        cost_tracker: Optional[CostTracker] = None,
+        db: Any = None,
+    ) -> None:
         self._rate_limiter = rate_limiter or RateLimiter()
-        self._session_manager = session_manager or SessionManager()
-        self._tracer = tracer
+        self._guardrails = guardrails or Guardrails()
+        self._session_manager = session_manager or SessionManager(db=db)
+        self._cost_tracker = cost_tracker or CostTracker(db=db)
 
     async def process(self, message: IncomingMessage) -> GatewayResult:
         """
         Run the full gateway pipeline on an incoming message.
-        Returns GatewayResult with allowed=True if message passes all checks.
+
+        Args:
+            message: Standardized incoming message from Discord/API.
+
+        Returns:
+            GatewayResult with passed=True if message passes all checks,
+            or passed=False with reason if any check fails.
         """
-        trace_id = self._tracer.new_trace() if self._tracer else "no-trace"
+        user_id = message.user_id
+        guild_id = message.guild_id
 
-        # 1. Rate limiting
-        allowed, _wait = self._rate_limiter.allow(message.user_id)
+        # ─── Step 1: Rate Limiting ───
+        allowed, retry_after = self._rate_limiter.check(user_id)
         if not allowed:
-            logger.warning(f"[{trace_id}] Rate limited: {message.user_id}")
+            logger.warning(f"Rate limited user {user_id}: retry_after={retry_after:.1f}s")
             return GatewayResult(
-                allowed=False,
-                rejection_reason="Bạn đang gửi tin nhắn quá nhanh. Vui lòng đợi một chút.",
+                passed=False,
+                reason=f"Bạn đang gửi tin nhắn quá nhanh. Vui lòng đợi {retry_after:.0f} giây.",
             )
 
-        # 2. Guardrails (prompt injection)
-        is_safe, guardrail_msg = check_injection(message.prompt)
-        if not is_safe:
-            logger.warning(f"[{trace_id}] Guardrail blocked: {guardrail_msg}")
-            if self._tracer:
-                self._tracer.log_security(trace_id, "prompt_injection", guardrail_msg)
+        # ─── Step 2: Guardrails (Prompt Injection Detection) ───
+        safe, guardrail_reason = self._guardrails.check(message.prompt)
+        if not safe:
+            logger.warning(f"Guardrails blocked user {user_id}: {guardrail_reason}")
             return GatewayResult(
-                allowed=False,
-                rejection_reason="Tin nhắn bị từ chối vì lý do an toàn.",
+                passed=False,
+                reason="Tin nhắn bị từ chối vì lý do an toàn.",
             )
 
-        # 3. Input sanitization
-        message.prompt = self._sanitize_input(message.prompt)
+        # ─── Step 3: Role Detection ───
+        # Use guild object from metadata if available, otherwise use message flags
+        guild = message.metadata.get("guild_object")
+        if guild:
+            user_role = self._session_manager.detect_user_role(user_id, guild)
+        else:
+            # Fallback: use IncomingMessage flags
+            user_role = self._detect_role_from_message(message)
 
-        # 4. Role detection
-        user_role = self._detect_role(message)
-
-        # 5. Source context detection
-        source_context = self._detect_source_context(message)
-
-        # 6. Session resolution
-        session_id = await self._session_manager.get_or_create_session(
-            user_id=message.user_id,
-            guild_id=message.guild_id,
+        # ─── Step 4: Session Resolution ───
+        session = await self._session_manager.resolve_session(
+            user_id=user_id,
+            guild_id=guild_id,
             channel_id=message.channel_id,
         )
+        session.user_role = user_role
 
-        # Build enriched context
-        context = GatewayContext(
-            session_id=session_id,
-            trace_id=trace_id,
-            user_role=user_role,
-            source_context=source_context,
+        # ─── Step 5: Cost Check ───
+        if guild_id:
+            budget_ok, remaining = self._cost_tracker.check_budget(guild_id)
+            if not budget_ok:
+                logger.warning(f"Budget exceeded for guild {guild_id}")
+                return GatewayResult(
+                    passed=False,
+                    reason="Server đã đạt giới hạn sử dụng hôm nay. Vui lòng thử lại ngày mai.",
+                    session=session,
+                    user_role=user_role,
+                )
+
+        # ─── All checks passed ───
+        logger.debug(
+            f"Gateway passed: user={user_id}, role={user_role}, "
+            f"session={session.session_id}"
         )
-
         return GatewayResult(
-            allowed=True,
-            message=message,
-            context=context,
+            passed=True,
+            session=session,
+            user_role=user_role,
         )
 
-    def _detect_role(self, message: IncomingMessage) -> str:
+    def _detect_role_from_message(self, message: IncomingMessage) -> str:
         """
-        Determine user's effective role for permission gating.
-        Priority: admin > moderator > member
+        Fallback role detection from IncomingMessage flags.
+        Used when guild object is not available in metadata.
         """
         if message.is_admin:
             return "admin"
 
-        # Check for moderator-like roles
+        # Check for moderator-like roles in user_roles list
         mod_keywords = ("mod", "moderator", "staff", "helper")
         for role_name in message.user_roles:
             if any(kw in role_name.lower() for kw in mod_keywords):
                 return "moderator"
 
         return "member"
-
-    def _detect_source_context(self, message: IncomingMessage) -> str:
-        """
-        Detect where the message came from for routing hints.
-        - "admin_channel": Message from #aura-admin channel
-        - "dm": Direct message to bot
-        - "public": Regular public channel
-        """
-        channel_name = message.metadata.get("channel_name", "")
-        is_dm = message.metadata.get("is_dm", False)
-
-        if is_dm:
-            return "dm"
-        if channel_name == ADMIN_CHANNEL_NAME:
-            return "admin_channel"
-        return "public"
-
-    def _sanitize_input(self, text: str) -> str:
-        """Strip control characters and limit length."""
-        # Remove null bytes and control chars (except newlines)
-        sanitized = "".join(
-            c for c in text if c == "\n" or c == "\t" or (ord(c) >= 32)
-        )
-        # Limit to reasonable length
-        max_length = 4000
-        if len(sanitized) > max_length:
-            sanitized = sanitized[:max_length] + "..."
-        return sanitized.strip()

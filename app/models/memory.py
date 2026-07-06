@@ -1,78 +1,32 @@
-# app/models/memory.py
-"""Memory models — cognitive science inspired memory types."""
+"""Memory models for procedural rules and knowledge snapshots."""
+
 from dataclasses import dataclass, field
-from typing import Optional, List, Dict, Any
-from datetime import datetime
+from datetime import datetime, timezone
+from typing import Dict, Any
 
 
 @dataclass
-class EpisodicEvent:
-    """A past event/interaction remembered by the system."""
-    guild_id: int
-    session_id: str
-    user_prompt: str
-    agent_plan: dict
-    execution_results: List[dict]
-    timestamp: datetime
-    trace_id: str
-    importance: float = 0.5
+class ProceduralRule:
+    """A learned rule that maps conditions to actions."""
+
+    rule_id: str
+    guild_id: str
+    trigger_condition: Dict[str, Any] = field(default_factory=dict)
+    action: Dict[str, Any] = field(default_factory=dict)
+    confidence: float = 0.5
+
+    def matches(self, context: Dict[str, Any]) -> bool:
+        """Check if this rule's trigger condition matches the given context."""
+        for key, value in self.trigger_condition.items():
+            if context.get(key) != value:
+                return False
+        return True
 
 
 @dataclass
-class SemanticFact:
-    """A learned fact — preference, rule, entity, relationship."""
-    guild_id: int
-    fact_type: str      # preference | rule | entity | relationship
-    content: str
-    confidence: float
-    source: str         # user_explicit | inferred | consolidated
-    created_at: datetime
-    updated_at: datetime
-    metadata: dict = field(default_factory=dict)
+class KnowledgeSnapshot:
+    """A point-in-time snapshot of guild knowledge."""
 
-
-@dataclass
-class ProceduralPattern:
-    """A learned action pattern (trigger → action template)."""
-    id: str
-    guild_id: int
-    trigger_conditions: dict
-    action_template: dict
-    confidence: float
-    success_count: int = 0
-    failure_count: int = 0
-    created_at: Optional[datetime] = None
-    last_used: Optional[datetime] = None
-
-
-@dataclass
-class MemoryContext:
-    """Combined context from all memory types — passed to agents for reasoning."""
-    working_memory: dict
-    relevant_episodes: List[EpisodicEvent]
-    semantic_facts: List[SemanticFact]
-    procedural_patterns: List[ProceduralPattern]
-
-    def to_prompt_context(self) -> str:
-        """Format memory into LLM-readable context string."""
-        parts = []
-        if self.semantic_facts:
-            parts.append(
-                "Known facts:\n" + "\n".join(f"- {f.content}" for f in self.semantic_facts)
-            )
-        if self.relevant_episodes:
-            parts.append(
-                "Past actions:\n" + "\n".join(
-                    f"- User asked: {e.user_prompt} → Result: "
-                    f"{e.execution_results[0].get('status', 'unknown') if e.execution_results else 'unknown'}"
-                    for e in self.relevant_episodes[:3]
-                )
-            )
-        if self.procedural_patterns:
-            parts.append(
-                "Known patterns:\n" + "\n".join(
-                    f"- {p.trigger_conditions} → confidence: {p.confidence:.0%}"
-                    for p in self.procedural_patterns
-                )
-            )
-        return "\n\n".join(parts)
+    guild_id: str
+    snapshot: Dict[str, Any] = field(default_factory=dict)
+    crawled_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))

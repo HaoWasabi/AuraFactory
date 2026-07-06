@@ -1,8 +1,9 @@
-# app/memory/__init__.py
+"""AuraFactory Memory System — Layer 4.
+
+Provides multi-tier memory: working (session), procedural (rules),
+episodic (disabled), and semantic (disabled).
 """
-Layer 6 — Memory & Knowledge.
-Cognitive science model: Working, Episodic, Semantic, Procedural, Knowledge Base.
-"""
+
 from app.memory.service import MemoryService
 
-__all__ = ["MemoryService"]
+__all__: list[str] = ["MemoryService"]

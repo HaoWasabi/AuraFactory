@@ -1,44 +1,12 @@
-# ============================================================
-# AuraFactory v3.0 — Requirements (7-Layer Architecture)
-# ============================================================
-
-# === Core ===
 fastapi>=0.104.0
 uvicorn[standard]>=0.24.0
-python-dotenv>=1.0.0
-
-# === Web Frontend ===
-httpx>=0.25.0                    # Async HTTP client (Discord OAuth, API calls)
-jinja2>=3.1.0                    # Template rendering
-itsdangerous>=2.1.0              # Session signing (starlette sessions)
-
-# === Database ===
-asyncpg>=0.29.0
-sqlalchemy>=2.0.0
-
-# === Discord Bot ===
 nextcord>=2.6.0
-
-# === LLM Providers ===
-google-generativeai>=0.8.0       # Gemini
-aiohttp>=3.9.0                   # HTTP client (Groq, OpenRouter, Ollama)
-
-# === Memory (Phase 1 - uncomment when installing) ===
-# chromadb>=0.4.0                # Vector DB for semantic memory
-# sentence-transformers>=2.2.0   # Embedding model
-
-# === Cache/Queue (Phase 2) ===
-# redis>=5.0.0                   # Rate limiter, session cache
-
-# === Security ===
-# llm-guard>=0.3.0               # Phase 2: advanced guardrails
-
-# === Testing ===
-# pytest>=7.4.0
-# pytest-asyncio>=0.21.0
-# httpx>=0.25.0                  # For FastAPI test client
-
-# === AWS (Phase 2 — uncomment when migrating) ===
-# boto3>=1.34.0                  # AWS SDK
-# opensearch-py>=2.4.0           # OpenSearch (vector store)
-# aws-xray-sdk>=2.12.0           # X-Ray tracing
+asyncpg>=0.29.0
+google-generativeai>=0.8.0
+httpx>=0.25.0
+python-multipart>=0.0.6
+jinja2>=3.1.0
+itsdangerous>=2.1.0
+aiofiles>=23.0.0
+python-dotenv>=1.0.0
+groq>=0.4.0

@@ -1,8 +1,11 @@
-# app/connectors/__init__.py
 """
-Layer 5 — External Connectors.
-All external API wrappers expose via ConnectorBase ABC.
-"""
-from app.connectors.base import ConnectorBase
+Connectors — External service integrations for AuraFactory.
 
-__all__ = ["ConnectorBase"]
+Each connector provides a clean async interface to an external service.
+Currently implemented:
+- discord: Full Discord guild management (channels, roles, members, etc.)
+"""
+
+from app.connectors.base import BaseConnector
+
+__all__ = ["BaseConnector"]

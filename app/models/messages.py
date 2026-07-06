@@ -1,41 +1,41 @@
-# app/models/messages.py
-"""
-Cross-layer message models.
-IncomingMessage: standardized input from any platform.
-OutgoingMessage: standardized response to user.
-"""
+"""Message models for incoming and outgoing Discord messages."""
+
+import uuid
 from dataclasses import dataclass, field
-from typing import Optional, Literal, List
+from typing import Optional
 
 
 @dataclass
 class IncomingMessage:
-    """Input from any platform, standardized."""
+    """Represents a message received from a Discord user."""
+
     user_id: str
     user_name: str
-    prompt: str
-    user_roles: List[str] = field(default_factory=list)  # Discord role names
-    is_admin: bool = False  # True if user has admin/manage_guild permission
-    guild_id: Optional[int] = None
-    channel_id: Optional[int] = None
-    message_id: Optional[str] = None
-    source: Literal["discord", "api", "web"] = "discord"
-    language: Optional[str] = None
-    attachments: List[str] = field(default_factory=list)
-    reply_to_message_id: Optional[str] = None
-    metadata: dict = field(default_factory=dict)
+    guild_id: str
+    content: str
+    channel_id: str
+    trace_id: str = field(default_factory=lambda: str(uuid.uuid4()))
+
+    def __post_init__(self) -> None:
+        if not self.content:
+            raise ValueError("Message content cannot be empty")
 
 
 @dataclass
 class OutgoingMessage:
-    """Response back to user."""
+    """Represents a message to be sent back to Discord."""
+
     content: str
     trace_id: str
-    target_channel_id: Optional[int] = None
-    target_user_id: Optional[str] = None
-    source: Literal["discord", "api", "web"] = "discord"
-    embed: Optional[dict] = None
-    components: Optional[List[dict]] = None
-    reply_to: Optional[str] = None
-    ephemeral: bool = False
-    metadata: dict = field(default_factory=dict)
+    status: str = "pending"
+    approval_required: bool = False
+    approval_id: Optional[str] = None
+
+    def mark_approved(self) -> None:
+        """Mark this message as approved for sending."""
+        self.status = "approved"
+        self.approval_required = False
+
+    def mark_sent(self) -> None:
+        """Mark this message as successfully sent."""
+        self.status = "sent"

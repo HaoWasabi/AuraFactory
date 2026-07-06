@@ -1,177 +1,104 @@
-# app/infra/llm/openrouter.py
-"""
-OpenRouter LLM Provider — Multi-model aggregator.
-Migrated from app/providers/openrouter.py — logic preserved.
-"""
-import time
+"""OpenRouter LLM provider using httpx (OpenAI-compatible endpoint)."""
+
 import json
-from typing import List, Dict, Any, Optional
+import logging
+from typing import Any, Dict, List, Optional
 
-import aiohttp
+import httpx
 
-from app.infra.llm.base import LLMProvider, LLMResponse
+from .base import BaseLLM, LLMResponse, ToolCall, UsageStats
+
+logger = logging.getLogger(__name__)
+
+OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1/chat/completions"
 
 
-class OpenRouterProvider(LLMProvider):
-    """OpenRouter API implementation (OpenAI-compatible)."""
+class OpenRouterLLM(BaseLLM):
+    """OpenRouter LLM provider (OpenAI-compatible API)."""
 
-    BASE_URL = "https://openrouter.ai/api/v1"
-
-    FREE_MODELS = [
-        "meta-llama/llama-3.1-8b-instruct:free",
-        "mistralai/mistral-7b-instruct:free",
-        "huggingfaceh4/zephyr-7b-beta:free",
-        "google/gemma-2-9b-it:free",
-    ]
-
-    def __init__(
-        self,
-        api_key: str,
-        model_id: str = "meta-llama/llama-3.1-8b-instruct:free",
-        app_name: str = "AuraFactory",
-    ):
-        self._api_key = api_key
-        self._model_id = model_id
-        self._app_name = app_name
-
-    @property
-    def model_name(self) -> str:
-        return self._model_id
-
-    def _get_headers(self) -> Dict[str, str]:
-        return {
-            "Authorization": f"Bearer {self._api_key}",
-            "Content-Type": "application/json",
-            "HTTP-Referer": "https://github.com/AuraFactory",
-            "X-Title": self._app_name,
-        }
+    def __init__(self, model: str = "openai/gpt-4o", api_key: str = "") -> None:
+        super().__init__(model=model, api_key=api_key)
+        self._base_url = OPENROUTER_BASE_URL
+        logger.info("OpenRouterLLM initialized (model=%s)", self.model)
 
     async def generate(
         self,
-        messages: List[Dict[str, str]],
-        system_prompt: str = "",
-        temperature: float = 0.3,
-        max_tokens: int = 4096,
-        tools: Optional[List[Dict]] = None,
+        prompt: str,
+        tools: Optional[List[Dict[str, Any]]] = None,
+        temperature: float = 0.7,
     ) -> LLMResponse:
-        start = time.time()
-
-        payload_messages = []
-        if system_prompt:
-            payload_messages.append({"role": "system", "content": system_prompt})
-        payload_messages.extend(messages)
-
-        payload = {
-            "model": self._model_id,
-            "messages": payload_messages,
-            "temperature": temperature,
-            "max_tokens": max_tokens,
+        """Generate a response using OpenRouter."""
+        headers = {
+            "Authorization": f"Bearer {self.api_key}",
+            "Content-Type": "application/json",
+            "HTTP-Referer": "https://aurafactory.app",
+            "X-Title": "AuraFactory",
         }
 
-        async with aiohttp.ClientSession() as session:
-            async with session.post(
-                f"{self.BASE_URL}/chat/completions",
-                json=payload,
-                headers=self._get_headers(),
-            ) as resp:
-                data = await resp.json()
+        payload: Dict[str, Any] = {
+            "model": self.model,
+            "messages": [{"role": "user", "content": prompt}],
+            "temperature": temperature,
+        }
 
-                if resp.status != 200:
-                    error_msg = data.get("error", {}).get("message", str(data))
-                    raise Exception(f"OpenRouter API error ({resp.status}): {error_msg}")
+        if tools:
+            payload["tools"] = self._convert_tools(tools)
+            payload["tool_choice"] = "auto"
 
-        choice = data["choices"][0]
-        usage = data.get("usage", {})
+        try:
+            async with httpx.AsyncClient(timeout=60.0) as client:
+                response = await client.post(self._base_url, headers=headers, json=payload)
+                response.raise_for_status()
+                data = response.json()
+                return self._parse_response(data)
 
-        return LLMResponse(
-            content=choice["message"]["content"] or "",
-            model=data.get("model", self._model_id),
-            input_tokens=usage.get("prompt_tokens", 0),
-            output_tokens=usage.get("completion_tokens", 0),
-            latency_ms=(time.time() - start) * 1000,
-            raw_response=data,
-        )
+        except httpx.HTTPStatusError as e:
+            logger.error("OpenRouter HTTP error %d: %s", e.response.status_code, e.response.text)
+            raise
+        except Exception as e:
+            logger.error("OpenRouter generation failed: %s", e)
+            raise
 
-    async def generate_with_tools(
-        self,
-        messages: List[Dict[str, str]],
-        system_prompt: str,
-        tools: List[Dict],
-        temperature: float = 0.3,
-    ) -> Dict[str, Any]:
-        start = time.time()
-
-        payload_messages = []
-        if system_prompt:
-            payload_messages.append({"role": "system", "content": system_prompt})
-        payload_messages.extend(messages)
-
-        openai_tools = []
+    def _convert_tools(self, tools: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        """Convert generic tool definitions to OpenAI-compatible format."""
+        converted = []
         for tool in tools:
-            openai_tools.append({
+            converted.append({
                 "type": "function",
                 "function": {
-                    "name": tool["name"],
+                    "name": tool.get("name", ""),
                     "description": tool.get("description", ""),
-                    "parameters": tool.get("parameters", {"type": "object", "properties": {}}),
+                    "parameters": tool.get("parameters", {}),
                 },
             })
+        return converted
 
-        payload = {
-            "model": self._model_id,
-            "messages": payload_messages,
-            "tools": openai_tools,
-            "tool_choice": "auto",
-            "temperature": temperature,
-        }
+    def _parse_response(self, data: Dict[str, Any]) -> LLMResponse:
+        """Parse OpenRouter JSON response into standardized LLMResponse."""
+        choices = data.get("choices", [])
+        if not choices:
+            return LLMResponse()
 
-        async with aiohttp.ClientSession() as session:
-            async with session.post(
-                f"{self.BASE_URL}/chat/completions",
-                json=payload,
-                headers=self._get_headers(),
-            ) as resp:
-                data = await resp.json()
+        message = choices[0].get("message", {})
+        content = message.get("content", "") or ""
+        tool_calls: List[ToolCall] = []
 
-                if resp.status != 200:
-                    error_msg = data.get("error", {}).get("message", str(data))
-                    raise Exception(f"OpenRouter API error ({resp.status}): {error_msg}")
+        raw_tool_calls = message.get("tool_calls", [])
+        for tc in raw_tool_calls:
+            func = tc.get("function", {})
+            args = func.get("arguments", "{}")
+            tool_calls.append(
+                ToolCall(
+                    name=func.get("name", ""),
+                    arguments=json.loads(args) if isinstance(args, str) else args,
+                )
+            )
 
-        choice = data["choices"][0]["message"]
-        tool_calls = []
+        usage_data = data.get("usage", {})
+        usage = UsageStats(
+            prompt_tokens=usage_data.get("prompt_tokens", 0),
+            completion_tokens=usage_data.get("completion_tokens", 0),
+            total_tokens=usage_data.get("total_tokens", 0),
+        )
 
-        if choice.get("tool_calls"):
-            for tc in choice["tool_calls"]:
-                tool_calls.append({
-                    "name": tc["function"]["name"],
-                    "arguments": json.loads(tc["function"]["arguments"])
-                    if tc["function"]["arguments"]
-                    else {},
-                })
-
-        return {
-            "content": choice.get("content", "") or "",
-            "tool_calls": tool_calls,
-            "latency_ms": (time.time() - start) * 1000,
-            "model": data.get("model", self._model_id),
-        }
-
-    async def is_available(self) -> bool:
-        """Check rate limit status via OpenRouter."""
-        try:
-            async with aiohttp.ClientSession() as session:
-                async with session.get(
-                    f"{self.BASE_URL}/auth/key",
-                    headers=self._get_headers(),
-                    timeout=aiohttp.ClientTimeout(total=5),
-                ) as resp:
-                    if resp.status == 200:
-                        data = await resp.json()
-                        limit = data.get("data", {}).get("limit")
-                        usage = data.get("data", {}).get("usage", 0)
-                        if limit is None:
-                            return True
-                        return usage < limit
-                    return False
-        except Exception:
-            return False
+        return LLMResponse(content=content, tool_calls=tool_calls, usage=usage)

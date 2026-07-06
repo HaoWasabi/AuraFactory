@@ -1,270 +1,288 @@
 # app/channels/discord_adapter.py
 """
-Discord Channel Adapter — bridges nextcord bot events to the unified pipeline.
-
-Events handled:
-- on_message: User mentions bot → route to orchestrator
-- on_guild_join: Bot added to server → trigger setup mode
-- on_member_join: New member joins → trigger onboarding DM
-- on_guild_channel_*/on_guild_role_*: Server changes → update knowledge
+Discord Channel Adapter — connects nextcord Bot to AuraFactory pipeline.
+Handles: on_ready, on_message, on_member_join.
+Routes messages through Gateway → Orchestrator → response.
 """
+import asyncio
 import logging
-from typing import Callable, Awaitable, Optional
+from typing import Any, Optional, Callable, Awaitable
 
 import nextcord
+from nextcord.ext import commands
 
 from app.channels.base import ChannelAdapterBase
 from app.models.messages import IncomingMessage, OutgoingMessage
+from app.config.settings import settings
 
 logger = logging.getLogger(__name__)
+
+# Maximum Discord message length
+MAX_DISCORD_LENGTH = 2000
+# Embed threshold — if response exceeds this, use embed
+EMBED_THRESHOLD = 1800
 
 
 class DiscordAdapter(ChannelAdapterBase):
     """
-    Discord bot adapter using nextcord.
-    Listens for messages + guild/member events, converts to IncomingMessage,
-    sends OutgoingMessage back.
+    Discord adapter using nextcord.Bot.
+
+    Responsibilities:
+    - Receive Discord messages → IncomingMessage
+    - Route to app.process_message()
+    - Send responses back (text or embed for long content)
+    - Handle member join events for onboarding
     """
 
-    def __init__(self, token: str, allowed_guild_ids: list = None, allow_all: bool = False):
+    def __init__(
+        self,
+        token: str,
+        process_message_fn: Callable[[IncomingMessage], Awaitable[OutgoingMessage]],
+        knowledge_crawler: Any = None,
+        onboarding_handler: Any = None,
+    ):
         self._token = token
-        self._allowed_guild_ids = allowed_guild_ids or []
-        self._allow_all = allow_all
-        self._handler: Optional[Callable[[IncomingMessage], Awaitable[OutgoingMessage]]] = None
+        self._process_message = process_message_fn
+        self._knowledge_crawler = knowledge_crawler
+        self._onboarding_handler = onboarding_handler
 
-        # Create bot with intents
+        # Configure intents
         intents = nextcord.Intents.default()
-        intents.message_content = True
-        intents.members = True
         intents.guilds = True
-        self._bot = nextcord.Client(intents=intents)
+        intents.members = True
+        intents.messages = True
+        intents.message_content = True
 
-        # Lifecycle event callbacks (set externally during DI setup)
-        self._on_guild_join_handler: Optional[Callable] = None
-        self._on_member_join_handler: Optional[Callable] = None
-        self._on_server_change_handler: Optional[Callable] = None
+        self._bot = commands.Bot(
+            command_prefix="!aura ",
+            intents=intents,
+            help_command=None,
+        )
 
         # Register event handlers
-        self._setup_message_events()
-        self._setup_lifecycle_events()
+        self._register_events()
 
     @property
-    def name(self) -> str:
-        return "discord"
-
-    @property
-    def bot(self) -> nextcord.Client:
-        """Direct access to the nextcord client (for tools that need guild object)."""
+    def bot(self) -> commands.Bot:
+        """Expose bot instance for external access."""
         return self._bot
 
-    # --- Lifecycle handler setters ---
-
-    def set_guild_join_handler(self, handler: Callable) -> None:
-        """Set callback for when bot joins a new server."""
-        self._on_guild_join_handler = handler
-
-    def set_member_join_handler(self, handler: Callable) -> None:
-        """Set callback for when a new member joins a server."""
-        self._on_member_join_handler = handler
-
-    def set_server_change_handler(self, handler: Callable) -> None:
-        """Set callback for when server structure changes (channels, roles)."""
-        self._on_server_change_handler = handler
-
-    # --- Core methods ---
-
-    async def start(self) -> None:
-        """Start the Discord bot (non-blocking)."""
-        if self._token:
-            await self._bot.start(self._token)
-        else:
-            logger.warning("No DISCORD_TOKEN — Discord adapter not started")
-
-    async def stop(self) -> None:
-        """Stop the Discord bot."""
-        if self._bot.is_ready():
-            await self._bot.close()
-
-    async def send(self, message: OutgoingMessage) -> None:
-        """Send a response back to Discord."""
-        if not message.target_channel_id:
-            logger.warning("OutgoingMessage has no target_channel_id")
-            return
-
-        channel = self._bot.get_channel(message.target_channel_id)
-        if not channel:
-            logger.warning(f"Channel not found: {message.target_channel_id}")
-            return
-
-        # Send message (handle length limits)
-        content = message.content
-        if len(content) > 2000:
-            # Split into chunks
-            chunks = [content[i:i + 1990] for i in range(0, len(content), 1990)]
-            for chunk in chunks:
-                await channel.send(chunk)
-        else:
-            kwargs = {"content": content}
-            if message.embed:
-                kwargs["embed"] = nextcord.Embed.from_dict(message.embed)
-            if message.components:
-                # Discord buttons/select menus via nextcord.ui.View
-                pass  # TODO: implement component rendering
-            if message.reply_to:
-                try:
-                    ref_msg = await channel.fetch_message(int(message.reply_to))
-                    kwargs["reference"] = ref_msg
-                except Exception:
-                    pass
-            await channel.send(**kwargs)
-
-    async def send_dm(self, user_id: int, content: str, embed: dict = None) -> bool:
-        """Send a direct message to a user. Returns True if successful."""
-        try:
-            user = await self._bot.fetch_user(user_id)
-            kwargs = {"content": content}
-            if embed:
-                kwargs["embed"] = nextcord.Embed.from_dict(embed)
-            await user.send(**kwargs)
-            return True
-        except (nextcord.Forbidden, nextcord.HTTPException) as e:
-            logger.warning(f"Cannot DM user {user_id}: {e}")
-            return False
-
-    # --- Event handlers ---
-
-    def _setup_message_events(self) -> None:
-        """Register message event handler."""
+    def _register_events(self) -> None:
+        """Register all Discord event handlers."""
 
         @self._bot.event
         async def on_ready():
-            logger.info(f"Discord bot connected as {self._bot.user}")
-            logger.info(f"Connected to {len(self._bot.guilds)} guild(s)")
+            await self._on_ready()
 
         @self._bot.event
-        async def on_message(msg: nextcord.Message):
-            # Ignore self
-            if msg.author == self._bot.user:
-                return
-            # Ignore bots
-            if msg.author.bot:
-                return
-            # Must mention the bot or be in DM
-            is_dm = msg.guild is None
-            if msg.guild and self._bot.user not in msg.mentions:
-                return
-            # Guild filter
-            if msg.guild and not self._is_allowed_guild(msg.guild.id):
-                return
-
-            # Build IncomingMessage
-            incoming = IncomingMessage(
-                user_id=str(msg.author.id),
-                user_name=msg.author.display_name,
-                prompt=msg.content.replace(f"<@{self._bot.user.id}>", "").strip(),
-                guild_id=msg.guild.id if msg.guild else None,
-                channel_id=msg.channel.id,
-                message_id=str(msg.id),
-                source="discord",
-                attachments=[a.url for a in msg.attachments],
-            )
-
-            # Attach role info (only available in guild context)
-            if msg.guild and isinstance(msg.author, nextcord.Member):
-                incoming.user_roles = [
-                    role.name for role in msg.author.roles
-                    if role.name != "@everyone"
-                ]
-                incoming.is_admin = (
-                    msg.author.guild_permissions.administrator
-                    or msg.author.guild_permissions.manage_guild
-                )
-
-            # Store channel name in metadata for source_context detection
-            incoming.metadata["channel_name"] = getattr(msg.channel, "name", "DM")
-            incoming.metadata["is_dm"] = is_dm
-
-            # Call handler
-            if self._handler:
-                try:
-                    response = await self._handler(incoming)
-                    if response:
-                        response.target_channel_id = msg.channel.id
-                        response.reply_to = str(msg.id)
-                        await self.send(response)
-                except Exception as e:
-                    logger.error(f"Handler error: {e}")
-                    await msg.channel.send(f"❌ Đã xảy ra lỗi: {str(e)[:200]}")
-
-    def _setup_lifecycle_events(self) -> None:
-        """Register guild/member lifecycle event handlers."""
-
-        @self._bot.event
-        async def on_guild_join(guild: nextcord.Guild):
-            """Bot was added to a new server → trigger setup mode."""
-            logger.info(f"Bot joined new guild: {guild.name} ({guild.id})")
-            if self._on_guild_join_handler:
-                try:
-                    await self._on_guild_join_handler(guild)
-                except Exception as e:
-                    logger.error(f"Guild join handler error: {e}")
+        async def on_message(message: nextcord.Message):
+            await self._on_message(message)
 
         @self._bot.event
         async def on_member_join(member: nextcord.Member):
-            """New member joined a server → trigger onboarding DM."""
-            if member.bot:
-                return  # Ignore bot joins
-            logger.info(f"New member joined {member.guild.name}: {member.display_name}")
-            if self._on_member_join_handler:
+            await self._on_member_join(member)
+
+    # ================================================================
+    # Event Handlers
+    # ================================================================
+
+    async def _on_ready(self) -> None:
+        """Bot connected — log status and crawl guild knowledge."""
+        logger.info(
+            f"✅ AuraFactory connected as {self._bot.user} "
+            f"| Guilds: {len(self._bot.guilds)}"
+        )
+
+        # Crawl knowledge for all connected guilds
+        if self._knowledge_crawler:
+            for guild in self._bot.guilds:
                 try:
-                    await self._on_member_join_handler(member)
+                    await self._knowledge_crawler.crawl_and_store(guild)
+                    logger.info(f"📚 Knowledge crawled for guild: {guild.name} ({guild.id})")
                 except Exception as e:
-                    logger.error(f"Member join handler error: {e}")
+                    logger.error(f"Failed to crawl guild {guild.name}: {e}")
 
-        @self._bot.event
-        async def on_guild_channel_create(channel):
-            """Channel created → update knowledge."""
-            await self._handle_server_change(channel.guild, "channel_create")
+    async def _on_message(self, message: nextcord.Message) -> None:
+        """Handle incoming Discord message."""
+        # Ignore self and other bots
+        if message.author == self._bot.user:
+            return
+        if message.author.bot:
+            return
 
-        @self._bot.event
-        async def on_guild_channel_delete(channel):
-            """Channel deleted → update knowledge."""
-            await self._handle_server_change(channel.guild, "channel_delete")
+        # Check if bot should respond:
+        # 1. Bot is mentioned
+        # 2. Message is in DM
+        # 3. Message is in designated channel (aura-admin, aura-chat)
+        should_respond = self._should_respond(message)
+        if not should_respond:
+            return
 
-        @self._bot.event
-        async def on_guild_channel_update(before, after):
-            """Channel updated → update knowledge."""
-            await self._handle_server_change(after.guild, "channel_update")
+        # Strip bot mention from content
+        content = self._clean_content(message)
+        if not content.strip():
+            return
 
-        @self._bot.event
-        async def on_guild_role_create(role):
-            """Role created → update knowledge."""
-            await self._handle_server_change(role.guild, "role_create")
+        # Convert to IncomingMessage
+        incoming = await self.receive(message)
+        incoming.prompt = content  # Use cleaned content
 
-        @self._bot.event
-        async def on_guild_role_delete(role):
-            """Role deleted → update knowledge."""
-            await self._handle_server_change(role.guild, "role_delete")
-
-        @self._bot.event
-        async def on_guild_role_update(before, after):
-            """Role updated → update knowledge."""
-            await self._handle_server_change(after.guild, "role_update")
-
-    # --- Helpers ---
-
-    async def _handle_server_change(self, guild: nextcord.Guild, event_type: str) -> None:
-        """Notify handler about server structure change."""
-        if self._on_server_change_handler:
+        # Show typing indicator while processing
+        async with message.channel.typing():
             try:
-                await self._on_server_change_handler(guild, event_type)
+                response = await self._process_message(incoming)
+                await self.send(response, message.channel)
             except Exception as e:
-                logger.error(f"Server change handler error ({event_type}): {e}")
+                logger.error(f"Error processing message: {e}", exc_info=True)
+                await message.channel.send(
+                    "⚠️ Đã xảy ra lỗi khi xử lý tin nhắn. Vui lòng thử lại."
+                )
 
-    def _is_allowed_guild(self, guild_id: int) -> bool:
-        """Check if guild is allowed."""
-        if self._allow_all:
+    async def _on_member_join(self, member: nextcord.Member) -> None:
+        """Handle new member joining — trigger onboarding."""
+        if member.bot:
+            return
+
+        logger.info(f"👋 New member joined: {member.name} in {member.guild.name}")
+
+        if self._onboarding_handler:
+            try:
+                await self._onboarding_handler.handle_join(member)
+            except Exception as e:
+                logger.error(f"Onboarding error for {member.name}: {e}")
+
+    # ================================================================
+    # ChannelAdapterBase Implementation
+    # ================================================================
+
+    async def receive(self, raw_input: Any) -> IncomingMessage:
+        """Convert nextcord.Message to IncomingMessage."""
+        message: nextcord.Message = raw_input
+
+        # Determine user roles
+        user_roles = []
+        is_admin = False
+        if message.guild and isinstance(message.author, nextcord.Member):
+            user_roles = [role.name for role in message.author.roles if role.name != "@everyone"]
+            is_admin = message.author.guild_permissions.administrator or (
+                message.author == message.guild.owner
+            )
+
+        # Detect channel context
+        is_dm = isinstance(message.channel, nextcord.DMChannel)
+        channel_name = getattr(message.channel, "name", "dm") if not is_dm else "dm"
+
+        return IncomingMessage(
+            user_id=str(message.author.id),
+            user_name=message.author.display_name,
+            prompt=message.content,
+            user_roles=user_roles,
+            is_admin=is_admin,
+            guild_id=message.guild.id if message.guild else None,
+            channel_id=message.channel.id,
+            message_id=str(message.id),
+            source="discord",
+            attachments=[a.url for a in message.attachments],
+            metadata={
+                "channel_name": channel_name,
+                "is_dm": is_dm,
+                "guild_name": message.guild.name if message.guild else None,
+            },
+        )
+
+    async def send(self, message: OutgoingMessage, destination: Any) -> None:
+        """Send OutgoingMessage to Discord channel."""
+        channel = destination
+        content = message.content
+
+        if not content:
+            return
+
+        # Use embed for long messages
+        if len(content) > EMBED_THRESHOLD:
+            await self._send_embed(channel, content)
+        else:
+            # Split if exceeds Discord limit
+            await self._send_chunked(channel, content)
+
+    async def start(self) -> None:
+        """Start the Discord bot (blocking — run in background task)."""
+        if not self._token:
+            logger.warning("⚠️ No Discord token — bot will not start")
+            return
+
+        logger.info("🚀 Starting Discord bot...")
+        await self._bot.start(self._token)
+
+    async def stop(self) -> None:
+        """Gracefully disconnect the bot."""
+        if self._bot and not self._bot.is_closed():
+            await self._bot.close()
+            logger.info("🔌 Discord bot disconnected")
+
+    # ================================================================
+    # Helper Methods
+    # ================================================================
+
+    def _should_respond(self, message: nextcord.Message) -> bool:
+        """Determine if bot should respond to this message."""
+        # Always respond in DMs
+        if isinstance(message.channel, nextcord.DMChannel):
             return True
-        if not self._allowed_guild_ids:
-            return True  # No restriction
-        return guild_id in self._allowed_guild_ids
+
+        # Respond if mentioned
+        if self._bot.user in message.mentions:
+            return True
+
+        # Respond in designated channels
+        channel_name = getattr(message.channel, "name", "")
+        designated_channels = ("aura-admin", "aura-chat", "aura")
+        if channel_name in designated_channels:
+            return True
+
+        return False
+
+    def _clean_content(self, message: nextcord.Message) -> str:
+        """Remove bot mention from message content."""
+        content = message.content
+        if self._bot.user:
+            # Remove <@BOT_ID> or <@!BOT_ID> mentions
+            content = content.replace(f"<@{self._bot.user.id}>", "").strip()
+            content = content.replace(f"<@!{self._bot.user.id}>", "").strip()
+        return content
+
+    async def _send_embed(self, channel: Any, content: str) -> None:
+        """Send content as a Discord embed (for long messages)."""
+        # Truncate if embed description exceeds 4096
+        if len(content) > 4096:
+            content = content[:4090] + "\n..."
+
+        embed = nextcord.Embed(
+            description=content,
+            color=0x7289DA,  # Discord blurple
+        )
+        embed.set_footer(text="AuraFactory")
+        await channel.send(embed=embed)
+
+    async def _send_chunked(self, channel: Any, content: str) -> None:
+        """Split and send content in chunks if needed."""
+        if len(content) <= MAX_DISCORD_LENGTH:
+            await channel.send(content)
+            return
+
+        # Split by newlines, respecting max length
+        chunks = []
+        current = ""
+        for line in content.split("\n"):
+            if len(current) + len(line) + 1 > MAX_DISCORD_LENGTH:
+                if current:
+                    chunks.append(current)
+                current = line
+            else:
+                current = f"{current}\n{line}" if current else line
+        if current:
+            chunks.append(current)
+
+        for chunk in chunks:
+            await channel.send(chunk)
+            await asyncio.sleep(0.5)  # Rate limit courtesy

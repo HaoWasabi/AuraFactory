@@ -1,13 +1,16 @@
-# app/models/__init__.py
-"""Shared data models across layers."""
-from app.models.messages import IncomingMessage, OutgoingMessage
-from app.models.tasks import AgentRole, TaskStatus, TaskAssignment, TaskResult
+"""Data models for AuraFactory."""
+
+from .messages import IncomingMessage, OutgoingMessage
+from .sessions import Session
+from .tasks import TaskAssignment, TaskResult
+from .memory import ProceduralRule, KnowledgeSnapshot
 
 __all__ = [
     "IncomingMessage",
     "OutgoingMessage",
-    "AgentRole",
-    "TaskStatus",
+    "Session",
     "TaskAssignment",
     "TaskResult",
+    "ProceduralRule",
+    "KnowledgeSnapshot",
 ]

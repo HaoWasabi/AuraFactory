@@ -1,6 +1,5 @@
-# app/infra/queue/__init__.py
-"""Message queue infrastructure."""
-from app.infra.queue.base import MessageQueue
-from app.infra.queue.async_queue import AsyncQueueBackend
+"""Async task queue infrastructure."""
 
-__all__ = ["MessageQueue", "AsyncQueueBackend"]
+from .async_queue import AsyncTaskQueue
+
+__all__ = ["AsyncTaskQueue"]

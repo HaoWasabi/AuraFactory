@@ -1,92 +1,82 @@
-# app/skills/startup.py
-"""
-Skills startup — initializes SkillRegistry at app boot.
-Called from app/main.py during startup sequence.
-Phase 1: Load from MCP + .md files.
-Phase 2: Also load custom skills from DB.
-"""
-import logging
-from typing import Optional
+"""Skill startup — loads all skill files and populates the registry.
 
-from app.mcp.client import MCPClient
-from app.skills.registry import SkillRegistry
+Called at application boot to initialize the complete skill registry
+from all .md files in the skills/ directory.
+"""
+
+from __future__ import annotations
+
+import logging
+from pathlib import Path
+
 from app.skills.loader import SkillLoader
-from app.skills.validator import SkillValidator
+from app.skills.registry import SkillRegistry
 
 logger = logging.getLogger(__name__)
 
-# Global singleton
-_registry: Optional[SkillRegistry] = None
-_validator: Optional[SkillValidator] = None
 
+def init_skills(skills_dir: str) -> SkillRegistry:
+    """Load all skill .md files from directory and return populated registry.
 
-def init_skills(mcp_client: MCPClient, skills_dir: str = "./skills") -> SkillRegistry:
-    """
-    Initialize the Skills Registry at app startup.
-
-    Strategy:
-    1. Load tool definitions from .md files (authoritative source)
-    2. Cross-reference with MCP tools (runtime validation)
-    3. Build validator
+    Scans the specified directory for .md skill definition files,
+    parses each one, and registers all tools into a single registry.
 
     Args:
-        mcp_client: Initialized MCPClient with servers registered
-        skills_dir: Path to skills/ directory with .md definitions
+        skills_dir: Path to the skills/ directory containing .md files.
 
     Returns:
-        Initialized SkillRegistry
+        Fully populated SkillRegistry instance.
+
+    Raises:
+        FileNotFoundError: If skills_dir does not exist.
     """
-    global _registry, _validator
+    skills_path = Path(skills_dir)
+    if not skills_path.exists():
+        raise FileNotFoundError(f"Skills directory not found: {skills_dir}")
 
-    # Create registry backed by MCP
-    registry = SkillRegistry(mcp_client)
+    if not skills_path.is_dir():
+        raise ValueError(f"Skills path is not a directory: {skills_dir}")
 
-    # Load from MCP servers (runtime tools)
-    registry.load()
+    registry = SkillRegistry()
+    loader = SkillLoader()
 
-    # Also load from .md definitions (enriches with metadata)
-    skill_tools = SkillLoader.load_directory(skills_dir)
-    if skill_tools:
-        # Merge: .md definitions override MCP metadata (risk, agent, examples)
-        for tool in skill_tools:
-            existing = registry.get_tool(tool.name)
-            if existing:
-                # Update metadata from .md (MCP tool already has schema)
-                existing.agent = tool.agent
-                existing.risk_level = tool.risk_level
-                existing.requires_approval = tool.requires_approval
-                existing.category = tool.category
-                existing.examples = tool.examples
-            else:
-                # Tool defined in .md but not yet in MCP — register anyway
-                # (useful for planning before implementation)
-                registry._tools[tool.name] = tool
+    # Find all .md files
+    md_files = sorted(skills_path.glob("*.md"))
+    if not md_files:
+        logger.warning("No .md skill files found in %s", skills_dir)
+        return registry
 
-        logger.info(f"Merged {len(skill_tools)} skill definitions from {skills_dir}")
+    logger.info("Loading skills from %s (%d files)", skills_dir, len(md_files))
 
-    # Build validator
-    _validator = SkillValidator(registry)
-    _registry = registry
+    loaded_count = 0
+    error_count = 0
 
-    summary = registry.get_tool_summary()
+    for md_file in md_files:
+        try:
+            tools = loader.load_skill_file(str(md_file))
+            for tool in tools:
+                registry.register_skill(tool)
+                loaded_count += 1
+        except Exception as exc:
+            logger.error("Failed to load skill file %s: %s", md_file.name, exc)
+            error_count += 1
+
     logger.info(
-        f"Skills ready: {summary['total_tools']} tools, "
-        f"agents={summary['by_agent']}, "
-        f"approval_required={len(summary['approval_required'])}"
+        "Skills initialization complete: %d tools loaded from %d files (%d errors)",
+        loaded_count,
+        len(md_files) - error_count,
+        error_count,
     )
 
+    # Log summary by agent role
+    for role in ("admin", "assistant", "fast_track"):
+        role_tools = registry.get_tools_for_agent(role)
+        if role_tools:
+            logger.info("  Agent '%s': %d tools", role, len(role_tools))
+
+    # Log summary by risk level
+    for risk in ("low", "medium", "high", "critical"):
+        risk_tools = registry.get_tools_by_risk(risk)
+        logger.debug("  Risk <= '%s': %d tools", risk, len(risk_tools))
+
     return registry
-
-
-def get_registry() -> SkillRegistry:
-    """Get the global SkillRegistry instance."""
-    if _registry is None:
-        raise RuntimeError("SkillRegistry not initialized. Call init_skills() first.")
-    return _registry
-
-
-def get_validator() -> SkillValidator:
-    """Get the global SkillValidator instance."""
-    if _validator is None:
-        raise RuntimeError("SkillValidator not initialized. Call init_skills() first.")
-    return _validator

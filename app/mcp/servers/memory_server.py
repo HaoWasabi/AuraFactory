@@ -1,212 +1,272 @@
-# app/mcp/servers/memory_server.py
 """
-Memory MCP Server — exposes memory operations (recall, store, search) via MCP.
-Wraps app/memory/service.py.
-"""
-import logging
-from typing import Dict, Any, List
+Memory MCP Server — Exposes memory operations as MCP tools.
 
+Tools:
+- memory.recall: Retrieve memories by key or semantic query.
+- memory.store: Persist a new memory (key-value with metadata).
+- memory.search: Semantic search across all stored memories.
+- memory.forget: Delete a memory by key.
+- memory.summarize: Generate a summary of memories matching a query.
+"""
+
+from __future__ import annotations
+
+import logging
+from typing import Any, Optional
+
+from app.mcp.protocol import ToolDefinition
 from app.mcp.server import MCPServer
-from app.mcp.protocol import (
-    ToolDefinition,
-    ToolCallRequest,
-    ToolCallResponse,
-    ServerInfo,
-)
 
 logger = logging.getLogger(__name__)
 
 
 class MemoryMCPServer(MCPServer):
-    """MCP Server for memory operations — recall, store, search."""
+    """MCP server for memory operations.
 
-    def __init__(self, memory_service=None):
-        """
-        Args:
-            memory_service: MemoryService instance from app.memory.service
-        """
-        self._memory = memory_service
+    Delegates all tool calls to a MemoryService instance.
+    """
 
-    @property
-    def info(self) -> ServerInfo:
-        return ServerInfo(
-            name="memory",
-            version="1.0.0",
-            description="Long-term memory — recall facts, store new memories, semantic search.",
-            tool_count=5,
-        )
+    def __init__(self, memory_service: Any = None) -> None:
+        super().__init__()
+        self._memory_service = memory_service
+        self._register_tools()
 
-    def list_tools(self) -> List[ToolDefinition]:
-        return [
+    def set_memory_service(self, memory_service: Any) -> None:
+        """Inject the memory service (can be set after construction)."""
+        self._memory_service = memory_service
+
+    def _get_service(self) -> Any:
+        """Get memory service or raise if not configured."""
+        if self._memory_service is None:
+            raise RuntimeError(
+                "MemoryService not configured. Call set_memory_service() first."
+            )
+        return self._memory_service
+
+    # ------------------------------------------------------------------
+    # Tool Registration
+    # ------------------------------------------------------------------
+
+    def _register_tools(self) -> None:
+        """Register all memory tools."""
+
+        # memory.recall
+        self.register_tool(
             ToolDefinition(
-                name="memory_recall",
-                description="Recall relevant memories for a query. Returns semantic facts and recent messages.",
-                input_schema={
+                name="memory.recall",
+                description=(
+                    "Retrieve a stored memory by key or semantic query. "
+                    "Returns the memory content and metadata if found."
+                ),
+                parameters={
                     "type": "object",
                     "properties": {
-                        "query": {"type": "string", "description": "What to recall"},
-                        "guild_id": {"type": "integer", "description": "Guild context"},
-                        "session_id": {"type": "string", "description": "Session context"},
-                        "top_k": {"type": "integer", "description": "Max results", "default": 5},
+                        "key": {
+                            "type": "string",
+                            "description": "Exact key to recall.",
+                        },
+                        "query": {
+                            "type": "string",
+                            "description": "Semantic query (used if key not provided).",
+                        },
+                        "namespace": {
+                            "type": "string",
+                            "description": "Memory namespace (default: 'default').",
+                        },
+                    },
+                },
+                risk_level="low",
+            ),
+            self._handle_recall,
+        )
+
+        # memory.store
+        self.register_tool(
+            ToolDefinition(
+                name="memory.store",
+                description=(
+                    "Store a new memory with a key, value, and optional metadata. "
+                    "Overwrites if key already exists."
+                ),
+                parameters={
+                    "type": "object",
+                    "properties": {
+                        "key": {
+                            "type": "string",
+                            "description": "Unique identifier for the memory.",
+                        },
+                        "value": {
+                            "type": "string",
+                            "description": "The content to store.",
+                        },
+                        "metadata": {
+                            "type": "object",
+                            "description": "Optional metadata dict.",
+                        },
+                        "namespace": {
+                            "type": "string",
+                            "description": "Memory namespace (default: 'default').",
+                        },
+                    },
+                    "required": ["key", "value"],
+                },
+                risk_level="low",
+            ),
+            self._handle_store,
+        )
+
+        # memory.search
+        self.register_tool(
+            ToolDefinition(
+                name="memory.search",
+                description=(
+                    "Semantic search across stored memories. "
+                    "Returns top-k results ranked by relevance."
+                ),
+                parameters={
+                    "type": "object",
+                    "properties": {
+                        "query": {
+                            "type": "string",
+                            "description": "The search query.",
+                        },
+                        "top_k": {
+                            "type": "integer",
+                            "description": "Number of results (default: 5).",
+                        },
+                        "namespace": {
+                            "type": "string",
+                            "description": "Memory namespace (default: 'default').",
+                        },
                     },
                     "required": ["query"],
                 },
-                server_name="memory",
+                risk_level="low",
             ),
+            self._handle_search,
+        )
+
+        # memory.forget
+        self.register_tool(
             ToolDefinition(
-                name="memory_store",
-                description="Store a new fact or observation in long-term memory.",
-                input_schema={
+                name="memory.forget",
+                description="Delete a memory by its key. Irreversible.",
+                parameters={
                     "type": "object",
                     "properties": {
-                        "content": {"type": "string", "description": "Fact to remember"},
-                        "fact_type": {"type": "string", "enum": ["preference", "fact", "event", "skill"], "description": "Type of memory"},
-                        "importance": {"type": "number", "description": "0.0-1.0 importance score"},
-                        "guild_id": {"type": "integer"},
+                        "key": {
+                            "type": "string",
+                            "description": "Key of the memory to delete.",
+                        },
+                        "namespace": {
+                            "type": "string",
+                            "description": "Memory namespace (default: 'default').",
+                        },
                     },
-                    "required": ["content"],
+                    "required": ["key"],
                 },
-                server_name="memory",
+                risk_level="medium",
             ),
+            self._handle_forget,
+        )
+
+        # memory.summarize
+        self.register_tool(
             ToolDefinition(
-                name="memory_add_message",
-                description="Add a conversation message to short-term memory.",
-                input_schema={
+                name="memory.summarize",
+                description=(
+                    "Generate a summary of memories matching a query. "
+                    "Useful for condensing context before passing to an agent."
+                ),
+                parameters={
                     "type": "object",
                     "properties": {
-                        "session_id": {"type": "string"},
-                        "user_id": {"type": "string"},
-                        "role": {"type": "string", "enum": ["user", "assistant", "system"]},
-                        "content": {"type": "string"},
+                        "query": {
+                            "type": "string",
+                            "description": "Query to filter memories for summarization.",
+                        },
+                        "max_memories": {
+                            "type": "integer",
+                            "description": "Max memories to include (default: 10).",
+                        },
+                        "namespace": {
+                            "type": "string",
+                            "description": "Memory namespace (default: 'default').",
+                        },
                     },
-                    "required": ["session_id", "role", "content"],
+                    "required": ["query"],
                 },
-                server_name="memory",
+                risk_level="low",
             ),
-            ToolDefinition(
-                name="memory_get_history",
-                description="Get recent conversation history for a session.",
-                input_schema={
-                    "type": "object",
-                    "properties": {
-                        "session_id": {"type": "string"},
-                        "limit": {"type": "integer", "default": 20},
-                    },
-                    "required": ["session_id"],
-                },
-                server_name="memory",
-            ),
-            ToolDefinition(
-                name="memory_summarize",
-                description="Summarize and compress old conversation history.",
-                input_schema={
-                    "type": "object",
-                    "properties": {
-                        "session_id": {"type": "string"},
-                    },
-                    "required": ["session_id"],
-                },
-                server_name="memory",
-            ),
-        ]
+            self._handle_summarize,
+        )
 
-    async def call_tool(self, request: ToolCallRequest) -> ToolCallResponse:
-        """Execute a memory tool."""
-        if not self._memory:
-            return ToolCallResponse(
-                id=request.id,
-                success=False,
-                error="Memory service not initialized",
-            )
+    # ------------------------------------------------------------------
+    # Handlers
+    # ------------------------------------------------------------------
 
-        args = dict(request.arguments)
-        args.pop("_context", None)
-        tool_name = request.tool_name
+    async def _handle_recall(
+        self,
+        key: Optional[str] = None,
+        query: Optional[str] = None,
+        namespace: str = "default",
+    ) -> dict:
+        service = self._get_service()
+        if key:
+            result = await service.recall(key=key, namespace=namespace)
+        elif query:
+            result = await service.recall(query=query, namespace=namespace)
+        else:
+            raise ValueError("Either 'key' or 'query' must be provided")
+        return {"memory": result}
 
-        try:
-            if tool_name == "memory_recall":
-                ctx = await self._memory.recall(
-                    query=args["query"],
-                    guild_id=args.get("guild_id", 0),
-                    session_id=args.get("session_id", ""),
-                )
-                return ToolCallResponse(
-                    id=request.id,
-                    success=True,
-                    result={
-                        "facts": [
-                            {"content": f.content, "type": f.fact_type, "confidence": f.confidence}
-                            for f in ctx.semantic_facts
-                        ],
-                        "recent_messages": [
-                            {"role": m.role, "content": m.content}
-                            for m in ctx.recent_messages
-                        ],
-                    },
-                )
+    async def _handle_store(
+        self,
+        key: str,
+        value: str,
+        metadata: Optional[dict] = None,
+        namespace: str = "default",
+    ) -> dict:
+        service = self._get_service()
+        await service.store(
+            key=key, value=value, metadata=metadata or {}, namespace=namespace
+        )
+        return {"stored": True, "key": key, "namespace": namespace}
 
-            elif tool_name == "memory_store":
-                await self._memory.store_fact(
-                    content=args["content"],
-                    fact_type=args.get("fact_type", "fact"),
-                    importance=args.get("importance", 0.5),
-                    guild_id=args.get("guild_id", 0),
-                )
-                return ToolCallResponse(
-                    id=request.id,
-                    success=True,
-                    result={"stored": True},
-                )
+    async def _handle_search(
+        self,
+        query: str,
+        top_k: int = 5,
+        namespace: str = "default",
+    ) -> dict:
+        service = self._get_service()
+        results = await service.search(query=query, top_k=top_k, namespace=namespace)
+        return {"results": results, "count": len(results)}
 
-            elif tool_name == "memory_add_message":
-                await self._memory.add_message(
-                    session_id=args["session_id"],
-                    user_id=args.get("user_id", ""),
-                    role=args["role"],
-                    content=args["content"],
-                )
-                return ToolCallResponse(
-                    id=request.id,
-                    success=True,
-                    result={"added": True},
-                )
+    async def _handle_forget(
+        self,
+        key: str,
+        namespace: str = "default",
+    ) -> dict:
+        service = self._get_service()
+        await service.forget(key=key, namespace=namespace)
+        return {"deleted": True, "key": key, "namespace": namespace}
 
-            elif tool_name == "memory_get_history":
-                messages = await self._memory.get_history(
-                    session_id=args["session_id"],
-                    limit=args.get("limit", 20),
-                )
-                return ToolCallResponse(
-                    id=request.id,
-                    success=True,
-                    result={
-                        "messages": [
-                            {"role": m.role, "content": m.content, "timestamp": str(m.timestamp)}
-                            for m in messages
-                        ]
-                    },
-                )
+    async def _handle_summarize(
+        self,
+        query: str,
+        max_memories: int = 10,
+        namespace: str = "default",
+    ) -> dict:
+        service = self._get_service()
+        summary = await service.summarize(
+            query=query, max_memories=max_memories, namespace=namespace
+        )
+        return {"summary": summary}
 
-            elif tool_name == "memory_summarize":
-                summary = await self._memory.summarize_session(
-                    session_id=args["session_id"],
-                )
-                return ToolCallResponse(
-                    id=request.id,
-                    success=True,
-                    result={"summary": summary},
-                )
+    # ------------------------------------------------------------------
+    # MCPServer interface
+    # ------------------------------------------------------------------
 
-            else:
-                return ToolCallResponse(
-                    id=request.id,
-                    success=False,
-                    error=f"Unknown memory tool: {tool_name}",
-                )
-
-        except Exception as e:
-            return ToolCallResponse(
-                id=request.id,
-                success=False,
-                error=str(e),
-            )
+    def get_server_name(self) -> str:
+        return "memory"

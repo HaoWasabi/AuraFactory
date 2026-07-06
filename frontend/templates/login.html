@@ -1,186 +1,76 @@
 <!DOCTYPE html>
 <html lang="vi">
 <head>
-<meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>AuraFactory — Login</title>
-<link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
-<style>
-* { margin: 0; padding: 0; box-sizing: border-box; }
-body {
-    min-height: 100vh;
-    display: flex;
-    justify-content: center;
-    align-items: center;
-    background: #0f0f17;
-    font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
-    overflow: hidden;
-}
-
-/* Animated background */
-.bg-gradient {
-    position: fixed;
-    inset: 0;
-    background:
-        radial-gradient(ellipse at 20% 50%, rgba(124, 92, 252, 0.15) 0%, transparent 50%),
-        radial-gradient(ellipse at 80% 20%, rgba(88, 101, 242, 0.1) 0%, transparent 50%),
-        radial-gradient(ellipse at 50% 80%, rgba(99, 102, 241, 0.08) 0%, transparent 50%);
-    animation: pulse 8s ease-in-out infinite alternate;
-}
-@keyframes pulse {
-    0% { opacity: 0.8; }
-    100% { opacity: 1.2; }
-}
-
-.login-container {
-    position: relative;
-    z-index: 1;
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-    gap: 32px;
-}
-
-.login-card {
-    background: rgba(30, 31, 40, 0.8);
-    backdrop-filter: blur(20px);
-    border: 1px solid rgba(255,255,255,0.06);
-    padding: 48px 40px;
-    border-radius: 24px;
-    text-align: center;
-    width: 420px;
-    max-width: 90vw;
-    box-shadow: 0 20px 60px rgba(0,0,0,0.4);
-}
-
-.logo {
-    width: 72px;
-    height: 72px;
-    background: linear-gradient(135deg, #7c5cfc, #5865F2);
-    border-radius: 18px;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    font-size: 36px;
-    margin: 0 auto 20px;
-    box-shadow: 0 8px 32px rgba(124, 92, 252, 0.3);
-}
-
-h1 {
-    color: #fff;
-    font-size: 26px;
-    font-weight: 700;
-    margin-bottom: 6px;
-}
-
-.subtitle {
-    color: rgba(255,255,255,0.5);
-    font-size: 14px;
-    margin-bottom: 36px;
-    line-height: 1.5;
-}
-
-.btn-discord {
-    display: inline-flex;
-    align-items: center;
-    gap: 12px;
-    padding: 14px 32px;
-    background: #5865F2;
-    color: white;
-    border-radius: 12px;
-    text-decoration: none;
-    font-size: 15px;
-    font-weight: 600;
-    transition: all 0.2s;
-    border: none;
-    cursor: pointer;
-    width: 100%;
-    justify-content: center;
-}
-.btn-discord:hover {
-    background: #4752C4;
-    transform: translateY(-2px);
-    box-shadow: 0 8px 25px rgba(88,101,242,0.4);
-}
-.btn-discord:active {
-    transform: translateY(0);
-}
-.btn-discord svg { width: 22px; height: 22px; }
-
-.features {
-    margin-top: 32px;
-    text-align: left;
-    color: rgba(255,255,255,0.45);
-    font-size: 13px;
-    display: flex;
-    flex-direction: column;
-    gap: 10px;
-}
-.feature-item {
-    display: flex;
-    align-items: center;
-    gap: 10px;
-}
-.feature-icon {
-    width: 28px;
-    height: 28px;
-    background: rgba(124, 92, 252, 0.1);
-    border-radius: 8px;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    font-size: 14px;
-    flex-shrink: 0;
-}
-
-.footer {
-    color: rgba(255,255,255,0.3);
-    font-size: 12px;
-}
-.footer a {
-    color: rgba(255,255,255,0.5);
-    text-decoration: none;
-}
-.footer a:hover { color: #7c5cfc; }
-</style>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>AuraFactory — Đăng nhập</title>
+    <link rel="stylesheet" href="/static/style.css">
 </head>
-<body>
-<div class="bg-gradient"></div>
+<body class="login-page">
+    <div class="login-container">
+        <div class="login-card">
+            <!-- Logo & Title -->
+            <div class="login-header">
+                <div class="logo">
+                    <svg width="64" height="64" viewBox="0 0 64 64" fill="none" xmlns="http://www.w3.org/2000/svg">
+                        <circle cx="32" cy="32" r="30" fill="#7289DA" opacity="0.2"/>
+                        <circle cx="32" cy="32" r="20" fill="#7289DA" opacity="0.4"/>
+                        <circle cx="32" cy="32" r="10" fill="#7289DA"/>
+                        <path d="M32 12 L34 28 L40 16 L35 29 L48 24 L36 31 L52 32 L36 33 L48 40 L35 35 L40 48 L34 36 L32 52 L30 36 L24 48 L29 35 L16 40 L28 33 L12 32 L28 31 L16 24 L29 29 L24 16 L30 28 Z" fill="#FFFFFF" opacity="0.9"/>
+                    </svg>
+                </div>
+                <h1 class="login-title">AuraFactory</h1>
+                <p class="login-subtitle">Hệ thống quản lý Discord Server thông minh</p>
+            </div>
 
-<div class="login-container">
-    <div class="login-card">
-        <div class="logo">🏭</div>
-        <h1>AuraFactory</h1>
-        <p class="subtitle">Agentic AI — Tự động hóa Discord Workspace<br>Multi-Agent System với Human-in-the-Loop</p>
+            <!-- Login Button -->
+            <div class="login-actions">
+                <a href="/auth/discord" class="btn-discord">
+                    <svg width="24" height="24" viewBox="0 0 24 24" fill="currentColor">
+                        <path d="M20.317 4.37a19.791 19.791 0 0 0-4.885-1.515.074.074 0 0 0-.079.037c-.21.375-.444.864-.608 1.25a18.27 18.27 0 0 0-5.487 0 12.64 12.64 0 0 0-.617-1.25.077.077 0 0 0-.079-.037A19.736 19.736 0 0 0 3.677 4.37a.07.07 0 0 0-.032.027C.533 9.046-.32 13.58.099 18.057a.082.082 0 0 0 .031.057 19.9 19.9 0 0 0 5.993 3.03.078.078 0 0 0 .084-.028 14.09 14.09 0 0 0 1.226-1.994.076.076 0 0 0-.041-.106 13.107 13.107 0 0 1-1.872-.892.077.077 0 0 1-.008-.128 10.2 10.2 0 0 0 .372-.292.074.074 0 0 1 .077-.01c3.928 1.793 8.18 1.793 12.062 0a.074.074 0 0 1 .078.01c.12.098.246.198.373.292a.077.077 0 0 1-.006.127 12.299 12.299 0 0 1-1.873.892.077.077 0 0 0-.041.107c.36.698.772 1.362 1.225 1.993a.076.076 0 0 0 .084.028 19.839 19.839 0 0 0 6.002-3.03.077.077 0 0 0 .032-.054c.5-5.177-.838-9.674-3.549-13.66a.061.061 0 0 0-.031-.03zM8.02 15.33c-1.183 0-2.157-1.085-2.157-2.419 0-1.333.956-2.419 2.157-2.419 1.21 0 2.176 1.096 2.157 2.42 0 1.333-.956 2.418-2.157 2.418zm7.975 0c-1.183 0-2.157-1.085-2.157-2.419 0-1.333.955-2.419 2.157-2.419 1.21 0 2.176 1.096 2.157 2.42 0 1.333-.946 2.418-2.157 2.418z"/>
+                    </svg>
+                    <span>Đăng nhập với Discord</span>
+                </a>
+            </div>
 
-        <a class="btn-discord" href="/auth/discord">
-            <svg viewBox="0 0 24 24" fill="currentColor"><path d="M20.317 4.37a19.791 19.791 0 0 0-4.885-1.515.074.074 0 0 0-.079.037c-.21.375-.444.864-.608 1.25a18.27 18.27 0 0 0-5.487 0 12.64 12.64 0 0 0-.617-1.25.077.077 0 0 0-.079-.037A19.736 19.736 0 0 0 3.677 4.37a.07.07 0 0 0-.032.027C.533 9.046-.32 13.58.099 18.057a.082.082 0 0 0 .031.057 19.9 19.9 0 0 0 5.993 3.03.078.078 0 0 0 .084-.028 14.09 14.09 0 0 0 1.226-1.994.076.076 0 0 0-.041-.106 13.107 13.107 0 0 1-1.872-.892.077.077 0 0 1-.008-.128 10.2 10.2 0 0 0 .372-.292.074.074 0 0 1 .077-.01c3.928 1.793 8.18 1.793 12.062 0a.074.074 0 0 1 .078.01c.12.098.246.198.373.292a.077.077 0 0 1-.006.127 12.299 12.299 0 0 1-1.873.892.077.077 0 0 0-.041.107c.36.698.772 1.362 1.225 1.993a.076.076 0 0 0 .084.028 19.839 19.839 0 0 0 6.002-3.03.077.077 0 0 0 .032-.054c.5-5.177-.838-9.674-3.549-13.66a.061.061 0 0 0-.031-.03z"/></svg>
-            Đăng nhập với Discord
-        </a>
+            <!-- Info -->
+            <div class="login-info">
+                <p>Đăng nhập để quản lý server Discord của bạn với AI</p>
+                <ul>
+                    <li>🛡️ Quản lý channels, roles, permissions</li>
+                    <li>🤖 AI tự động hóa tác vụ phức tạp</li>
+                    <li>✅ Phê duyệt thao tác trước khi thực thi</li>
+                    <li>📊 Dashboard theo dõi hoạt động</li>
+                </ul>
+            </div>
 
-        <div class="features">
-            <div class="feature-item">
-                <div class="feature-icon">⚡</div>
-                <span>Tự động setup server theo mô tả bằng ngôn ngữ tự nhiên</span>
-            </div>
-            <div class="feature-item">
-                <div class="feature-icon">🛡️</div>
-                <span>Human-in-the-Loop — phê duyệt trước khi thực thi thao tác nguy hiểm</span>
-            </div>
-            <div class="feature-item">
-                <div class="feature-icon">🤖</div>
-                <span>Multi-Agent: Admin, Assistant, Architect phối hợp thông minh</span>
-            </div>
-            <div class="feature-item">
-                <div class="feature-icon">🧠</div>
-                <span>Memory 5 tầng — ghi nhớ context và học từ tương tác</span>
-            </div>
+            <!-- Error Message (shown if OAuth fails) -->
+            <div id="error-msg" class="error-message" style="display:none;"></div>
+        </div>
+
+        <!-- Footer -->
+        <div class="login-footer">
+            <p>AuraFactory v1.0 — Powered by AI</p>
         </div>
     </div>
 
-    <div class="footer">
-        AuraFactory v4.0 — Built for AABW Hackathon 2026
-    </div>
-</div>
+    <script>
+        // Show error if redirected with error param
+        const params = new URLSearchParams(window.location.search);
+        const error = params.get('error');
+        if (error) {
+            const errorMsg = document.getElementById('error-msg');
+            const messages = {
+                'oauth_denied': 'Bạn đã từ chối quyền truy cập.',
+                'token_failed': 'Không thể xác thực với Discord. Vui lòng thử lại.',
+                'user_failed': 'Không thể lấy thông tin người dùng.',
+                'network_error': 'Lỗi kết nối. Vui lòng kiểm tra mạng.',
+                'unknown': 'Đã xảy ra lỗi. Vui lòng thử lại.',
+                'no_code': 'Không nhận được mã xác thực từ Discord.',
+            };
+            errorMsg.textContent = messages[error] || 'Đã xảy ra lỗi.';
+            errorMsg.style.display = 'block';
+        }
+    </script>
 </body>
 </html>

@@ -1,224 +1,210 @@
-# app/knowledge/crawler.py
+"""GuildCrawler — extracts guild structure into GuildKnowledge.
+
+Uses nextcord Guild objects to crawl channels, roles, categories,
+and member count into a structured snapshot.
 """
-Server Crawler — extracts server structure from Discord guild object.
-Uses nextcord guild/channel/role API to build ServerKnowledge.
-"""
+
+from __future__ import annotations
+
 import logging
-from typing import Optional
-from datetime import datetime
+from datetime import datetime, timezone
+from typing import Any
 
-import nextcord
-
-from app.knowledge.models import (
-    ServerKnowledge,
-    ChannelInfo,
-    RoleInfo,
-    PinnedMessage,
-    ScheduledEvent,
-)
+from app.knowledge.models import GuildKnowledge
 
 logger = logging.getLogger(__name__)
 
 
-class ServerCrawler:
-    """
-    Crawls a Discord guild and produces a ServerKnowledge snapshot.
+class GuildCrawler:
+    """Crawls a Discord guild to extract structural knowledge.
 
-    Crawl scope (MVP):
-    - Channel names + descriptions + categories
-    - Role names + colors + member counts
-    - Pinned messages (top 5 per text channel)
-    - Scheduled events
-    - Server rules (from channel named "rules")
-
-    Does NOT crawl:
-    - Message history
-    - Member activity
-    - Voice channel usage
+    Uses the nextcord Guild object to enumerate channels, roles,
+    categories, and metadata into a GuildKnowledge snapshot.
     """
 
-    MAX_PINS_PER_CHANNEL = 5
-    RULES_CHANNEL_NAMES = ("rules", "quy-tac", "noi-quy", "quy-dinh")
+    def __init__(self, bot: Any) -> None:
+        """Initialize with bot instance.
 
-    async def crawl(self, guild: nextcord.Guild) -> ServerKnowledge:
+        Args:
+            bot: Nextcord Bot instance for API access.
         """
-        Full crawl of a guild. Returns complete ServerKnowledge.
-        Call this on bot join or admin request.
-        """
-        logger.info(f"Starting full crawl for guild: {guild.name} ({guild.id})")
+        self._bot = bot
+        logger.info("GuildCrawler initialized")
 
-        knowledge = ServerKnowledge(
+    async def crawl(self, guild: Any) -> GuildKnowledge:
+        """Crawl a guild and return structured knowledge.
+
+        Extracts:
+        - All text and voice channels with metadata
+        - All roles with permissions
+        - All categories with child channels
+        - Member count
+        - Guild rules (if available)
+
+        Args:
+            guild: Nextcord Guild object.
+
+        Returns:
+            Populated GuildKnowledge dataclass.
+        """
+        logger.info("Crawling guild '%s' (ID: %d)", guild.name, guild.id)
+
+        channels = self._crawl_channels(guild)
+        roles = self._crawl_roles(guild)
+        categories = self._crawl_categories(guild)
+        rules = self._extract_rules(guild)
+        member_count = guild.member_count or len(guild.members)
+
+        knowledge = GuildKnowledge(
             guild_id=guild.id,
             guild_name=guild.name,
-            description=guild.description or "",
-            member_count=guild.member_count or len(guild.members),
-            last_crawled=datetime.utcnow().isoformat(),
+            channels=channels,
+            roles=roles,
+            categories=categories,
+            member_count=member_count,
+            rules=rules,
+            crawled_at=datetime.now(timezone.utc),
         )
-
-        # Crawl categories
-        knowledge.categories = [cat.name for cat in guild.categories]
-
-        # Crawl channels
-        knowledge.channels = self._crawl_channels(guild)
-
-        # Crawl roles
-        knowledge.roles = self._crawl_roles(guild)
-
-        # Crawl pinned messages
-        knowledge.pinned_messages = await self._crawl_pinned_messages(guild)
-
-        # Crawl scheduled events
-        knowledge.events = await self._crawl_events(guild)
-
-        # Extract rules
-        knowledge.rules_text = await self._extract_rules(guild)
 
         logger.info(
-            f"Crawl complete for {guild.name}: "
-            f"{len(knowledge.channels)} channels, "
-            f"{len(knowledge.roles)} roles, "
-            f"{len(knowledge.pinned_messages)} pinned messages"
+            "Crawled guild '%s': %d channels, %d roles, %d categories, %d members",
+            guild.name,
+            len(channels),
+            len(roles),
+            len(categories),
+            member_count,
         )
-
         return knowledge
 
-    async def incremental_update(
-        self, knowledge: ServerKnowledge, guild: nextcord.Guild, event_type: str
-    ) -> ServerKnowledge:
+    def _crawl_channels(self, guild: Any) -> list[dict[str, Any]]:
+        """Extract all channels from guild.
+
+        Args:
+            guild: Nextcord Guild object.
+
+        Returns:
+            List of channel info dicts.
         """
-        Incremental update based on a Discord event.
-        Only re-crawls the affected section.
+        channels: list[dict[str, Any]] = []
+
+        for channel in guild.channels:
+            # Skip category channels — handled separately
+            if hasattr(channel, "type") and str(channel.type) == "category":
+                continue
+
+            channel_data: dict[str, Any] = {
+                "id": channel.id,
+                "name": channel.name,
+                "type": str(channel.type),
+                "position": getattr(channel, "position", 0),
+                "category_id": getattr(channel, "category_id", None),
+            }
+
+            # Add topic for text channels
+            if hasattr(channel, "topic") and channel.topic:
+                channel_data["topic"] = channel.topic
+
+            # Add bitrate for voice channels
+            if hasattr(channel, "bitrate"):
+                channel_data["bitrate"] = channel.bitrate
+
+            # Add user limit for voice channels
+            if hasattr(channel, "user_limit") and channel.user_limit:
+                channel_data["user_limit"] = channel.user_limit
+
+            # Add NSFW flag
+            if hasattr(channel, "nsfw"):
+                channel_data["nsfw"] = channel.nsfw
+
+            # Add slowmode
+            if hasattr(channel, "slowmode_delay") and channel.slowmode_delay:
+                channel_data["slowmode_delay"] = channel.slowmode_delay
+
+            channels.append(channel_data)
+
+        # Sort by position
+        channels.sort(key=lambda c: c.get("position", 0))
+        return channels
+
+    def _crawl_roles(self, guild: Any) -> list[dict[str, Any]]:
+        """Extract all roles from guild.
+
+        Args:
+            guild: Nextcord Guild object.
+
+        Returns:
+            List of role info dicts.
         """
-        if event_type in ("channel_create", "channel_update", "channel_delete"):
-            knowledge.channels = self._crawl_channels(guild)
-            knowledge.categories = [cat.name for cat in guild.categories]
-        elif event_type in ("role_create", "role_update", "role_delete"):
-            knowledge.roles = self._crawl_roles(guild)
-        elif event_type == "pins_update":
-            knowledge.pinned_messages = await self._crawl_pinned_messages(guild)
-        elif event_type == "scheduled_event_create":
-            knowledge.events = await self._crawl_events(guild)
+        roles: list[dict[str, Any]] = []
 
-        knowledge.last_crawled = datetime.utcnow().isoformat()
-        return knowledge
-
-    def _crawl_channels(self, guild: nextcord.Guild) -> list:
-        """Extract all channels with metadata."""
-        channels = []
-        for ch in guild.channels:
-            if isinstance(ch, nextcord.CategoryChannel):
-                continue  # Skip categories, they're tracked separately
-
-            ch_type = "text"
-            if isinstance(ch, nextcord.VoiceChannel):
-                ch_type = "voice"
-            elif isinstance(ch, nextcord.StageChannel):
-                ch_type = "stage"
-            elif isinstance(ch, nextcord.ForumChannel):
-                ch_type = "forum"
-
-            channels.append(ChannelInfo(
-                id=ch.id,
-                name=ch.name,
-                type=ch_type,
-                category=ch.category.name if ch.category else None,
-                description=getattr(ch, "topic", None) or "",
-                position=ch.position,
-            ))
-
-        return sorted(channels, key=lambda c: c.position)
-
-    def _crawl_roles(self, guild: nextcord.Guild) -> list:
-        """Extract all roles with metadata."""
-        roles = []
         for role in guild.roles:
-            if role.name == "@everyone":
-                continue
+            role_data: dict[str, Any] = {
+                "id": role.id,
+                "name": role.name,
+                "color": role.color.value if hasattr(role.color, "value") else int(role.color),
+                "position": role.position,
+                "permissions": role.permissions.value
+                if hasattr(role.permissions, "value")
+                else int(role.permissions),
+                "mentionable": role.mentionable,
+                "managed": role.managed,
+                "hoist": role.hoist,
+            }
+            roles.append(role_data)
 
-            roles.append(RoleInfo(
-                id=role.id,
-                name=role.name,
-                color=str(role.color) if role.color else "",
-                member_count=len(role.members) if hasattr(role, "members") else 0,
-                is_admin=role.permissions.administrator,
-                position=role.position,
-            ))
+        # Sort by position descending (highest role first)
+        roles.sort(key=lambda r: r.get("position", 0), reverse=True)
+        return roles
 
-        return sorted(roles, key=lambda r: r.position, reverse=True)
+    def _crawl_categories(self, guild: Any) -> list[dict[str, Any]]:
+        """Extract all categories from guild.
 
-    async def _crawl_pinned_messages(self, guild: nextcord.Guild) -> list:
-        """Extract pinned messages from text channels (top N per channel)."""
-        pinned = []
+        Args:
+            guild: Nextcord Guild object.
 
-        for ch in guild.text_channels:
-            try:
-                pins = await ch.pins()
-                for pin in pins[:self.MAX_PINS_PER_CHANNEL]:
-                    content = pin.content or ""
-                    # Also capture embed descriptions
-                    if pin.embeds:
-                        for embed in pin.embeds:
-                            if embed.description:
-                                content += f"\n{embed.description}"
+        Returns:
+            List of category info dicts with child channel IDs.
+        """
+        categories: list[dict[str, Any]] = []
 
-                    if content.strip():
-                        pinned.append(PinnedMessage(
-                            channel_name=ch.name,
-                            content=content[:500],  # Limit length
-                            author=pin.author.display_name if pin.author else "Unknown",
-                            pinned_at=pin.created_at.isoformat() if pin.created_at else None,
-                        ))
-            except (nextcord.Forbidden, nextcord.HTTPException) as e:
-                logger.debug(f"Cannot read pins in #{ch.name}: {e}")
-                continue
+        for category in guild.categories:
+            channel_ids = [ch.id for ch in category.channels] if hasattr(category, "channels") else []
 
-        return pinned
+            category_data: dict[str, Any] = {
+                "id": category.id,
+                "name": category.name,
+                "position": getattr(category, "position", 0),
+                "channel_ids": channel_ids,
+            }
+            categories.append(category_data)
 
-    async def _crawl_events(self, guild: nextcord.Guild) -> list:
-        """Extract scheduled events."""
-        events = []
-        try:
-            # nextcord returns AsyncIterator or list depending on version
-            result = guild.fetch_scheduled_events()
-            scheduled = []
-            if hasattr(result, '__aiter__'):
-                async for evt in result:
-                    scheduled.append(evt)
-            elif hasattr(result, '__await__'):
-                scheduled = await result
-            else:
-                scheduled = list(result) if result else []
-            for evt in scheduled:
-                events.append(ScheduledEvent(
-                    name=evt.name,
-                    description=evt.description or "",
-                    start_time=evt.start_time.isoformat() if evt.start_time else None,
-                    end_time=evt.end_time.isoformat() if evt.end_time else None,
-                    location=getattr(evt, "location", "") or "",
-                ))
-        except (nextcord.Forbidden, nextcord.HTTPException) as e:
-            logger.debug(f"Cannot fetch events: {e}")
+        categories.sort(key=lambda c: c.get("position", 0))
+        return categories
 
-        return events
+    def _extract_rules(self, guild: Any) -> list[str]:
+        """Extract guild rules if available.
 
-    async def _extract_rules(self, guild: nextcord.Guild) -> str:
-        """Try to find and extract server rules from a rules channel."""
-        for ch in guild.text_channels:
-            if ch.name.lower() in self.RULES_CHANNEL_NAMES:
-                try:
-                    pins = await ch.pins()
-                    if pins:
-                        # Use first pinned message as rules
-                        return pins[0].content[:1000] if pins[0].content else ""
+        Checks guild.rules_channel for pinned rules content.
 
-                    # Fallback: last few messages in rules channel
-                    messages = []
-                    async for msg in ch.history(limit=5):
-                        if msg.content:
-                            messages.append(msg.content)
+        Args:
+            guild: Nextcord Guild object.
 
-                    return "\n".join(reversed(messages))[:1000]
-                except (nextcord.Forbidden, nextcord.HTTPException):
-                    continue
+        Returns:
+            List of rule strings (empty if none found).
+        """
+        rules: list[str] = []
 
-        return ""
+        # Check guild description
+        if hasattr(guild, "description") and guild.description:
+            rules.append(f"Description: {guild.description}")
+
+        # Check rules channel reference
+        if hasattr(guild, "rules_channel") and guild.rules_channel:
+            rules.append(f"Rules channel: #{guild.rules_channel.name}")
+
+        # Check community features
+        if hasattr(guild, "features") and guild.features:
+            features_str = ", ".join(guild.features)
+            rules.append(f"Features: {features_str}")
+
+        return rules

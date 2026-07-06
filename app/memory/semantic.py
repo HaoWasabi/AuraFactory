@@ -1,84 +1,89 @@
-# app/memory/semantic.py
-"""
-Semantic Memory — stores facts, preferences, rules about the guild/users.
-Storage: VectorStore (ChromaDB Phase 1).
-"""
-import logging
-from typing import List
-from datetime import datetime
+"""SemanticMemory — DISABLED placeholder for Phase 2.
 
-from app.models.memory import SemanticFact
+Semantic memory requires a vector store for embedding-based retrieval
+of factual knowledge. Will be enabled in Phase 2.
+"""
+
+from __future__ import annotations
+
+import logging
+from typing import Any
 
 logger = logging.getLogger(__name__)
 
 
+class DisabledFeatureError(Exception):
+    """Raised when a disabled feature is accessed."""
+
+    pass
+
+
 class SemanticMemory:
+    """Semantic memory — DISABLED.
+
+    All methods raise DisabledFeatureError. This placeholder ensures
+    the memory service interface is complete and ready for Phase 2
+    vector store integration.
     """
-    Facts and preferences learned over time.
-    Examples: "Admin prefers kebab-case channel names",
-              "This server is for gaming community",
-              "Never delete #announcements".
-    """
 
-    COLLECTION_PREFIX = "semantic"
+    def __init__(self) -> None:
+        logger.info("SemanticMemory initialized (DISABLED)")
 
-    def __init__(self, vectorstore=None, embedding=None):
-        self._vectorstore = vectorstore
-        self._embedding = embedding
+    def store(self, guild_id: int, content: Any, metadata: dict[str, Any] | None = None) -> None:
+        """Store semantic knowledge — DISABLED.
 
-    @property
-    def is_ready(self) -> bool:
-        return self._vectorstore is not None and self._embedding is not None
+        Args:
+            guild_id: Discord guild identifier.
+            content: Factual knowledge to store.
+            metadata: Optional metadata.
 
-    async def store(self, fact: SemanticFact) -> None:
-        """Embed and store a semantic fact."""
-        if not self.is_ready:
-            logger.debug("SemanticMemory not ready, skipping store")
-            return
-
-        embedding = await self._embedding.embed(fact.content)
-        fact_id = f"fact_{fact.guild_id}_{int(fact.created_at.timestamp() * 1000)}"
-
-        await self._vectorstore.add(
-            collection=f"{self.COLLECTION_PREFIX}_{fact.guild_id}",
-            id=fact_id,
-            text=fact.content,
-            embedding=embedding,
-            metadata={
-                "fact_type": fact.fact_type,
-                "confidence": fact.confidence,
-                "source": fact.source,
-                "created_at": fact.created_at.isoformat(),
-                **fact.metadata,
-            },
+        Raises:
+            DisabledFeatureError: Always raised.
+        """
+        raise DisabledFeatureError(
+            "Semantic memory disabled — requires vector store. Enable in Phase 2."
         )
 
-    async def search(
-        self, query: str, guild_id: int, top_k: int = 5
-    ) -> List[SemanticFact]:
-        """Retrieve relevant facts by similarity."""
-        if not self.is_ready:
-            return []
+    def recall(self, guild_id: int, query: str, limit: int = 10) -> list[Any]:
+        """Recall semantic knowledge — DISABLED.
 
-        embedding = await self._embedding.embed(query)
-        results = await self._vectorstore.query(
-            collection=f"{self.COLLECTION_PREFIX}_{guild_id}",
-            embedding=embedding,
-            top_k=top_k,
+        Args:
+            guild_id: Discord guild identifier.
+            query: Similarity search query.
+            limit: Maximum results.
+
+        Raises:
+            DisabledFeatureError: Always raised.
+        """
+        raise DisabledFeatureError(
+            "Semantic memory disabled — requires vector store. Enable in Phase 2."
         )
 
-        facts = []
-        for r in results:
-            meta = r.get("metadata", {})
-            facts.append(SemanticFact(
-                guild_id=guild_id,
-                fact_type=meta.get("fact_type", "entity"),
-                content=r.get("text", ""),
-                confidence=meta.get("confidence", 0.5),
-                source=meta.get("source", "inferred"),
-                created_at=datetime.fromisoformat(meta["created_at"]) if "created_at" in meta else datetime.utcnow(),
-                updated_at=datetime.utcnow(),
-                metadata=meta,
-            ))
+    def forget(self, guild_id: int, memory_id: str) -> None:
+        """Forget semantic knowledge — DISABLED.
 
-        return facts
+        Args:
+            guild_id: Discord guild identifier.
+            memory_id: Memory identifier.
+
+        Raises:
+            DisabledFeatureError: Always raised.
+        """
+        raise DisabledFeatureError(
+            "Semantic memory disabled — requires vector store. Enable in Phase 2."
+        )
+
+    def search(self, guild_id: int, query: str, limit: int = 10) -> list[Any]:
+        """Search semantic knowledge — DISABLED.
+
+        Args:
+            guild_id: Discord guild identifier.
+            query: Search query.
+            limit: Maximum results.
+
+        Raises:
+            DisabledFeatureError: Always raised.
+        """
+        raise DisabledFeatureError(
+            "Semantic memory disabled — requires vector store. Enable in Phase 2."
+        )

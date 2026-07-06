@@ -1,57 +1,35 @@
-# Skill: Discord Onboarding & Welcome
+# onboarding
 
-## Agent: architect
-## Risk: medium
-## Category: onboarding
+## Tools
 
-### Tools
+### setup_welcome
+- description: Configure the welcome system for new members (welcome channel, message template)
+- risk: medium
+- agent: assistant
+- parameters:
+  - guild_id (int, required): Target guild ID
+  - channel_id (int, required): Channel to send welcome messages in
+  - message_template (str, required): Welcome message template (supports {user}, {guild}, {member_count} placeholders)
+  - enabled (bool, optional): Whether welcome messages are enabled (default true)
 
-#### setup_welcome
-- Description: Configure welcome message and rules screen for new members.
-- Parameters:
-  - guild_id (integer, required): Target guild ID
-  - welcome_channel (string, required): Channel name for welcome messages
-  - welcome_message (string, required): Message template ({user} = mention, {server} = server name)
-  - rules_channel (string): Channel for rules (enables Rules Screen)
-  - enable_rules_screen (boolean, default: true): Show rules before joining
-- Risk: medium
-- Requires Approval: no
+### create_dm_template
+- description: Create or update a DM template sent to new members on join
+- risk: medium
+- agent: assistant
+- parameters:
+  - guild_id (int, required): Target guild ID
+  - template_name (str, required): Template identifier name
+  - content (str, required): DM message content (supports {user}, {guild} placeholders)
+  - embed_title (str, optional): Optional embed title
+  - embed_description (str, optional): Optional embed description
+  - embed_color (int, optional): Embed color as integer
 
-#### setup_onboarding_flow
-- Description: Configure Discord's native onboarding flow (prompts, default channels).
-- Parameters:
-  - guild_id (integer, required): Target guild ID
-  - default_channels (array, required): Channels new members see by default
-  - prompts (array): Onboarding prompts (questions for new members)
-  - mode (string, enum: default|advanced, default: default): Onboarding mode
-- Risk: medium
-- Requires Approval: no
-
-#### set_system_channel
-- Description: Configure system channel for join/boost/etc notifications.
-- Parameters:
-  - guild_id (integer, required): Target guild ID
-  - channel_name (string, required): Channel for system messages
-  - join_notifications (boolean, default: true): Show member join messages
-  - boost_notifications (boolean, default: true): Show boost messages
-- Risk: medium
-- Requires Approval: no
-
-#### create_invite
-- Description: Create an invite link with custom settings.
-- Parameters:
-  - guild_id (integer, required): Target guild ID
-  - channel_name (string, required): Channel the invite points to
-  - max_age (integer, default: 86400): Expiry in seconds (0 = never)
-  - max_uses (integer, default: 0): Max uses (0 = unlimited)
-  - temporary (boolean, default: false): Grant temporary membership
-- Risk: medium
-- Requires Approval: no
-
-#### revoke_invite
-- Description: Revoke/delete an invite link.
-- Parameters:
-  - guild_id (integer, required): Target guild ID
-  - invite_code (string, required): Invite code to revoke
-- Risk: medium
-- Requires Approval: no
+### send_dm
+- description: Send a direct message to a guild member using a template or custom content
+- risk: medium
+- agent: assistant
+- parameters:
+  - guild_id (int, required): Target guild ID
+  - member_id (int, required): Member user ID to DM
+  - template_name (str, optional): Template name to use (mutually exclusive with content)
+  - content (str, optional): Custom message content (mutually exclusive with template_name)

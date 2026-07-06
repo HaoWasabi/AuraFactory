@@ -1,260 +1,387 @@
-# tools/discord_role.py
-import json
+"""
+Discord Roles Connector — Role management operations.
+
+Actions: create, delete, rename, set_permissions, assign, remove
+"""
+
+from __future__ import annotations
+
+import logging
+from typing import Any, Dict, List, Optional
+
 import nextcord
-from typing import Optional, List, Dict, Any, Union
 
-class DiscordRole:
-    """
-    Tập hợp các bộ công cụ (Tools) tối ưu hóa riêng cho Agentic AI nhằm quản lý,
-    tạo, sửa, xóa, gán và sao chép Vai trò (Roles) trên hệ thống Discord.
-    """
+from app.connectors.base import BaseConnector
+from app.mcp.protocol import ToolDefinition
 
-    @staticmethod
-    def _parse_permissions(permissions_dict: Dict[str, bool]) -> nextcord.Permissions:
-        """Helper để chuyển đổi cấu hình JSON/Dict quyền của Agent thành Object Permissions của Nextcord"""
-        perms = nextcord.Permissions.none()
-        for perm_name, value in permissions_dict.items():
-            if hasattr(perms, perm_name) and isinstance(value, bool):
-                setattr(perms, perm_name, value)
-        return perms
+logger = logging.getLogger(__name__)
 
-    @staticmethod
-    def _permissions_to_dict(perms: nextcord.Permissions) -> Dict[str, bool]:
-        """Helper để chuyển đổi Object Permissions của Nextcord thành Dict/JSON sạch cho Agent đọc"""
-        return {perm_name: value for perm_name, value in perms if value is True}
 
-    @staticmethod
-    async def create_role(guild: nextcord.Guild, role_name: str, **kwargs) -> str:
+class RolesConnector(BaseConnector):
+    """Manages Discord guild roles."""
+
+    def __init__(self, bot: nextcord.Bot) -> None:
+        self._bot = bot
+
+    # ------------------------------------------------------------------
+    # Actions
+    # ------------------------------------------------------------------
+
+    async def create(
+        self,
+        guild: nextcord.Guild,
+        name: str,
+        color: Optional[int] = None,
+        permissions: Optional[dict] = None,
+        hoist: bool = False,
+        mentionable: bool = False,
+    ) -> Dict[str, Any]:
+        """Create a new role in the guild.
+
+        Args:
+            guild: The target guild.
+            name: Role name.
+            color: Color value as integer (optional).
+            permissions: Permissions dict (optional).
+            hoist: Whether to display separately in sidebar.
+            mentionable: Whether the role can be mentioned.
+
+        Returns:
+            Dict with created role info.
         """
-        Công cụ tạo một Vai trò (Role) mới với đầy đủ thuộc tính nâng cao.
-        Hỗ trợ qua kwargs: 
-          - color: Mã màu Hex (str), ví dụ: "#ff0000" hoặc số nguyên mã màu (int)
-          - hoist: Bật/Tắt hiển thị tách biệt thành viên có role này trên danh sách (bool)
-          - mentionable: Cho phép mọi người tag @role này hay không (bool)
-          - permissions: Dict chứa các quyền cụ thể, ví dụ: {"kick_members": True, "send_messages": True}
-        """
+        if not name or not name.strip():
+            raise ValueError("Role name cannot be empty")
+
         try:
-            # 1. Xử lý chuẩn hóa màu sắc từ Agent (Nếu Agent truyền chuỗi dạng "#FFFFFF")
-            if 'color' in kwargs and isinstance(kwargs['color'], str):
-                color_str = kwargs['color'].lstrip('#')
-                kwargs['color'] = nextcord.Color(int(color_str, 16))
-            elif 'color' in kwargs and isinstance(kwargs['color'], int):
-                kwargs['color'] = nextcord.Color(kwargs['color'])
+            kwargs: Dict[str, Any] = {
+                "name": name,
+                "hoist": hoist,
+                "mentionable": mentionable,
+            }
+            if color is not None:
+                kwargs["color"] = nextcord.Color(int(color))
+            if permissions is not None:
+                kwargs["permissions"] = nextcord.Permissions(**permissions)
 
-            # 2. Xử lý bộ dịch quyền từ Dict sang Object hệ thống
-            if 'permissions' in kwargs and isinstance(kwargs['permissions'], dict):
-                kwargs['permissions'] = DiscordRole._parse_permissions(kwargs['permissions'])
-
-            # 3. Tạo Role bằng cách rải kwargs động vào Nextcord
-            role = await guild.create_role(name=role_name, **kwargs)
-
-            return json.dumps({
-                "status": "success",
-                "action": "create_role",
-                "role_name": role.name,
-                "role_id": role.id,
-                "color": str(role.color),
+            role = await guild.create_role(**kwargs)
+            logger.info("Created role '%s' (id=%s) in guild '%s'", name, role.id, guild.name)
+            return {
+                "id": str(role.id),
+                "name": role.name,
+                "color": role.color.value,
+                "position": role.position,
                 "hoist": role.hoist,
-                "mentionable": role.mentionable
-            }, ensure_ascii=False)
+                "mentionable": role.mentionable,
+            }
+        except nextcord.errors.Forbidden:
+            raise PermissionError("manage_roles")
+        except nextcord.errors.HTTPException as exc:
+            raise RuntimeError(f"Failed to create role: {exc}")
 
-        except nextcord.Forbidden:
-            return json.dumps({"status": "error", "message": "Bot thiếu quyền 'Manage Roles' (hoặc quyền này cao hơn vị trí của Bot) để tạo Role."}, ensure_ascii=False)
-        except Exception as e:
-            return json.dumps({"status": "error", "message": f"Thất bại khi tạo Role: {str(e)}"}, ensure_ascii=False)
+    async def delete(
+        self,
+        guild: nextcord.Guild,
+        role_id: int,
+    ) -> Dict[str, Any]:
+        """Delete a role by ID.
 
-    @staticmethod
-    async def modify_role(guild: nextcord.Guild, role_id: int, **kwargs) -> str:
+        Args:
+            guild: The target guild.
+            role_id: ID of the role to delete.
+
+        Returns:
+            Dict confirming deletion.
         """
-        Công cụ chỉnh sửa linh hoạt bất kỳ thuộc tính nào của một Role hiện tại.
-        Hỗ trợ qua kwargs: new_name, color, hoist, mentionable, permissions (Dict[str, bool]), position (vị trí cấp bậc)
-        """
+        role = guild.get_role(int(role_id))
+        if role is None:
+            raise ValueError(f"Role '{role_id}' not found in guild")
+
         try:
-            role = guild.get_role(role_id)
-            if not role:
-                return json.dumps({"status": "error", "message": "Không tìm thấy ID Vai trò trong Server."}, ensure_ascii=False)
+            name = role.name
+            await role.delete()
+            logger.info("Deleted role '%s' (id=%s) from guild '%s'", name, role_id, guild.name)
+            return {"deleted": True, "role_id": str(role_id), "name": name}
+        except nextcord.errors.Forbidden:
+            raise PermissionError("manage_roles")
+        except nextcord.errors.HTTPException as exc:
+            raise RuntimeError(f"Failed to delete role: {exc}")
 
-            # Kiểm tra xem quyền cấp bậc của Bot có đủ cao để sửa Role này không
-            if role >= guild.me.top_role:
-                return json.dumps({"status": "error", "message": "Không thể chỉnh sửa Role này vì cấp bậc của nó cao hơn hoặc bằng Vai trò cao nhất của Bot."}, ensure_ascii=False)
+    async def rename(
+        self,
+        guild: nextcord.Guild,
+        role_id: int,
+        new_name: str,
+    ) -> Dict[str, Any]:
+        """Rename a role.
 
-            # Chuẩn hóa các tham số đầu vào từ file test của bạn sang chuẩn Nextcord
-            if 'new_name' in kwargs:
-                kwargs['name'] = kwargs.pop('new_name')
+        Args:
+            guild: The target guild.
+            role_id: ID of the role to rename.
+            new_name: The new role name.
 
-            if 'color' in kwargs and isinstance(kwargs['color'], str):
-                kwargs['color'] = nextcord.Color(int(kwargs['color'].lstrip('#'), 16))
-
-            if 'permissions' in kwargs and isinstance(kwargs['permissions'], dict):
-                # Lấy quyền hiện tại ra, cập nhật đè các quyền mới lên để tránh mất quyền cũ không nhắc tới
-                current_perms = role.permissions
-                for p_key, p_val in kwargs['permissions'].items():
-                    if hasattr(current_perms, p_key):
-                        setattr(current_perms, p_key, p_val)
-                kwargs['permissions'] = current_perms
-
-            # Tách riêng 'position' vì thay đổi vị trí cấp bậc (Hierarchy) cần dùng hàm khác của Nextcord
-            position = kwargs.pop('position', None)
-            if position is not None:
-                await role.edit(position=position)
-
-            # Lọc an toàn các trường dữ liệu mà Role thực sự hỗ trợ sửa đổi trực tiếp
-            valid_kwargs = {}
-            for key, val in kwargs.items():
-                if val is not None and hasattr(role, key):
-                    valid_kwargs[key] = val
-
-            if valid_kwargs:
-                await role.edit(**valid_kwargs)
-
-            return json.dumps({
-                "status": "success",
-                "action": "modify_role",
-                "role_id": role_id,
-                "updated_fields": list(valid_kwargs.keys()) + (["position"] if position is not None else [])
-            }, ensure_ascii=False)
-
-        except nextcord.Forbidden:
-            return json.dumps({"status": "error", "message": "Bot bị từ chối quyền chỉnh sửa Vai trò này."}, ensure_ascii=False)
-        except Exception as e:
-            return json.dumps({"status": "error", "message": f"Lỗi chỉnh sửa Role: {str(e)}"}, ensure_ascii=False)
-
-    @staticmethod
-    async def delete_role(guild: nextcord.Guild, role_id: int, reason: str = "Được yêu cầu bởi AI Agent") -> str:
+        Returns:
+            Dict with old and new names.
         """
-        Công cụ xóa bỏ một Vai trò ra khỏi server.
-        """
+        if not new_name or not new_name.strip():
+            raise ValueError("New role name cannot be empty")
+
+        role = guild.get_role(int(role_id))
+        if role is None:
+            raise ValueError(f"Role '{role_id}' not found in guild")
+
         try:
-            role = guild.get_role(role_id)
-            if not role:
-                return json.dumps({"status": "error", "message": "Không tìm thấy vai trò cần xóa."}, ensure_ascii=False)
+            old_name = role.name
+            await role.edit(name=new_name)
+            logger.info("Renamed role '%s' -> '%s' (id=%s)", old_name, new_name, role_id)
+            return {
+                "role_id": str(role_id),
+                "old_name": old_name,
+                "new_name": new_name,
+            }
+        except nextcord.errors.Forbidden:
+            raise PermissionError("manage_roles")
+        except nextcord.errors.HTTPException as exc:
+            raise RuntimeError(f"Failed to rename role: {exc}")
 
-            if role >= guild.me.top_role or role.is_default():
-                return json.dumps({"status": "error", "message": "Không thể xóa Role này (Role @everyone mặc định hoặc cấp bậc cao hơn Bot)."}, ensure_ascii=False)
+    async def set_permissions(
+        self,
+        guild: nextcord.Guild,
+        role_id: int,
+        permissions: dict,
+    ) -> Dict[str, Any]:
+        """Set permissions for a role.
 
-            role_name = role.name
-            await role.delete(reason=reason)
+        Args:
+            guild: The target guild.
+            role_id: ID of the role.
+            permissions: Dict of permission_name -> bool.
 
-            return json.dumps({
-                "status": "success",
-                "action": "delete_role",
-                "role_id": role_id,
-                "role_name": role_name
-            }, ensure_ascii=False)
-
-        except nextcord.Forbidden:
-            return json.dumps({"status": "error", "message": "Bot thiếu quyền 'Manage Roles' để xóa."}, ensure_ascii=False)
-        except Exception as e:
-            return json.dumps({"status": "error", "message": f"Thất bại khi xóa: {str(e)}"}, ensure_ascii=False)
-
-    @staticmethod
-    async def assign_role_to_member(guild: nextcord.Guild, member_id: int, role_id: int) -> str:
+        Returns:
+            Dict confirming the update.
         """
-        Công cụ gán một Vai trò cho một Thành viên cụ thể.
-        """
+        if not permissions:
+            raise ValueError("Permissions dict cannot be empty")
+
+        role = guild.get_role(int(role_id))
+        if role is None:
+            raise ValueError(f"Role '{role_id}' not found in guild")
+
         try:
-            member = guild.get_member(member_id) or await guild.fetch_member(member_id)
-            role = guild.get_role(role_id)
-
-            if not member or not role:
-                return json.dumps({"status": "error", "message": "Không tìm thấy Thành viên hoặc Vai trò yêu cầu trên Server."}, ensure_ascii=False)
-
-            if role >= guild.me.top_role:
-                return json.dumps({"status": "error", "message": "Bot không thể gán Role này vì nó có cấp bậc cao hơn hoặc bằng vai trò cao nhất của Bot."}, ensure_ascii=False)
-
-            await member.add_roles(role)
-            return json.dumps({
-                "status": "success",
-                "action": "assign_role",
-                "member_name": member.name,
-                "role_name": role.name
-            }, ensure_ascii=False)
-
-        except nextcord.Forbidden:
-            return json.dumps({"status": "error", "message": "Bot thiếu quyền cấp vai trò (Manage Roles)."}, ensure_ascii=False)
-        except Exception as e:
-            return json.dumps({"status": "error", "message": f"Thất bại khi gán role: {str(e)}"}, ensure_ascii=False)
-
-    @staticmethod
-    async def remove_role_from_member(guild: nextcord.Guild, member_id: int, role_id: int) -> str:
-        """
-        Công cụ gỡ một Vai trò ra khỏi một Thành viên.
-        """
-        try:
-            member = guild.get_member(member_id) or await guild.fetch_member(member_id)
-            role = guild.get_role(role_id)
-
-            if not member or not role:
-                return json.dumps({"status": "error", "message": "Không tìm thấy Thành viên hoặc Vai trò."}, ensure_ascii=False)
-
-            if role >= guild.me.top_role:
-                return json.dumps({"status": "error", "message": "Bot không thể gỡ Role này do phân cấp phân quyền hệ thống."}, ensure_ascii=False)
-
-            await member.remove_roles(role)
-            return json.dumps({
-                "status": "success",
-                "action": "remove_role",
-                "member_name": member.name,
-                "role_name": role.name
-            }, ensure_ascii=False)
-
-        except nextcord.Forbidden:
-            return json.dumps({"status": "error", "message": "Bot thiếu quyền gỡ vai trò."}, ensure_ascii=False)
-        except Exception as e:
-            return json.dumps({"status": "error", "message": f"Lỗi thực thi gỡ role: {str(e)}"}, ensure_ascii=False)
-
-    @staticmethod
-    async def clone_role(guild: nextcord.Guild, source_role_id: int, target_role_name: str) -> str:
-        """
-        Công cụ sao chép vai trò (Clone Role) - Copy 100% màu sắc, quyền hạn, hiển thị 
-        từ một Role có sẵn sang một Role mới tinh với tên mới. (Tương ứng lệnh @sao_chep_vai_tro)
-        """
-        try:
-            source_role = guild.get_role(source_role_id)
-            if not source_role:
-                return json.dumps({"status": "error", "message": "Không tìm thấy vai trò gốc để sao chép."}, ensure_ascii=False)
-
-            # Khởi tạo role mới nhân bản toàn bộ thuộc tính cơ bản và ma trận quyền
-            new_role = await guild.create_role(
-                name=target_role_name,
-                permissions=source_role.permissions,
-                color=source_role.color,
-                hoist=source_role.hoist,
-                mentionable=source_role.mentionable
+            perms = nextcord.Permissions(**permissions)
+            await role.edit(permissions=perms)
+            logger.info(
+                "Updated permissions for role '%s' (id=%s): %s",
+                role.name,
+                role_id,
+                list(permissions.keys()),
             )
+            return {
+                "role_id": str(role_id),
+                "name": role.name,
+                "updated_permissions": permissions,
+            }
+        except nextcord.errors.Forbidden:
+            raise PermissionError("manage_roles")
+        except nextcord.errors.HTTPException as exc:
+            raise RuntimeError(f"Failed to set permissions: {exc}")
 
-            return json.dumps({
-                "status": "success",
-                "action": "clone_role",
-                "source_role_name": source_role.name,
-                "new_role_name": new_role.name,
-                "new_role_id": new_role.id
-            }, ensure_ascii=False)
+    async def assign(
+        self,
+        guild: nextcord.Guild,
+        member_id: int,
+        role_id: int,
+    ) -> Dict[str, Any]:
+        """Assign a role to a member.
 
-        except nextcord.Forbidden:
-            return json.dumps({"status": "error", "message": "Bot thiếu quyền 'Manage Roles' để sao chép nhân bản."}, ensure_ascii=False)
-        except Exception as e:
-            return json.dumps({"status": "error", "message": f"Lỗi nhân bản vai trò: {str(e)}"}, ensure_ascii=False)
+        Args:
+            guild: The target guild.
+            member_id: ID of the member.
+            role_id: ID of the role to assign.
 
-    @staticmethod
-    async def get_role_permissions_info(guild: nextcord.Guild, role_id: int) -> str:
+        Returns:
+            Dict confirming the assignment.
         """
-        Công cụ kiểm tra quyền (Tương ứng với lệnh @hien_thi_quyen). 
-        Trả về danh sách các quyền đang được BẬT (True) dưới dạng danh sách JSON sạch cho Agent đọc.
-        """
+        member = guild.get_member(int(member_id))
+        if member is None:
+            raise ValueError(f"Member '{member_id}' not found in guild")
+
+        role = guild.get_role(int(role_id))
+        if role is None:
+            raise ValueError(f"Role '{role_id}' not found in guild")
+
         try:
-            role = guild.get_role(role_id)
-            if not role:
-                return json.dumps({"status": "error", "message": "Không tìm thấy vai trò."}, ensure_ascii=False)
-
-            active_permissions = DiscordRole._permissions_to_dict(role.permissions)
-
-            return json.dumps({
-                "status": "success",
+            await member.add_roles(role)
+            logger.info(
+                "Assigned role '%s' to member '%s' in guild '%s'",
+                role.name,
+                member.display_name,
+                guild.name,
+            )
+            return {
+                "member_id": str(member_id),
+                "role_id": str(role_id),
                 "role_name": role.name,
-                "role_id": role.id,
-                "active_permissions_count": len(active_permissions),
-                "active_permissions": active_permissions
-            }, ensure_ascii=False)
-        except Exception as e:
-            return json.dumps({"status": "error", "message": f"Lỗi lấy thông tin quyền: {str(e)}"}, ensure_ascii=False)
+                "member_name": member.display_name,
+                "assigned": True,
+            }
+        except nextcord.errors.Forbidden:
+            raise PermissionError("manage_roles")
+        except nextcord.errors.HTTPException as exc:
+            raise RuntimeError(f"Failed to assign role: {exc}")
+
+    async def remove(
+        self,
+        guild: nextcord.Guild,
+        member_id: int,
+        role_id: int,
+    ) -> Dict[str, Any]:
+        """Remove a role from a member.
+
+        Args:
+            guild: The target guild.
+            member_id: ID of the member.
+            role_id: ID of the role to remove.
+
+        Returns:
+            Dict confirming the removal.
+        """
+        member = guild.get_member(int(member_id))
+        if member is None:
+            raise ValueError(f"Member '{member_id}' not found in guild")
+
+        role = guild.get_role(int(role_id))
+        if role is None:
+            raise ValueError(f"Role '{role_id}' not found in guild")
+
+        try:
+            await member.remove_roles(role)
+            logger.info(
+                "Removed role '%s' from member '%s' in guild '%s'",
+                role.name,
+                member.display_name,
+                guild.name,
+            )
+            return {
+                "member_id": str(member_id),
+                "role_id": str(role_id),
+                "role_name": role.name,
+                "member_name": member.display_name,
+                "removed": True,
+            }
+        except nextcord.errors.Forbidden:
+            raise PermissionError("manage_roles")
+        except nextcord.errors.HTTPException as exc:
+            raise RuntimeError(f"Failed to remove role: {exc}")
+
+    # ------------------------------------------------------------------
+    # BaseConnector interface
+    # ------------------------------------------------------------------
+
+    async def execute(self, action: str, **params: Any) -> Dict[str, Any]:
+        """Dispatch to the appropriate action method."""
+        actions = {
+            "create": self.create,
+            "delete": self.delete,
+            "rename": self.rename,
+            "set_permissions": self.set_permissions,
+            "assign": self.assign,
+            "remove": self.remove,
+        }
+        handler = actions.get(action)
+        if handler is None:
+            raise ValueError(
+                f"Unknown action '{action}' for RolesConnector. "
+                f"Available: {list(actions.keys())}"
+            )
+        return await handler(**params)
+
+    def get_tool_definitions(self) -> List[ToolDefinition]:
+        """Return tool definitions for role operations."""
+        return [
+            ToolDefinition(
+                name="discord.roles.create",
+                description="Create a new role in the guild.",
+                parameters={
+                    "type": "object",
+                    "properties": {
+                        "guild_id": {"type": "string", "description": "Target guild ID."},
+                        "name": {"type": "string", "description": "Role name."},
+                        "color": {"type": "integer", "description": "Color as integer (optional)."},
+                        "permissions": {"type": "object", "description": "Permissions dict (optional)."},
+                        "hoist": {"type": "boolean", "description": "Display separately in sidebar."},
+                        "mentionable": {"type": "boolean", "description": "Allow mentions."},
+                    },
+                    "required": ["guild_id", "name"],
+                },
+                risk_level="medium",
+            ),
+            ToolDefinition(
+                name="discord.roles.delete",
+                description="Delete a role from the guild. Irreversible.",
+                parameters={
+                    "type": "object",
+                    "properties": {
+                        "guild_id": {"type": "string", "description": "Target guild ID."},
+                        "role_id": {"type": "string", "description": "Role ID to delete."},
+                    },
+                    "required": ["guild_id", "role_id"],
+                },
+                risk_level="high",
+            ),
+            ToolDefinition(
+                name="discord.roles.rename",
+                description="Rename an existing role.",
+                parameters={
+                    "type": "object",
+                    "properties": {
+                        "guild_id": {"type": "string", "description": "Target guild ID."},
+                        "role_id": {"type": "string", "description": "Role ID to rename."},
+                        "new_name": {"type": "string", "description": "The new name."},
+                    },
+                    "required": ["guild_id", "role_id", "new_name"],
+                },
+                risk_level="medium",
+            ),
+            ToolDefinition(
+                name="discord.roles.set_permissions",
+                description="Set permissions for a role.",
+                parameters={
+                    "type": "object",
+                    "properties": {
+                        "guild_id": {"type": "string", "description": "Target guild ID."},
+                        "role_id": {"type": "string", "description": "Role ID."},
+                        "permissions": {"type": "object", "description": "Dict of permission_name -> bool."},
+                    },
+                    "required": ["guild_id", "role_id", "permissions"],
+                },
+                risk_level="high",
+            ),
+            ToolDefinition(
+                name="discord.roles.assign",
+                description="Assign a role to a guild member.",
+                parameters={
+                    "type": "object",
+                    "properties": {
+                        "guild_id": {"type": "string", "description": "Target guild ID."},
+                        "member_id": {"type": "string", "description": "Member ID."},
+                        "role_id": {"type": "string", "description": "Role ID to assign."},
+                    },
+                    "required": ["guild_id", "member_id", "role_id"],
+                },
+                risk_level="medium",
+            ),
+            ToolDefinition(
+                name="discord.roles.remove",
+                description="Remove a role from a guild member.",
+                parameters={
+                    "type": "object",
+                    "properties": {
+                        "guild_id": {"type": "string", "description": "Target guild ID."},
+                        "member_id": {"type": "string", "description": "Member ID."},
+                        "role_id": {"type": "string", "description": "Role ID to remove."},
+                    },
+                    "required": ["guild_id", "member_id", "role_id"],
+                },
+                risk_level="medium",
+            ),
+        ]

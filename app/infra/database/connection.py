@@ -1,75 +1,69 @@
-# app/infra/database/connection.py
-"""
-Async PostgreSQL connection pool.
-Migrated from app/db/connection.py — wrapped in class-based pattern per spec.
-Phase 2: Only change DATABASE_URL to point to RDS.
-"""
+"""Async database connection management using asyncpg."""
+
 import logging
-from typing import Optional, List, Any
+from typing import Any, List, Optional
+
 import asyncpg
+
+from .models import SCHEMA_SQL
+
 logger = logging.getLogger(__name__)
 
 
-class DatabasePool:
-    """
-    Async PostgreSQL connection pool wrapper.
-    Provides typed query methods and lifecycle management.
-    """
+class Database:
+    """Async PostgreSQL database manager using asyncpg connection pool."""
 
-    def __init__(self, pool: asyncpg.Pool):
-        self._pool = pool
-
-    @classmethod
-    async def create(
-        cls,
-        database_url: str,
-        min_size: int = 2,
-        max_size: int = 10,
-        command_timeout: int = 30,
-    ) -> "DatabasePool":
-        """Create a new connection pool."""
-        pool = await asyncpg.create_pool(
-            dsn=database_url,
-            min_size=min_size,
-            max_size=max_size,
-            command_timeout=command_timeout,
-        )
-        logger.info(f"Database pool created (min={min_size}, max={max_size})")
-        return cls(pool)
-
-    async def execute(self, query: str, *args: Any) -> str:
-        """Execute a query and return status string."""
-        async with self._pool.acquire() as conn:
-            return await conn.execute(query, *args)
-
-    async def fetch(self, query: str, *args: Any) -> List[dict]:
-        """Fetch multiple rows as list of dicts."""
-        async with self._pool.acquire() as conn:
-            rows = await conn.fetch(query, *args)
-            return [dict(r) for r in rows]
-
-    async def fetchrow(self, query: str, *args: Any) -> Optional[dict]:
-        """Fetch a single row as dict."""
-        async with self._pool.acquire() as conn:
-            row = await conn.fetchrow(query, *args)
-            return dict(row) if row else None
-
-    async def fetchval(self, query: str, *args: Any) -> Any:
-        """Fetch a single value."""
-        async with self._pool.acquire() as conn:
-            return await conn.fetchval(query, *args)
-
-    async def executemany(self, query: str, args: List[tuple]) -> None:
-        """Execute a query with multiple sets of arguments."""
-        async with self._pool.acquire() as conn:
-            await conn.executemany(query, args)
-
-    async def close(self) -> None:
-        """Close the connection pool."""
-        await self._pool.close()
-        logger.info("Database pool closed")
+    def __init__(self, dsn: str, min_size: int = 2, max_size: int = 10) -> None:
+        self._dsn = dsn
+        self._min_size = min_size
+        self._max_size = max_size
+        self._pool: Optional[asyncpg.Pool] = None
 
     @property
     def pool(self) -> asyncpg.Pool:
-        """Direct access to the underlying pool (for advanced usage)."""
+        """Return the connection pool, raising if not connected."""
+        if self._pool is None:
+            raise RuntimeError("Database not connected. Call connect() first.")
         return self._pool
+
+    async def connect(self) -> None:
+        """Establish the connection pool."""
+        logger.info("Connecting to database...")
+        self._pool = await asyncpg.create_pool(
+            dsn=self._dsn,
+            min_size=self._min_size,
+            max_size=self._max_size,
+        )
+        logger.info("Database connection pool established (min=%d, max=%d)", self._min_size, self._max_size)
+
+    async def disconnect(self) -> None:
+        """Close the connection pool."""
+        if self._pool is not None:
+            await self._pool.close()
+            self._pool = None
+            logger.info("Database connection pool closed")
+
+    async def execute(self, query: str, *args: Any) -> str:
+        """Execute a query and return the status string."""
+        async with self.pool.acquire() as conn:
+            result = await conn.execute(query, *args)
+            return result
+
+    async def fetch(self, query: str, *args: Any) -> List[asyncpg.Record]:
+        """Execute a query and return all rows."""
+        async with self.pool.acquire() as conn:
+            rows = await conn.fetch(query, *args)
+            return rows
+
+    async def fetchrow(self, query: str, *args: Any) -> Optional[asyncpg.Record]:
+        """Execute a query and return a single row."""
+        async with self.pool.acquire() as conn:
+            row = await conn.fetchrow(query, *args)
+            return row
+
+    async def init_schema(self) -> None:
+        """Create all tables defined in the schema."""
+        logger.info("Initializing database schema...")
+        async with self.pool.acquire() as conn:
+            await conn.execute(SCHEMA_SQL)
+        logger.info("Database schema initialized successfully")

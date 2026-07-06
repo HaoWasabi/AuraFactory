@@ -1,118 +1,101 @@
-# app/infra/database/models.py
+"""SQL schema definitions for all AuraFactory tables."""
+
+SCHEMA_SQL = """
+-- Guilds table
+CREATE TABLE IF NOT EXISTS guilds (
+    guild_id TEXT PRIMARY KEY,
+    name TEXT NOT NULL,
+    budget_daily_usd NUMERIC(10, 4) DEFAULT 5.0,
+    rate_limit_per_min INTEGER DEFAULT 30,
+    features JSONB DEFAULT '{}'::jsonb,
+    created_at TIMESTAMPTZ DEFAULT NOW(),
+    updated_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+-- Sessions table
+CREATE TABLE IF NOT EXISTS sessions (
+    session_id TEXT PRIMARY KEY,
+    user_id TEXT NOT NULL,
+    guild_id TEXT NOT NULL REFERENCES guilds(guild_id) ON DELETE CASCADE,
+    created_at TIMESTAMPTZ DEFAULT NOW(),
+    expires_at TIMESTAMPTZ NOT NULL,
+    data JSONB DEFAULT '{}'::jsonb
+);
+
+CREATE INDEX IF NOT EXISTS idx_sessions_user_id ON sessions(user_id);
+CREATE INDEX IF NOT EXISTS idx_sessions_guild_id ON sessions(guild_id);
+CREATE INDEX IF NOT EXISTS idx_sessions_expires_at ON sessions(expires_at);
+
+-- Approvals table
+CREATE TABLE IF NOT EXISTS approvals (
+    approval_id TEXT PRIMARY KEY,
+    trace_id TEXT NOT NULL,
+    guild_id TEXT NOT NULL REFERENCES guilds(guild_id) ON DELETE CASCADE,
+    user_id TEXT NOT NULL,
+    content TEXT NOT NULL,
+    status TEXT DEFAULT 'pending',
+    reviewed_by TEXT,
+    created_at TIMESTAMPTZ DEFAULT NOW(),
+    reviewed_at TIMESTAMPTZ
+);
+
+CREATE INDEX IF NOT EXISTS idx_approvals_guild_id ON approvals(guild_id);
+CREATE INDEX IF NOT EXISTS idx_approvals_status ON approvals(status);
+
+-- Procedural memory table
+CREATE TABLE IF NOT EXISTS procedural_memory (
+    rule_id TEXT PRIMARY KEY,
+    guild_id TEXT NOT NULL REFERENCES guilds(guild_id) ON DELETE CASCADE,
+    trigger_condition JSONB NOT NULL DEFAULT '{}'::jsonb,
+    action JSONB NOT NULL DEFAULT '{}'::jsonb,
+    confidence NUMERIC(5, 4) DEFAULT 0.5,
+    created_at TIMESTAMPTZ DEFAULT NOW(),
+    updated_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_procedural_memory_guild_id ON procedural_memory(guild_id);
+CREATE INDEX IF NOT EXISTS idx_procedural_memory_confidence ON procedural_memory(confidence);
+
+-- Knowledge store table
+CREATE TABLE IF NOT EXISTS knowledge_store (
+    id SERIAL PRIMARY KEY,
+    guild_id TEXT NOT NULL REFERENCES guilds(guild_id) ON DELETE CASCADE,
+    snapshot JSONB NOT NULL DEFAULT '{}'::jsonb,
+    crawled_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_knowledge_store_guild_id ON knowledge_store(guild_id);
+CREATE INDEX IF NOT EXISTS idx_knowledge_store_crawled_at ON knowledge_store(crawled_at);
+
+-- Cost log table
+CREATE TABLE IF NOT EXISTS cost_log (
+    id SERIAL PRIMARY KEY,
+    trace_id TEXT NOT NULL,
+    guild_id TEXT NOT NULL,
+    agent_name TEXT NOT NULL,
+    provider TEXT NOT NULL,
+    tokens_in INTEGER DEFAULT 0,
+    tokens_out INTEGER DEFAULT 0,
+    cost_usd NUMERIC(10, 6) DEFAULT 0.0,
+    created_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_cost_log_guild_id ON cost_log(guild_id);
+CREATE INDEX IF NOT EXISTS idx_cost_log_agent_name ON cost_log(agent_name);
+CREATE INDEX IF NOT EXISTS idx_cost_log_created_at ON cost_log(created_at);
+
+-- Audit log table
+CREATE TABLE IF NOT EXISTS audit_log (
+    id SERIAL PRIMARY KEY,
+    trace_id TEXT NOT NULL,
+    guild_id TEXT NOT NULL,
+    user_id TEXT,
+    action TEXT NOT NULL,
+    details JSONB DEFAULT '{}'::jsonb,
+    created_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_audit_log_guild_id ON audit_log(guild_id);
+CREATE INDEX IF NOT EXISTS idx_audit_log_action ON audit_log(action);
+CREATE INDEX IF NOT EXISTS idx_audit_log_created_at ON audit_log(created_at);
 """
-SQLAlchemy ORM models for AuraFactory.
-Defines all database tables per spec (08_data_models.md).
-"""
-import uuid
-from datetime import datetime
-from sqlalchemy import (
-    Column, String, Integer, BigInteger, Boolean, DateTime,
-    ForeignKey, Text, Float,
-)
-from sqlalchemy.dialects.postgresql import UUID, JSONB
-from sqlalchemy.orm import declarative_base
-Base = declarative_base()
-
-
-class Workspace(Base):
-    """Discord guild/workspace registration."""
-    __tablename__ = "workspaces"
-
-    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    guild_id = Column(BigInteger, unique=True, nullable=False, index=True)
-    guild_name = Column(String(100))
-    owner_id = Column(String(50))
-    config = Column(JSONB, default={})
-    features = Column(JSONB, default={})
-    created_at = Column(DateTime, default=datetime.utcnow)
-    is_active = Column(Boolean, default=True)
-
-
-class SessionDB(Base):
-    """User conversation sessions."""
-    __tablename__ = "sessions"
-
-    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    user_id = Column(String(50), nullable=False, index=True)
-    guild_id = Column(BigInteger, ForeignKey("workspaces.guild_id"), index=True)
-    channel_id = Column(BigInteger)
-    message_history = Column(JSONB, default=[])
-    state = Column(JSONB, default={})
-    created_at = Column(DateTime, default=datetime.utcnow)
-    last_active = Column(DateTime, default=datetime.utcnow)
-    is_active = Column(Boolean, default=True)
-
-
-class TaskDB(Base):
-    """Agent task execution log."""
-    __tablename__ = "tasks"
-
-    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    trace_id = Column(String(50), nullable=False, index=True)
-    session_id = Column(UUID(as_uuid=True), ForeignKey("sessions.id"), nullable=True)
-    parent_task_id = Column(UUID(as_uuid=True), ForeignKey("tasks.id"), nullable=True)
-    agent_role = Column(String(20), nullable=False)
-    action = Column(String(100), nullable=False)
-    parameters = Column(JSONB, default={})
-    status = Column(String(20), default="pending")
-    result = Column(JSONB, default={})
-    error_message = Column(Text, default="")
-    execution_time_ms = Column(Float, default=0)
-    tokens_used = Column(Integer, default=0)
-    created_at = Column(DateTime, default=datetime.utcnow)
-    completed_at = Column(DateTime, nullable=True)
-
-
-class ApprovalDB(Base):
-    """Human-in-the-loop approval requests."""
-    __tablename__ = "approvals"
-
-    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    trace_id = Column(String(50), nullable=False, index=True)
-    task_id = Column(UUID(as_uuid=True), ForeignKey("tasks.id"), nullable=True)
-    guild_id = Column(BigInteger, nullable=False)
-    user_id = Column(String(50), nullable=False)
-    agent_role = Column(String(20), nullable=False)
-    action = Column(String(100), nullable=False)
-    parameters = Column(JSONB, default={})
-    risk_level = Column(String(20), nullable=False)
-    status = Column(String(20), default="pending")
-    created_at = Column(DateTime, default=datetime.utcnow)
-    decided_at = Column(DateTime, nullable=True)
-    decided_by = Column(String(50), nullable=True)
-    reason = Column(Text, default="")
-    expires_at = Column(DateTime, nullable=True)
-
-
-class MemoryDB(Base):
-    """Long-term memory entries (persisted)."""
-    __tablename__ = "memories"
-
-    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    guild_id = Column(BigInteger, index=True)
-    memory_type = Column(String(30), nullable=False, index=True)
-    content = Column(Text, nullable=False)
-    embedding_id = Column(String(100), nullable=True)
-    importance = Column(Float, default=0.5)
-    metadata = Column(JSONB, default={})
-    source = Column(String(30), default="inferred")
-    access_count = Column(Integer, default=0)
-    last_accessed = Column(DateTime, nullable=True)
-    created_at = Column(DateTime, default=datetime.utcnow)
-    updated_at = Column(DateTime, default=datetime.utcnow)
-
-
-class AuditLog(Base):
-    """Audit trail for all agent actions."""
-    __tablename__ = "audit_log"
-
-    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    trace_id = Column(String(50), nullable=False, index=True)
-    guild_id = Column(BigInteger, index=True)
-    user_id = Column(String(50))
-    agent_role = Column(String(20))
-    action = Column(String(100))
-    parameters = Column(JSONB, default={})
-    result_status = Column(String(20))
-    data = Column(JSONB, default={})
-    created_at = Column(DateTime, default=datetime.utcnow)

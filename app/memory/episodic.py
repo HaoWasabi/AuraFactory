@@ -1,82 +1,89 @@
-# app/memory/episodic.py
-"""
-Episodic Memory — stores past interaction events.
-Storage: VectorStore (ChromaDB Phase 1, OpenSearch Phase 2).
-"""
-import json
-import logging
-from typing import List, Optional
-from datetime import datetime
+"""EpisodicMemory — DISABLED placeholder for Phase 2.
 
-from app.models.memory import EpisodicEvent
+Episodic memory requires a vector store (e.g., pgvector, Pinecone)
+for similarity search over past experiences. Will be enabled in Phase 2.
+"""
+
+from __future__ import annotations
+
+import logging
+from typing import Any
 
 logger = logging.getLogger(__name__)
 
 
+class DisabledFeatureError(Exception):
+    """Raised when a disabled feature is accessed."""
+
+    pass
+
+
 class EpisodicMemory:
+    """Episodic memory — DISABLED.
+
+    All methods raise DisabledFeatureError. This placeholder ensures
+    the memory service interface is complete and ready for Phase 2
+    vector store integration.
     """
-    Stores and retrieves past interactions as episodic events.
-    Each event = user prompt + agent plan + execution results.
-    """
 
-    COLLECTION_PREFIX = "episodic"
+    def __init__(self) -> None:
+        logger.info("EpisodicMemory initialized (DISABLED)")
 
-    def __init__(self, vectorstore=None, embedding=None):
-        self._vectorstore = vectorstore
-        self._embedding = embedding
+    def store(self, guild_id: int, content: Any, metadata: dict[str, Any] | None = None) -> None:
+        """Store an episodic memory — DISABLED.
 
-    @property
-    def is_ready(self) -> bool:
-        return self._vectorstore is not None and self._embedding is not None
+        Args:
+            guild_id: Discord guild identifier.
+            content: Experience content to store.
+            metadata: Optional metadata.
 
-    async def store(self, event: EpisodicEvent) -> None:
-        """Embed and store an episodic event."""
-        if not self.is_ready:
-            logger.debug("EpisodicMemory not ready (no vectorstore/embedding), skipping store")
-            return
-
-        text = f"{event.user_prompt}\n{json.dumps(event.execution_results, ensure_ascii=False)}"
-        embedding = await self._embedding.embed(text)
-
-        await self._vectorstore.add(
-            collection=f"{self.COLLECTION_PREFIX}_{event.guild_id}",
-            id=event.trace_id,
-            text=text,
-            embedding=embedding,
-            metadata={
-                "timestamp": event.timestamp.isoformat(),
-                "importance": event.importance,
-                "session_id": event.session_id,
-                "user_prompt": event.user_prompt,
-            },
+        Raises:
+            DisabledFeatureError: Always raised.
+        """
+        raise DisabledFeatureError(
+            "Episodic memory disabled — requires vector store. Enable in Phase 2."
         )
 
-    async def search(
-        self, query: str, guild_id: int, top_k: int = 3
-    ) -> List[EpisodicEvent]:
-        """Retrieve relevant past episodes by similarity."""
-        if not self.is_ready:
-            return []
+    def recall(self, guild_id: int, query: str, limit: int = 10) -> list[Any]:
+        """Recall episodic memories — DISABLED.
 
-        embedding = await self._embedding.embed(query)
-        results = await self._vectorstore.query(
-            collection=f"{self.COLLECTION_PREFIX}_{guild_id}",
-            embedding=embedding,
-            top_k=top_k,
+        Args:
+            guild_id: Discord guild identifier.
+            query: Similarity search query.
+            limit: Maximum results.
+
+        Raises:
+            DisabledFeatureError: Always raised.
+        """
+        raise DisabledFeatureError(
+            "Episodic memory disabled — requires vector store. Enable in Phase 2."
         )
 
-        events = []
-        for r in results:
-            meta = r.get("metadata", {})
-            events.append(EpisodicEvent(
-                guild_id=guild_id,
-                session_id=meta.get("session_id", ""),
-                user_prompt=meta.get("user_prompt", ""),
-                agent_plan={},
-                execution_results=[],
-                timestamp=datetime.fromisoformat(meta["timestamp"]) if "timestamp" in meta else datetime.utcnow(),
-                trace_id=r.get("id", ""),
-                importance=meta.get("importance", 0.5),
-            ))
+    def forget(self, guild_id: int, memory_id: str) -> None:
+        """Forget an episodic memory — DISABLED.
 
-        return events
+        Args:
+            guild_id: Discord guild identifier.
+            memory_id: Memory identifier.
+
+        Raises:
+            DisabledFeatureError: Always raised.
+        """
+        raise DisabledFeatureError(
+            "Episodic memory disabled — requires vector store. Enable in Phase 2."
+        )
+
+    def search(self, guild_id: int, query: str, limit: int = 10) -> list[Any]:
+        """Search episodic memories — DISABLED.
+
+        Args:
+            guild_id: Discord guild identifier.
+            query: Search query.
+            limit: Maximum results.
+
+        Raises:
+            DisabledFeatureError: Always raised.
+        """
+        raise DisabledFeatureError(
+            "Episodic memory disabled — requires vector store. Enable in Phase 2."
+        )

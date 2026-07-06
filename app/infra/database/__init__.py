@@ -1,5 +1,5 @@
-# app/infra/database/__init__.py
-"""Database infrastructure — connection pool + ORM models."""
-from app.infra.database.connection import DatabasePool
+"""Database infrastructure."""
 
-__all__ = ["DatabasePool"]
+from .connection import Database
+
+__all__ = ["Database"]

@@ -1,154 +1,239 @@
-# app/tools/discord/permissions.py
 """
-Discord Permission Management Tools.
-Handles channel/category permission overwrites.
+Discord Permissions Connector — Channel and role permission overrides.
+
+Actions: set_channel_perms, set_role_perms, sync
 """
-from typing import Optional, Dict, Any
+
+from __future__ import annotations
+
+import logging
+from typing import Any, Dict, List
+
 import nextcord
 
+from app.connectors.base import BaseConnector
+from app.mcp.protocol import ToolDefinition
 
-async def set_channel_permission(
-    guild: nextcord.Guild,
-    channel_name: str,
-    target_name: str,
-    target_type: str = "role",  # "role" | "member"
-    allow: Optional[Dict[str, bool]] = None,
-    deny: Optional[Dict[str, bool]] = None,
-    reason: str = "AI Agent Request",
-) -> Dict[str, Any]:
-    """
-    Set permission overwrite on a channel for a role or member.
-    
-    Args:
-        channel_name: Name or ID of the channel
-        target_name: Name of the role or member
-        target_type: "role" or "member"
-        allow: Dict of permission names to allow (e.g. {"send_messages": True})
-        deny: Dict of permission names to deny (e.g. {"send_messages": True})
-        reason: Audit log reason
-    
-    Returns:
-        Dict with status and details
-    """
-    # Find channel
-    channel = None
-    for ch in guild.channels:
-        if ch.name == channel_name or str(ch.id) == str(channel_name):
-            channel = ch
-            break
-    
-    if not channel:
-        return {"success": False, "error": f"Channel '{channel_name}' not found"}
-
-    # Find target
-    target = None
-    if target_type == "role":
-        target = nextcord.utils.get(guild.roles, name=target_name)
-        if not target:
-            return {"success": False, "error": f"Role '{target_name}' not found"}
-    elif target_type == "member":
-        target = guild.get_member_named(target_name)
-        if not target:
-            # Try by ID
-            try:
-                target = await guild.fetch_member(int(target_name))
-            except (ValueError, nextcord.NotFound):
-                return {"success": False, "error": f"Member '{target_name}' not found"}
-
-    # Build permission overwrite
-    allow_perms = nextcord.PermissionOverwrite()
-    deny_perms = nextcord.PermissionOverwrite()
-    
-    if allow:
-        for perm_name, value in allow.items():
-            if hasattr(allow_perms, perm_name):
-                setattr(allow_perms, perm_name, True if value else None)
-    
-    if deny:
-        for perm_name, value in deny.items():
-            if hasattr(deny_perms, perm_name):
-                setattr(deny_perms, perm_name, False if value else None)
-
-    # Merge allow and deny into single overwrite
-    overwrite = nextcord.PermissionOverwrite()
-    if allow:
-        for perm_name, value in allow.items():
-            if hasattr(overwrite, perm_name) and value:
-                setattr(overwrite, perm_name, True)
-    if deny:
-        for perm_name, value in deny.items():
-            if hasattr(overwrite, perm_name) and value:
-                setattr(overwrite, perm_name, False)
-
-    await channel.set_permissions(target, overwrite=overwrite, reason=reason)
-
-    return {
-        "success": True,
-        "channel": channel.name,
-        "target": target_name,
-        "target_type": target_type,
-        "permissions_set": {"allow": allow or {}, "deny": deny or {}},
-    }
+logger = logging.getLogger(__name__)
 
 
-async def sync_channel_permissions(
-    guild: nextcord.Guild,
-    channel_name: str,
-    reason: str = "AI Agent Request",
-) -> Dict[str, Any]:
-    """
-    Sync channel permissions with its parent category.
-    """
-    channel = None
-    for ch in guild.channels:
-        if ch.name == channel_name or str(ch.id) == str(channel_name):
-            channel = ch
-            break
-    
-    if not channel:
-        return {"success": False, "error": f"Channel '{channel_name}' not found"}
-    
-    if not channel.category:
-        return {"success": False, "error": f"Channel '{channel_name}' has no parent category"}
+class PermissionsConnector(BaseConnector):
+    """Manages Discord permission overrides."""
 
-    await channel.edit(sync_permissions=True, reason=reason)
+    def __init__(self, bot: nextcord.Bot) -> None:
+        self._bot = bot
 
-    return {
-        "success": True,
-        "channel": channel.name,
-        "synced_with": channel.category.name,
-    }
+    # ------------------------------------------------------------------
+    # Actions
+    # ------------------------------------------------------------------
 
+    async def set_channel_perms(
+        self,
+        guild: nextcord.Guild,
+        channel_id: int,
+        target_id: int,
+        target_type: str = "role",
+        **perms: Any,
+    ) -> Dict[str, Any]:
+        """Set permission overrides for a channel.
 
-async def get_channel_permissions(
-    guild: nextcord.Guild,
-    channel_name: str,
-) -> Dict[str, Any]:
-    """
-    Get current permission overwrites for a channel.
-    """
-    channel = None
-    for ch in guild.channels:
-        if ch.name == channel_name or str(ch.id) == str(channel_name):
-            channel = ch
-            break
-    
-    if not channel:
-        return {"success": False, "error": f"Channel '{channel_name}' not found"}
+        Args:
+            guild: The target guild.
+            channel_id: Channel to modify.
+            target_id: Role or member ID to set overrides for.
+            target_type: 'role' or 'member'.
+            **perms: Permission overrides (permission_name=True/False/None).
 
-    overwrites = []
-    for target, overwrite in channel.overwrites.items():
-        target_type = "role" if isinstance(target, nextcord.Role) else "member"
-        allow, deny = overwrite.pair()
-        overwrites.append({
-            "target": target.name if hasattr(target, 'name') else str(target),
-            "target_type": target_type,
-            "allow": [perm for perm, value in allow if value],
-            "deny": [perm for perm, value in deny if value],
-        })
+        Returns:
+            Dict confirming the update.
+        """
+        channel = guild.get_channel(int(channel_id))
+        if channel is None:
+            raise ValueError(f"Channel '{channel_id}' not found in guild")
 
-    return {
-        "success": True,
-        "channel": channel.name,
-        "overwrites": overwrites,
-    }
+        if target_type == "role":
+            target = guild.get_role(int(target_id))
+            if target is None:
+                raise ValueError(f"Role '{target_id}' not found in guild")
+        elif target_type == "member":
+            target = guild.get_member(int(target_id))
+            if target is None:
+                raise ValueError(f"Member '{target_id}' not found in guild")
+        else:
+            raise ValueError(f"target_type must be 'role' or 'member', got '{target_type}'")
+
+        if not perms:
+            raise ValueError("No permission overrides provided")
+
+        try:
+            overwrite = nextcord.PermissionOverwrite(**perms)
+            await channel.set_permissions(target, overwrite=overwrite)
+            logger.info(
+                "Set channel perms on '%s' for %s '%s': %s",
+                channel.name,
+                target_type,
+                target_id,
+                list(perms.keys()),
+            )
+            return {
+                "channel_id": str(channel_id),
+                "target_id": str(target_id),
+                "target_type": target_type,
+                "permissions_set": perms,
+            }
+        except nextcord.errors.Forbidden:
+            raise PermissionError("manage_permissions")
+        except nextcord.errors.HTTPException as exc:
+            raise RuntimeError(f"Failed to set channel permissions: {exc}")
+
+    async def set_role_perms(
+        self,
+        guild: nextcord.Guild,
+        role_id: int,
+        **perms: Any,
+    ) -> Dict[str, Any]:
+        """Set base permissions for a role.
+
+        Args:
+            guild: The target guild.
+            role_id: Role to modify.
+            **perms: Permission values (permission_name=True/False).
+
+        Returns:
+            Dict confirming the update.
+        """
+        role = guild.get_role(int(role_id))
+        if role is None:
+            raise ValueError(f"Role '{role_id}' not found in guild")
+
+        if not perms:
+            raise ValueError("No permissions provided")
+
+        try:
+            new_perms = nextcord.Permissions(**perms)
+            await role.edit(permissions=new_perms)
+            logger.info(
+                "Set role perms for '%s' (id=%s): %s",
+                role.name,
+                role_id,
+                list(perms.keys()),
+            )
+            return {
+                "role_id": str(role_id),
+                "role_name": role.name,
+                "permissions_set": perms,
+            }
+        except nextcord.errors.Forbidden:
+            raise PermissionError("manage_roles")
+        except nextcord.errors.HTTPException as exc:
+            raise RuntimeError(f"Failed to set role permissions: {exc}")
+
+    async def sync(
+        self,
+        guild: nextcord.Guild,
+        channel_id: int,
+        category_id: int,
+    ) -> Dict[str, Any]:
+        """Sync a channel's permissions with its parent category.
+
+        Args:
+            guild: The target guild.
+            channel_id: Channel to sync.
+            category_id: Category to sync from.
+
+        Returns:
+            Dict confirming the sync.
+        """
+        channel = guild.get_channel(int(channel_id))
+        if channel is None:
+            raise ValueError(f"Channel '{channel_id}' not found in guild")
+
+        category = guild.get_channel(int(category_id))
+        if category is None or not isinstance(category, nextcord.CategoryChannel):
+            raise ValueError(f"Category '{category_id}' not found in guild")
+
+        try:
+            # Move channel under category with sync_permissions=True
+            await channel.edit(category=category, sync_permissions=True)
+            logger.info(
+                "Synced permissions for channel '%s' with category '%s'",
+                channel.name,
+                category.name,
+            )
+            return {
+                "channel_id": str(channel_id),
+                "category_id": str(category_id),
+                "synced": True,
+            }
+        except nextcord.errors.Forbidden:
+            raise PermissionError("manage_channels")
+        except nextcord.errors.HTTPException as exc:
+            raise RuntimeError(f"Failed to sync permissions: {exc}")
+
+    # ------------------------------------------------------------------
+    # BaseConnector interface
+    # ------------------------------------------------------------------
+
+    async def execute(self, action: str, **params: Any) -> Dict[str, Any]:
+        """Dispatch to the appropriate action method."""
+        actions = {
+            "set_channel_perms": self.set_channel_perms,
+            "set_role_perms": self.set_role_perms,
+            "sync": self.sync,
+        }
+        handler = actions.get(action)
+        if handler is None:
+            raise ValueError(
+                f"Unknown action '{action}' for PermissionsConnector. "
+                f"Available: {list(actions.keys())}"
+            )
+        return await handler(**params)
+
+    def get_tool_definitions(self) -> List[ToolDefinition]:
+        """Return tool definitions for permission operations."""
+        return [
+            ToolDefinition(
+                name="discord.permissions.set_channel_perms",
+                description="Set permission overrides for a specific role/member on a channel.",
+                parameters={
+                    "type": "object",
+                    "properties": {
+                        "guild_id": {"type": "string", "description": "Target guild ID."},
+                        "channel_id": {"type": "string", "description": "Channel ID."},
+                        "target_id": {"type": "string", "description": "Role or member ID."},
+                        "target_type": {"type": "string", "enum": ["role", "member"], "description": "Target type."},
+                    },
+                    "required": ["guild_id", "channel_id", "target_id", "target_type"],
+                    "additionalProperties": True,
+                },
+                risk_level="high",
+            ),
+            ToolDefinition(
+                name="discord.permissions.set_role_perms",
+                description="Set base permissions for a role.",
+                parameters={
+                    "type": "object",
+                    "properties": {
+                        "guild_id": {"type": "string", "description": "Target guild ID."},
+                        "role_id": {"type": "string", "description": "Role ID."},
+                    },
+                    "required": ["guild_id", "role_id"],
+                    "additionalProperties": True,
+                },
+                risk_level="high",
+            ),
+            ToolDefinition(
+                name="discord.permissions.sync",
+                description="Sync a channel's permissions with its parent category.",
+                parameters={
+                    "type": "object",
+                    "properties": {
+                        "guild_id": {"type": "string", "description": "Target guild ID."},
+                        "channel_id": {"type": "string", "description": "Channel ID to sync."},
+                        "category_id": {"type": "string", "description": "Category ID to sync from."},
+                    },
+                    "required": ["guild_id", "channel_id", "category_id"],
+                },
+                risk_level="medium",
+            ),
+        ]

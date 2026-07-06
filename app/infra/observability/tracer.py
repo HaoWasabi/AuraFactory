@@ -1,158 +1,87 @@
-# app/infra/observability/tracer.py
-"""
-Distributed tracing — all agent actions flow through here.
-Migrated from app/observability/tracer.py — logic preserved.
-Phase 1: Structured logging + JSONL files.
-Phase 2: AWS X-Ray / CloudWatch.
-"""
-import json
+"""Request tracing for distributed observability."""
+
 import logging
-from dataclasses import dataclass, field, asdict
-from datetime import datetime
-from typing import Optional, Dict, Any, List
-from uuid import uuid4
-from pathlib import Path
+import time
+import uuid
+from dataclasses import dataclass, field
+from typing import Dict, List, Optional
 
 logger = logging.getLogger(__name__)
 
 
 @dataclass
-class TraceEvent:
-    """A single trace event."""
+class Span:
+    """A single span within a trace."""
+
+    name: str
     trace_id: str
-    span_id: str
-    agent_id: str
-    event_type: str      # reasoning | tool_call | handoff | approval | error
-    content: Dict[str, Any]
-    timestamp: str = field(default_factory=lambda: datetime.now().isoformat())
-    parent_span_id: Optional[str] = None
-    duration_ms: float = 0.0
-    status: str = "ok"
+    span_id: str = field(default_factory=lambda: str(uuid.uuid4())[:8])
+    start_time: float = field(default_factory=time.time)
+    end_time: Optional[float] = None
+    metadata: Dict[str, str] = field(default_factory=dict)
+
+    @property
+    def duration_ms(self) -> float:
+        """Duration in milliseconds."""
+        if self.end_time is None:
+            return (time.time() - self.start_time) * 1000
+        return (self.end_time - self.start_time) * 1000
 
 
 class Tracer:
-    """
-    Distributed tracing service.
-    Logs reasoning, tool calls, handoffs, approvals, errors.
-    Persists traces as JSONL files for audit.
-    """
+    """Simple request tracer for tracking execution flow."""
 
-    def __init__(self, log_dir: str = "logs/traces", console_output: bool = True):
-        self._log_dir = Path(log_dir)
-        self._log_dir.mkdir(parents=True, exist_ok=True)
-        self._console = console_output
-        self._events: List[TraceEvent] = []
+    def __init__(self) -> None:
+        self._active_traces: Dict[str, List[Span]] = {}
+        self._current_trace_id: Optional[str] = None
 
-    def new_trace(self) -> str:
-        """Generate a new trace ID."""
-        return str(uuid4())[:8]
+    @staticmethod
+    def generate_trace_id() -> str:
+        """Generate a unique trace identifier."""
+        return str(uuid.uuid4())
 
-    def new_span(self) -> str:
-        """Generate a new span ID."""
-        return str(uuid4())[:8]
+    def start_span(self, name: str, trace_id: Optional[str] = None) -> Span:
+        """Start a new span within a trace.
 
-    def log_reasoning(self, trace_id: str, agent_id: str, thought: str, **kwargs) -> str:
-        """Log an agent reasoning step."""
-        span_id = self.new_span()
-        event = TraceEvent(
-            trace_id=trace_id, span_id=span_id, agent_id=agent_id,
-            event_type="reasoning", content={"thought": thought, **kwargs},
+        Args:
+            name: Descriptive name for the span.
+            trace_id: Optional trace ID. Uses current trace if not provided.
+
+        Returns:
+            The newly created Span.
+        """
+        tid = trace_id or self._current_trace_id or self.generate_trace_id()
+        self._current_trace_id = tid
+
+        span = Span(name=name, trace_id=tid)
+
+        if tid not in self._active_traces:
+            self._active_traces[tid] = []
+        self._active_traces[tid].append(span)
+
+        logger.debug("Started span '%s' (trace=%s, span=%s)", name, tid, span.span_id)
+        return span
+
+    def end_span(self, span: Span) -> None:
+        """End a span and record its duration."""
+        span.end_time = time.time()
+        logger.debug(
+            "Ended span '%s' (trace=%s, duration=%.2fms)",
+            span.name,
+            span.trace_id,
+            span.duration_ms,
         )
-        self._emit(event)
-        return span_id
 
-    def log_tool_call(
-        self, trace_id: str, agent_id: str,
-        tool_name: str, tool_input: Dict, tool_output: Any,
-        duration_ms: float, status: str = "ok",
-        parent_span_id: Optional[str] = None,
-    ) -> str:
-        """Log a tool execution."""
-        span_id = self.new_span()
-        event = TraceEvent(
-            trace_id=trace_id, span_id=span_id, agent_id=agent_id,
-            event_type="tool_call",
-            content={
-                "tool_name": tool_name,
-                "input": tool_input,
-                "output": tool_output if isinstance(tool_output, (dict, str)) else str(tool_output),
-            },
-            duration_ms=duration_ms, status=status, parent_span_id=parent_span_id,
-        )
-        self._emit(event)
-        return span_id
+    def get_current_trace(self) -> Optional[str]:
+        """Get the current active trace ID."""
+        return self._current_trace_id
 
-    def log_handoff(self, trace_id: str, from_agent: str, to_agent: str, task_summary: str) -> str:
-        """Log agent-to-agent handoff."""
-        span_id = self.new_span()
-        event = TraceEvent(
-            trace_id=trace_id, span_id=span_id, agent_id=from_agent,
-            event_type="handoff",
-            content={"from": from_agent, "to": to_agent, "task": task_summary},
-        )
-        self._emit(event)
-        return span_id
+    def get_spans(self, trace_id: str) -> List[Span]:
+        """Get all spans for a given trace ID."""
+        return self._active_traces.get(trace_id, [])
 
-    def log_approval(
-        self, trace_id: str, agent_id: str,
-        action: str, approved: bool, approver: str = "system",
-    ) -> str:
-        """Log approval request/decision."""
-        span_id = self.new_span()
-        event = TraceEvent(
-            trace_id=trace_id, span_id=span_id, agent_id=agent_id,
-            event_type="approval",
-            content={"action": action, "approved": approved, "approver": approver},
-            status="ok" if approved else "rejected",
-        )
-        self._emit(event)
-        return span_id
-
-    def log_error(self, trace_id: str, agent_id: str, error: str, **kwargs) -> str:
-        """Log an error event."""
-        span_id = self.new_span()
-        event = TraceEvent(
-            trace_id=trace_id, span_id=span_id, agent_id=agent_id,
-            event_type="error", content={"error": error, **kwargs}, status="error",
-        )
-        self._emit(event)
-        return span_id
-
-    def log_security(self, trace_id: str, event_type: str, details: str) -> str:
-        """Log a security event."""
-        span_id = self.new_span()
-        event = TraceEvent(
-            trace_id=trace_id, span_id=span_id, agent_id="security",
-            event_type="security",
-            content={"event_type": event_type, "details": details},
-            status="warning",
-        )
-        self._emit(event)
-        return span_id
-
-    def get_trace(self, trace_id: str) -> List[Dict]:
-        """Get all events for a trace."""
-        return [asdict(e) for e in self._events if e.trace_id == trace_id]
-
-    def _emit(self, event: TraceEvent) -> None:
-        """Store event and optionally output to console/file."""
-        self._events.append(event)
-
-        if self._console:
-            icon = {
-                "reasoning": "🧠", "tool_call": "🔧", "handoff": "🔀",
-                "approval": "✅" if event.content.get("approved") else "❌",
-                "error": "💥", "security": "🛡️",
-            }.get(event.event_type, "📍")
-            print(
-                f"  {icon} [{event.trace_id}] {event.agent_id}.{event.event_type}: "
-                f"{json.dumps(event.content, ensure_ascii=False, default=str)[:200]}"
-            )
-
-        # Persist to JSONL file
-        try:
-            log_file = self._log_dir / f"trace_{event.trace_id}.jsonl"
-            with open(log_file, "a", encoding="utf-8") as f:
-                f.write(json.dumps(asdict(event), ensure_ascii=False, default=str) + "\n")
-        except Exception as e:
-            logger.warning(f"Failed to persist trace event: {e}")
+    def clear_trace(self, trace_id: str) -> None:
+        """Remove a completed trace from memory."""
+        self._active_traces.pop(trace_id, None)
+        if self._current_trace_id == trace_id:
+            self._current_trace_id = None

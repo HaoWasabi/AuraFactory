@@ -1,64 +1,59 @@
-# Makefile — AuraFactory v3.0 Development Commands
-.PHONY: help install run dev db-up db-down clean test lint format
+# AuraFactory — Makefile
+# Usage: make <target>
 
-help: ## Show this help
-	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | sort | awk 'BEGIN {FS = ":.*?## "}; {printf "\033[36m%-20s\033[0m %s\n", $$1, $$2}'
+.PHONY: setup dev test db-reset docker-up docker-down lint clean help
 
-# === Setup ===
-install: ## Install Python dependencies
+# Default target
+help:
+	@echo "AuraFactory Development Commands"
+	@echo "================================="
+	@echo "  make setup       - Install dependencies + create dirs"
+	@echo "  make dev         - Run development server (uvicorn reload)"
+	@echo "  make test        - Run test suite"
+	@echo "  make db-reset    - Reset database (drop + recreate)"
+	@echo "  make docker-up   - Start all services via docker-compose"
+	@echo "  make docker-down - Stop all docker services"
+	@echo "  make lint        - Run linter (ruff)"
+	@echo "  make clean       - Remove cache and temp files"
+
+# Setup project
+setup:
 	pip install -r requirements.txt
+	mkdir -p data/knowledge logs/traces frontend/static
+	@echo "✅ Setup complete. Copy .env.example to .env and configure."
 
-# === Run ===
-run: ## Run the application (production mode)
-	python -m uvicorn app.main:app --host 0.0.0.0 --port 8000
+# Development server (with reload)
+dev:
+	uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
 
-dev: ## Run with auto-reload (development)
-	python -m uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
+# Run tests
+test:
+	python -m pytest tests/ -v --tb=short
 
-main: ## Run via main.py directly (shows banner)
-	python -m app.main
+# Reset database
+db-reset:
+	@echo "⚠️  Dropping and recreating database..."
+	docker exec aurafactory-db psql -U aurafactory -c "DROP SCHEMA public CASCADE; CREATE SCHEMA public;"
+	@echo "✅ Database reset complete."
 
-# === Docker ===
-db-up: ## Start PostgreSQL in Docker
-	docker-compose up -d postgres
+# Docker compose up
+docker-up:
+	docker-compose up -d --build
+	@echo "✅ Services started. App: http://localhost:8000"
 
-db-down: ## Stop PostgreSQL
-	docker-compose down
+# Docker compose down
+docker-down:
+	docker-compose down -v
+	@echo "✅ Services stopped."
 
-docker-up: ## Start all services
-	docker-compose up -d
-
-docker-down: ## Stop all services
-	docker-compose down
-
-docker-logs: ## View application logs
-	docker-compose logs -f app
-
-# === Code Quality ===
-lint: ## Run linter (ruff)
+# Lint code
+lint:
 	ruff check app/ --fix
+	ruff format app/
 
-format: ## Format code (black)
-	black app/ --line-length=100
-
-test: ## Run tests
-	pytest tests/ -v
-
-test-cov: ## Run tests with coverage
-	pytest tests/ --cov=app --cov-report=html
-
-# === Utilities ===
-clean: ## Remove __pycache__ and temp files
-	find . -type d -name "__pycache__" -exec rm -rf {} + 2>/dev/null || true
-	find . -type f -name "*.pyc" -delete 2>/dev/null || true
-	rm -rf .pytest_cache htmlcov .coverage
-
-tree: ## Show project structure
-	tree app/ -I __pycache__ --dirsfirst
-
-# === Database ===
-db-migrate: ## Run database migrations (placeholder)
-	@echo "TODO: Alembic migrations"
-
-db-reset: ## Reset database
-	docker-compose exec postgres psql -U aurafactory -c "DROP DATABASE IF EXISTS aurafactory; CREATE DATABASE aurafactory;"
+# Clean temp files
+clean:
+	find . -type d -name __pycache__ -exec rm -rf {} + 2>/dev/null || true
+	find . -name "*.pyc" -delete 2>/dev/null || true
+	rm -rf .pytest_cache .ruff_cache
+	@echo "✅ Cleaned."

@@ -1,136 +1,99 @@
-# app/infra/llm/gemini.py
-"""
-Gemini LLM provider (Phase 1).
-Migrated from app/providers/gemini.py — logic preserved.
-"""
-import time
-import json
-from typing import List, Dict, Any, Optional
+"""Gemini LLM provider using google-generativeai SDK."""
+
+import asyncio
+import logging
+from typing import Any, Dict, List, Optional
 
 import google.generativeai as genai
 
-from app.infra.llm.base import LLMProvider, LLMResponse
+from .base import BaseLLM, LLMResponse, ToolCall, UsageStats
+
+logger = logging.getLogger(__name__)
 
 
-class GeminiProvider(LLMProvider):
-    """Google Gemini API implementation."""
+class GeminiLLM(BaseLLM):
+    """Google Gemini LLM provider."""
 
-    def __init__(self, api_key: str, model_id: str = "gemini-2.5-flash"):
-        genai.configure(api_key=api_key)
-        self._model_id = model_id
-        self._model = genai.GenerativeModel(model_id)
-
-    @property
-    def model_name(self) -> str:
-        return self._model_id
+    def __init__(self, model: str = "gemini-2.5-flash", api_key: str = "") -> None:
+        super().__init__(model=model, api_key=api_key)
+        genai.configure(api_key=self.api_key)
+        self._model = genai.GenerativeModel(self.model)
+        logger.info("GeminiLLM initialized (model=%s)", self.model)
 
     async def generate(
         self,
-        messages: List[Dict[str, str]],
-        system_prompt: str = "",
-        temperature: float = 0.3,
-        max_tokens: int = 4096,
-        tools: Optional[List[Dict]] = None,
+        prompt: str,
+        tools: Optional[List[Dict[str, Any]]] = None,
+        temperature: float = 0.7,
     ) -> LLMResponse:
-        start = time.time()
+        """Generate a response using Gemini.
 
-        history = []
-        for msg in messages[:-1]:
-            role = "user" if msg["role"] == "user" else "model"
-            history.append({"role": role, "parts": msg["content"]})
+        Retries once on timeout errors.
+        """
+        generation_config = genai.types.GenerationConfig(temperature=temperature)
 
-        chat = self._model.start_chat(history=history)
+        gemini_tools = self._convert_tools(tools) if tools else None
 
-        last_msg = messages[-1]["content"] if messages else ""
-        if system_prompt:
-            last_msg = f"[System Instructions]\n{system_prompt}\n\n[User Message]\n{last_msg}"
-
-        response = chat.send_message(
-            last_msg,
-            generation_config=genai.GenerationConfig(
-                temperature=temperature,
-                max_output_tokens=max_tokens,
-            ),
-        )
-
-        latency = (time.time() - start) * 1000
-
-        input_tokens = 0
-        output_tokens = 0
-        try:
-            if hasattr(response, "usage_metadata") and response.usage_metadata:
-                input_tokens = getattr(response.usage_metadata, "prompt_token_count", 0) or 0
-                output_tokens = getattr(response.usage_metadata, "candidates_token_count", 0) or 0
-        except Exception:
-            pass
-
-        return LLMResponse(
-            content=response.text,
-            model=self._model_id,
-            input_tokens=input_tokens,
-            output_tokens=output_tokens,
-            latency_ms=latency,
-            raw_response=response,
-        )
-
-    async def generate_with_tools(
-        self,
-        messages: List[Dict[str, str]],
-        system_prompt: str,
-        tools: List[Dict],
-        temperature: float = 0.3,
-    ) -> Dict[str, Any]:
-        start = time.time()
-
-        gemini_tools = []
-        for tool in tools:
-            gemini_tools.append(
-                genai.protos.Tool(
-                    function_declarations=[
-                        genai.protos.FunctionDeclaration(
-                            name=tool["name"],
-                            description=tool.get("description", ""),
-                            parameters=tool.get("parameters", {}),
-                        )
-                    ]
+        for attempt in range(2):
+            try:
+                response = await asyncio.to_thread(
+                    self._model.generate_content,
+                    prompt,
+                    generation_config=generation_config,
+                    tools=gemini_tools,
                 )
+                return self._parse_response(response)
+
+            except Exception as e:
+                if attempt == 0 and "timeout" in str(e).lower():
+                    logger.warning("Gemini timeout, retrying once... (error: %s)", e)
+                    await asyncio.sleep(1.0)
+                    continue
+                logger.error("Gemini generation failed: %s", e)
+                raise
+
+        return LLMResponse(content="", tool_calls=[], usage=UsageStats())
+
+    def _convert_tools(self, tools: List[Dict[str, Any]]) -> List[Any]:
+        """Convert generic tool definitions to Gemini format."""
+        function_declarations = []
+        for tool in tools:
+            func_decl = genai.types.FunctionDeclaration(
+                name=tool.get("name", ""),
+                description=tool.get("description", ""),
+                parameters=tool.get("parameters", {}),
+            )
+            function_declarations.append(func_decl)
+
+        if function_declarations:
+            return [genai.types.Tool(function_declarations=function_declarations)]
+        return []
+
+    def _parse_response(self, response: Any) -> LLMResponse:
+        """Parse Gemini response into standardized LLMResponse."""
+        content = ""
+        tool_calls: List[ToolCall] = []
+
+        if response.candidates:
+            candidate = response.candidates[0]
+            for part in candidate.content.parts:
+                if hasattr(part, "text") and part.text:
+                    content += part.text
+                elif hasattr(part, "function_call") and part.function_call:
+                    fc = part.function_call
+                    tool_calls.append(
+                        ToolCall(
+                            name=fc.name,
+                            arguments=dict(fc.args) if fc.args else {},
+                        )
+                    )
+
+        usage = UsageStats()
+        if hasattr(response, "usage_metadata") and response.usage_metadata:
+            usage = UsageStats(
+                prompt_tokens=getattr(response.usage_metadata, "prompt_token_count", 0),
+                completion_tokens=getattr(response.usage_metadata, "candidates_token_count", 0),
+                total_tokens=getattr(response.usage_metadata, "total_token_count", 0),
             )
 
-        model_with_tools = genai.GenerativeModel(
-            self._model_id,
-            tools=gemini_tools,
-            system_instruction=system_prompt,
-        )
-
-        history = []
-        for msg in messages[:-1]:
-            role = "user" if msg["role"] == "user" else "model"
-            history.append({"role": role, "parts": msg["content"]})
-
-        chat = model_with_tools.start_chat(history=history)
-        last_msg = messages[-1]["content"] if messages else ""
-
-        response = chat.send_message(
-            last_msg,
-            generation_config=genai.GenerationConfig(temperature=temperature),
-        )
-
-        tool_calls = []
-        content = ""
-
-        for part in response.parts:
-            if hasattr(part, "function_call") and part.function_call:
-                fc = part.function_call
-                tool_calls.append({
-                    "name": fc.name,
-                    "arguments": dict(fc.args) if fc.args else {},
-                })
-            elif hasattr(part, "text") and part.text:
-                content += part.text
-
-        return {
-            "content": content,
-            "tool_calls": tool_calls,
-            "latency_ms": (time.time() - start) * 1000,
-            "model": self._model_id,
-        }
+        return LLMResponse(content=content, tool_calls=tool_calls, usage=usage)

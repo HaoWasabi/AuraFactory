@@ -1,143 +1,184 @@
-# tools/discord_guild.py hoặc bổ sung vào lớp Management
-import json
+"""
+Discord Guild Connector — Guild-level configuration operations.
+
+Actions: edit_name, edit_icon, get_info
+"""
+
+from __future__ import annotations
+
+import logging
+from typing import Any, Dict, List
+
 import nextcord
-import aiohttp
-from typing import Optional, Dict, Any
 
-class DiscordGuild:
-    """
-    Tập hợp các bộ công cụ (Tools) dành cho Agentic AI nhằm chỉnh sửa cấu hình cốt lõi
-    của Máy chủ (Guild/Server) như Tên, Icon, Banner và các tính năng hệ thống.
-    """
+from app.connectors.base import BaseConnector
+from app.mcp.protocol import ToolDefinition
 
-    @staticmethod
-    async def modify_server_profile(guild: nextcord.Guild, **kwargs) -> str:
+logger = logging.getLogger(__name__)
+
+
+class GuildConnector(BaseConnector):
+    """Manages Discord guild-level settings."""
+
+    def __init__(self, bot: nextcord.Bot) -> None:
+        self._bot = bot
+
+    # ------------------------------------------------------------------
+    # Actions
+    # ------------------------------------------------------------------
+
+    async def edit_name(
+        self,
+        guild: nextcord.Guild,
+        new_name: str,
+    ) -> Dict[str, Any]:
+        """Change the guild name.
+
+        Args:
+            guild: The target guild.
+            new_name: The new guild name.
+
+        Returns:
+            Dict with old and new names.
         """
-        Công cụ chỉnh sửa thông tin hồ sơ của Server (Tên, Icon, Banner, Băng thông, Mức độ bảo mật).
-        Hỗ trợ các tham số qua kwargs:
-          - new_name: Đổi tên Server (str)
-          - icon_url: Đường dẫn ảnh để đổi Avatar Server (str)
-          - banner_url: Đường dẫn ảnh để đổi Ảnh nền Server (str)
-          - verification_level: Mức độ xác minh bảo mật của Server (str: 'none', 'low', 'medium', 'high', 'highest')
-          - enable_community: Bật hoặc tắt tính năng Cộng đồng (bool: True/False)
-        """
+        if not new_name or not new_name.strip():
+            raise ValueError("Guild name cannot be empty")
+
         try:
-            # Kiểm tra quyền: Chỉ có Chủ server hoặc người có quyền Administrator mới được sửa cấu hình Server
-            if not guild.me.guild_permissions.manage_guild:
-                return json.dumps({"status": "error", "message": "Bot thiếu quyền 'Manage Server' (Quản lý máy chủ) để thực hiện lệnh này."}, ensure_ascii=False)
-
-            # Đổi tên tham số cho khớp với Nextcord API
-            if 'new_name' in kwargs:
-                kwargs['name'] = kwargs.pop('new_name')
-
-            # Chuẩn hóa mức độ xác minh bảo mật (Verification Level) nếu Agent truyền vào
-            if 'verification_level' in kwargs:
-                v_level = kwargs['verification_level'].lower().strip()
-                level_mapping = {
-                    'none': nextcord.VerificationLevel.none,
-                    'low': nextcord.VerificationLevel.low,
-                    'medium': nextcord.VerificationLevel.medium,
-                    'high': nextcord.VerificationLevel.high,
-                    'highest': nextcord.VerificationLevel.highest
-                }
-                if v_level in level_mapping:
-                    kwargs['verification_level'] = level_mapping[v_level]
-                else:
-                    kwargs.pop('verification_level') # Bỏ qua nếu Agent truyền bậy
-
-            # Xử lý tải ảnh động bằng aiohttp nếu Agent truyền URL ảnh đại diện hoặc Banner
-            async def download_image_bytes(url: str) -> Optional[bytes]:
-                try:
-                    async with aiohttp.ClientSession() as session:
-                        async with session.get(url, timeout=10) as response:
-                            if response.status == 200:
-                                return await response.read()
-                except:
-                    return None
-                return None
-
-            if 'icon_url' in kwargs:
-                img_bytes = await download_image_bytes(kwargs.pop('icon_url'))
-                if img_bytes: kwargs['icon'] = img_bytes
-
-            if 'banner_url' in kwargs:
-                banner_bytes = await download_image_bytes(kwargs.pop('banner_url'))
-                if banner_bytes: kwargs['banner'] = banner_bytes
-
-            # TÍCH HỢP LOGIC NÂNG/HẠ CẤP CỘNG ĐỒNG (COMMUNITY)
-            if 'enable_community' in kwargs:
-                enable_community = kwargs.pop('enable_community')
-                # Lấy danh sách các tính năng hiện tại của guild đưa vào mảng để tùy biến
-                current_features = list(guild.features)
-
-                if enable_community:
-                    if "COMMUNITY" not in current_features:
-                        current_features.append("COMMUNITY")
-                        kwargs['features'] = current_features
-                        
-                        # Điều kiện bắt buộc của Discord: Phải gán kênh Quy định và kênh Cập nhật
-                        # Nếu máy chủ chưa chỉ định sẵn, Bot lấy đại kênh văn bản đầu tiên của Server để lấp chỗ trống
-                        fallback_channel = guild.text_channels[0] if guild.text_channels else None
-                        if not fallback_channel:
-                            return json.dumps({"status": "error", "message": "Thất bại: Server phải có ít nhất 1 kênh văn bản để làm kênh quy định khi bật Cộng đồng."}, ensure_ascii=False)
-                        
-                        kwargs['rules_channel'] = guild.rules_channel or fallback_channel
-                        kwargs['public_updates_channel'] = guild.public_updates_channel or fallback_channel
-                else:
-                    if "COMMUNITY" in current_features:
-                        current_features.remove("COMMUNITY")
-                        kwargs['features'] = current_features
-
-            # Lọc các tham số hợp lệ mà đối tượng Guild hỗ trợ sửa đổi trực tiếp
-            valid_kwargs = {}
-            for key, val in kwargs.items():
-                if val is not None and hasattr(guild, key):
-                    valid_kwargs[key] = val
-
-            # Thực thi chỉnh sửa
-            if valid_kwargs:
-                await guild.edit(**valid_kwargs)
-
-            # Chuẩn hóa lại tên hiển thị trong kết quả trả về cho đẹp
-            updated_fields_log = list(valid_kwargs.keys())
-            if 'features' in updated_fields_log:
-                updated_fields_log.remove('features')
-                updated_fields_log.append('community_status')
-
-            return json.dumps({
-                "status": "success",
-                "action": "modify_server_profile",
-                "guild_id": guild.id,
-                "updated_fields": updated_fields_log
-            }, ensure_ascii=False)
-
-        except nextcord.Forbidden:
-            return json.dumps({"status": "error", "message": "Bot bị từ chối quyền chỉnh sửa thông tin máy chủ."}, ensure_ascii=False)
-        except Exception as e:
-            return json.dumps({"status": "error", "message": f"Thất bại khi sửa thông tin server: {str(e)}"}, ensure_ascii=False)
-
-    @staticmethod
-    async def get_server_info(guild: nextcord.Guild) -> str:
-        """
-        Công cụ quét và kết xuất toàn bộ thông tin trạng thái của Server (Tương ứng lệnh @server_info).
-        Giúp Agent nắm được tổng quan tình hình Server trước khi đưa ra quyết định setup.
-        """
-        try:
-            info = {
-                "status": "success",
-                "server_name": guild.name,
-                "server_id": guild.id,
-                "owner_id": guild.owner_id,
-                "member_count": guild.member_count,
-                "premium_tier_boost": guild.premium_tier, # Cấp độ Boost của server
-                "premium_subscription_count": guild.premium_subscription_count, # Số lượng lượt Boost
-                "verification_level": str(guild.verification_level),
-                "total_channels": len(guild.channels),
-                "total_roles": len(guild.roles),
-                "icon_url": guild.icon.url if guild.icon else None,
-                "banner_url": guild.banner.url if guild.banner else None,
-                "features": list(guild.features)
+            old_name = guild.name
+            await guild.edit(name=new_name)
+            logger.info("Renamed guild '%s' -> '%s'", old_name, new_name)
+            return {
+                "old_name": old_name,
+                "new_name": new_name,
             }
-            return json.dumps(info, ensure_ascii=False)
-        except Exception as e:
-            return json.dumps({"status": "error", "message": f"Không thể lấy thông tin server: {str(e)}"}, ensure_ascii=False)
+        except nextcord.errors.Forbidden:
+            raise PermissionError("manage_guild")
+        except nextcord.errors.HTTPException as exc:
+            raise RuntimeError(f"Failed to edit guild name: {exc}")
+
+    async def edit_icon(
+        self,
+        guild: nextcord.Guild,
+        icon_url: str,
+    ) -> Dict[str, Any]:
+        """Change the guild icon.
+
+        Args:
+            guild: The target guild.
+            icon_url: URL of the new icon image.
+
+        Returns:
+            Dict confirming the change.
+        """
+        if not icon_url or not icon_url.strip():
+            raise ValueError("Icon URL cannot be empty")
+
+        try:
+            import aiohttp
+            async with aiohttp.ClientSession() as session:
+                async with session.get(icon_url) as resp:
+                    if resp.status != 200:
+                        raise ValueError(f"Failed to fetch icon: HTTP {resp.status}")
+                    icon_data = await resp.read()
+
+            await guild.edit(icon=icon_data)
+            logger.info("Updated icon for guild '%s'", guild.name)
+            return {
+                "guild_id": str(guild.id),
+                "icon_updated": True,
+            }
+        except nextcord.errors.Forbidden:
+            raise PermissionError("manage_guild")
+        except nextcord.errors.HTTPException as exc:
+            raise RuntimeError(f"Failed to edit guild icon: {exc}")
+
+    async def get_info(
+        self,
+        guild: nextcord.Guild,
+    ) -> Dict[str, Any]:
+        """Get detailed guild information.
+
+        Args:
+            guild: The target guild.
+
+        Returns:
+            Dict with guild details.
+        """
+        return {
+            "id": str(guild.id),
+            "name": guild.name,
+            "description": guild.description,
+            "owner_id": str(guild.owner_id),
+            "member_count": guild.member_count,
+            "channel_count": len(guild.channels),
+            "role_count": len(guild.roles),
+            "emoji_count": len(guild.emojis),
+            "icon_url": str(guild.icon.url) if guild.icon else None,
+            "created_at": guild.created_at.isoformat(),
+            "verification_level": str(guild.verification_level),
+            "premium_tier": guild.premium_tier,
+            "premium_subscription_count": guild.premium_subscription_count,
+        }
+
+    # ------------------------------------------------------------------
+    # BaseConnector interface
+    # ------------------------------------------------------------------
+
+    async def execute(self, action: str, **params: Any) -> Dict[str, Any]:
+        """Dispatch to the appropriate action method."""
+        actions = {
+            "edit_name": self.edit_name,
+            "edit_icon": self.edit_icon,
+            "get_info": self.get_info,
+        }
+        handler = actions.get(action)
+        if handler is None:
+            raise ValueError(
+                f"Unknown action '{action}' for GuildConnector. "
+                f"Available: {list(actions.keys())}"
+            )
+        return await handler(**params)
+
+    def get_tool_definitions(self) -> List[ToolDefinition]:
+        """Return tool definitions for guild operations."""
+        return [
+            ToolDefinition(
+                name="discord.guild.edit_name",
+                description="Change the guild (server) name.",
+                parameters={
+                    "type": "object",
+                    "properties": {
+                        "guild_id": {"type": "string", "description": "Target guild ID."},
+                        "new_name": {"type": "string", "description": "New guild name."},
+                    },
+                    "required": ["guild_id", "new_name"],
+                },
+                risk_level="high",
+            ),
+            ToolDefinition(
+                name="discord.guild.edit_icon",
+                description="Change the guild (server) icon.",
+                parameters={
+                    "type": "object",
+                    "properties": {
+                        "guild_id": {"type": "string", "description": "Target guild ID."},
+                        "icon_url": {"type": "string", "description": "URL of the new icon image."},
+                    },
+                    "required": ["guild_id", "icon_url"],
+                },
+                risk_level="high",
+            ),
+            ToolDefinition(
+                name="discord.guild.get_info",
+                description="Get detailed guild information (name, member count, etc.).",
+                parameters={
+                    "type": "object",
+                    "properties": {
+                        "guild_id": {"type": "string", "description": "Target guild ID."},
+                    },
+                    "required": ["guild_id"],
+                },
+                risk_level="low",
+            ),
+        ]

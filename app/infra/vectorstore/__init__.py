@@ -1,6 +1,5 @@
-# app/infra/vectorstore/__init__.py
-"""Vector store infrastructure."""
-from app.infra.vectorstore.base import VectorStore
-from app.infra.vectorstore.chroma import ChromaVectorStore
+"""Vector store infrastructure (disabled placeholder in Phase 1)."""
 
-__all__ = ["VectorStore", "ChromaVectorStore"]
+from .chroma import ChromaVectorStore
+
+__all__ = ["ChromaVectorStore"]

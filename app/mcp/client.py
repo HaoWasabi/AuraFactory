@@ -1,136 +1,184 @@
-# app/mcp/client.py
 """
-MCP Client — unified interface for calling tools across all servers.
-Orchestrator and agents use this to discover and execute tools.
-Phase 1: In-process dispatch. Phase 2: route to remote servers.
-"""
-import logging
-from typing import Dict, Any, List, Optional
-from uuid import uuid4
+MCP Client — Aggregates multiple MCP servers and routes tool calls.
 
-from app.mcp.protocol import (
-    ToolDefinition,
-    ToolCallRequest,
-    ToolCallResponse,
-    ServerInfo,
-)
+Phase 1: Pure in-process routing. The client keeps a registry of servers
+and dispatches requests to the server that owns the requested tool.
+"""
+
+from __future__ import annotations
+
+import logging
+from typing import Dict, List, Optional
+
+from app.mcp.protocol import MCPRequest, MCPResponse, RiskLevel, ToolDefinition
 from app.mcp.server import MCPServer
 
 logger = logging.getLogger(__name__)
 
 
 class MCPClient:
-    """
-    Central MCP client — routes tool calls to the correct server.
-    All agent tool interactions go through this.
+    """Client-side MCP aggregator.
+
+    Registers MCP servers, discovers tools across all of them,
+    and routes tool calls to the appropriate server.
     """
 
-    def __init__(self):
+    def __init__(self) -> None:
         self._servers: Dict[str, MCPServer] = {}
-        self._tool_index: Dict[str, str] = {}  # tool_name → server_name
+        # Reverse index: tool_name -> server_name for fast routing
+        self._tool_index: Dict[str, str] = {}
+
+    # ------------------------------------------------------------------
+    # Server Registration
+    # ------------------------------------------------------------------
 
     def register_server(self, server: MCPServer) -> None:
-        """Register an MCP server and index its tools."""
-        name = server.info.name
-        self._servers[name] = server
+        """Register an MCP server and index its tools.
 
-        # Index tools for fast lookup
-        for tool in server.list_tools():
-            self._tool_index[tool.name] = name
-            tool.server_name = name
+        Args:
+            server: An initialized MCPServer instance.
+
+        Raises:
+            ValueError: If a server with the same name is already registered,
+                        or if tool names collide across servers.
+        """
+        name = server.get_server_name()
+        if name in self._servers:
+            raise ValueError(f"Server '{name}' already registered")
+
+        # Check for tool name collisions
+        for tool_def in server.list_tools():
+            if tool_def.name in self._tool_index:
+                existing_server = self._tool_index[tool_def.name]
+                raise ValueError(
+                    f"Tool '{tool_def.name}' conflicts: already registered "
+                    f"on server '{existing_server}'"
+                )
+
+        # Register
+        self._servers[name] = server
+        for tool_def in server.list_tools():
+            self._tool_index[tool_def.name] = name
 
         logger.info(
-            f"MCP: Registered server '{name}' with {len(server.list_tools())} tools"
+            "Registered MCP server '%s' with %d tools",
+            name,
+            len(server.list_tools()),
         )
 
-    def unregister_server(self, name: str) -> None:
-        """Remove a server and its tools from the index."""
-        if name in self._servers:
-            server = self._servers[name]
-            for tool in server.list_tools():
-                self._tool_index.pop(tool.name, None)
-            del self._servers[name]
+    def unregister_server(self, server_name: str) -> None:
+        """Remove a server and its tools from the registry."""
+        server = self._servers.pop(server_name, None)
+        if server is None:
+            return
+        for tool_def in server.list_tools():
+            self._tool_index.pop(tool_def.name, None)
+        logger.info("Unregistered MCP server '%s'", server_name)
+
+    # ------------------------------------------------------------------
+    # Tool Invocation
+    # ------------------------------------------------------------------
 
     async def call_tool(
-        self,
-        tool_name: str,
-        arguments: Dict[str, Any],
-        trace_id: str = "",
-        guild_id: Optional[int] = None,
-        **kwargs,
-    ) -> ToolCallResponse:
+        self, method: str, params: dict, request_id: Optional[str] = None
+    ) -> MCPResponse:
+        """Invoke a tool by name, routing to the correct server.
+
+        Args:
+            method: Fully-qualified tool name (e.g. 'discord.channels.create').
+            params: Parameters to pass to the tool.
+            request_id: Optional tracing ID (auto-generated if omitted).
+
+        Returns:
+            MCPResponse from the handling server.
         """
-        Call a tool by name. Routes to the correct server automatically.
-        This is THE main API that agents use.
-        """
-        server_name = self._tool_index.get(tool_name)
-        if not server_name:
-            return ToolCallResponse(
-                id=str(uuid4())[:8],
-                success=False,
-                error=f"Tool not found: '{tool_name}'. Available: {self.list_tool_names()[:20]}",
+        request = MCPRequest(method=method, params=params)
+        if request_id:
+            request.request_id = request_id
+
+        server_name = self._tool_index.get(method)
+        if server_name is None:
+            return MCPResponse(
+                error=(
+                    f"No server registered for tool '{method}'. "
+                    f"Available tools: {list(self._tool_index.keys())[:20]}..."
+                ),
+                request_id=request.request_id,
             )
 
         server = self._servers[server_name]
-        request = ToolCallRequest(
-            id=str(uuid4())[:8],
-            tool_name=tool_name,
-            arguments=arguments,
-            trace_id=trace_id,
-            guild_id=guild_id,
-        )
-
-        # Pass extra kwargs (like guild object)
-        if kwargs:
-            request.arguments["_context"] = kwargs
-
         return await server.handle_request(request)
 
-    def list_tools(self, server_name: Optional[str] = None) -> List[ToolDefinition]:
-        """List all available tools, optionally filtered by server."""
-        if server_name:
-            server = self._servers.get(server_name)
-            return server.list_tools() if server else []
+    # ------------------------------------------------------------------
+    # Tool Discovery
+    # ------------------------------------------------------------------
 
-        all_tools = []
+    def list_all_tools(self) -> List[ToolDefinition]:
+        """Return all tool definitions from all registered servers."""
+        tools: List[ToolDefinition] = []
         for server in self._servers.values():
-            all_tools.extend(server.list_tools())
-        return all_tools
+            tools.extend(server.list_tools())
+        return tools
 
-    def list_tool_names(self) -> List[str]:
-        """List all tool names."""
-        return list(self._tool_index.keys())
+    def get_tools_by_risk(self, max_risk: RiskLevel) -> List[ToolDefinition]:
+        """Return tools at or below the given risk level.
 
-    def list_servers(self) -> List[ServerInfo]:
-        """List all registered servers."""
-        return [s.info for s in self._servers.values()]
+        Args:
+            max_risk: Maximum allowed RiskLevel (inclusive).
 
-    def get_tool_definition(self, name: str) -> Optional[ToolDefinition]:
-        """Get a specific tool definition."""
-        server_name = self._tool_index.get(name)
-        if server_name:
-            return self._servers[server_name].get_tool(name)
-        return None
-
-    def to_llm_format(self, server_name: Optional[str] = None) -> List[Dict[str, Any]]:
+        Returns:
+            List of ToolDefinitions whose risk <= max_risk.
         """
-        Convert tools to LLM function-calling format.
-        Ready to pass to LLM generate_with_tools().
-        """
-        tools = self.list_tools(server_name)
         return [
-            {
-                "name": t.name,
-                "description": t.description,
-                "parameters": t.input_schema,
-            }
-            for t in tools
+            tool
+            for tool in self.list_all_tools()
+            if tool.risk <= max_risk
         ]
 
-    @property
-    def server_count(self) -> int:
-        return len(self._servers)
+    def get_tools_for_agent(
+        self, agent_role: str, skill_registry: Optional[object] = None
+    ) -> List[ToolDefinition]:
+        """Return tools available to a specific agent role.
+
+        The filtering logic uses the skill_registry (if provided) to
+        determine which tools the agent is authorized to call based on
+        its role and skill assignments.
+
+        Args:
+            agent_role: The agent's role identifier (e.g. 'moderator', 'admin').
+            skill_registry: Optional SkillRegistry instance for role-based filtering.
+
+        Returns:
+            Filtered list of ToolDefinitions.
+        """
+        # Default risk ceilings per role
+        role_risk_map: Dict[str, RiskLevel] = {
+            "observer": RiskLevel.LOW,
+            "helper": RiskLevel.MEDIUM,
+            "moderator": RiskLevel.HIGH,
+            "admin": RiskLevel.CRITICAL,
+        }
+
+        max_risk = role_risk_map.get(agent_role, RiskLevel.LOW)
+
+        # If a skill_registry is provided, further filter by allowed skills
+        if skill_registry is not None and hasattr(skill_registry, "get_tools_for_role"):
+            allowed_tool_names: set = set(
+                skill_registry.get_tools_for_role(agent_role)
+            )
+            return [
+                tool
+                for tool in self.list_all_tools()
+                if tool.risk <= max_risk and tool.name in allowed_tool_names
+            ]
+
+        return self.get_tools_by_risk(max_risk)
+
+    def get_server(self, server_name: str) -> Optional[MCPServer]:
+        """Get a registered server by name."""
+        return self._servers.get(server_name)
 
     @property
-    def tool_count(self) -> int:
-        return len(self._tool_index)
+    def server_names(self) -> List[str]:
+        """List all registered server names."""
+        return list(self._servers.keys())
