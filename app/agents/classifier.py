@@ -146,6 +146,10 @@ class IntentClassifier:
         if msg_lower.startswith("?"):
             return IntentType.ASSISTANT
 
+        # Rule 1.5: Check for "setup"/"set up" FIRST (before single verbs catch "set")
+        if "setup" in msg_lower or "set up" in msg_lower or "settup" in msg_lower:
+            return IntentType.ADMIN_COMPLEX
+
         for starter in _QUESTION_STARTERS:
             if msg_lower.startswith(starter) or f" {starter}" in msg_lower:
                 return IntentType.ASSISTANT

@@ -5,6 +5,7 @@ import logging
 from typing import Any, Dict, List, Optional
 
 import google.generativeai as genai
+from google.generativeai.types import HarmCategory, HarmBlockThreshold
 
 from .base import BaseLLM, LLMResponse, ToolCall, UsageStats
 
@@ -17,7 +18,8 @@ class GeminiLLM(BaseLLM):
     def __init__(self, model: str = "gemini-2.5-flash", api_key: str = "") -> None:
         super().__init__(model=model, api_key=api_key)
         if not self.api_key:
-            raise ValueError("GEMINI_API_KEY is required but not set")
+            logger.error("⚠️ GEMINI_API_KEY is empty! LLM calls will fail.")
+            # Don't raise — let app start, but log clearly
         genai.configure(api_key=self.api_key)
         self._model = genai.GenerativeModel(self.model)
         logger.info("GeminiLLM initialized (model=%s)", self.model)
@@ -48,14 +50,24 @@ class GeminiLLM(BaseLLM):
             max_output_tokens=max_tokens,
         )
 
+        # Disable safety filters (they block Discord admin commands)
+        safety_settings = {
+            HarmCategory.HARM_CATEGORY_HARASSMENT: HarmBlockThreshold.BLOCK_NONE,
+            HarmCategory.HARM_CATEGORY_HATE_SPEECH: HarmBlockThreshold.BLOCK_NONE,
+            HarmCategory.HARM_CATEGORY_SEXUALLY_EXPLICIT: HarmBlockThreshold.BLOCK_NONE,
+            HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT: HarmBlockThreshold.BLOCK_NONE,
+        }
+
         gemini_tools = self._convert_tools(tools) if tools else None
 
         for attempt in range(2):
             try:
+                logger.info("Gemini API call (attempt %d): model=%s, content_len=%d", attempt+1, self.model, len(str(contents)[:100]))
                 response = await asyncio.to_thread(
                     self._model.generate_content,
                     contents,
                     generation_config=generation_config,
+                    safety_settings=safety_settings,
                     tools=gemini_tools,
                 )
                 return self._parse_response(response)
