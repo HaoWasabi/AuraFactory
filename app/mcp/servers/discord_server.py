@@ -41,12 +41,22 @@ class DiscordMCPServer(MCPServer):
 
     def _load_tools(self) -> None:
         """Load tool definitions from connector modules."""
-        # Import tool modules
-        from app.connectors.discord import channels, roles, members
-        from app.connectors.discord import categories, threads, webhooks
-        from app.connectors.discord import permissions, invites, emojis
-        from app.connectors.discord import guild, features, automod
-        from app.connectors.discord import backup, onboarding, templates
+        # Import tool modules (graceful — skip if any fail)
+        try:
+            from app.connectors.discord import channels, roles, members
+            from app.connectors.discord import categories, threads, webhooks
+            from app.connectors.discord import permissions, invites, emojis
+            from app.connectors.discord import guild, features, automod
+            from app.connectors.discord import backup, onboarding, templates
+        except ImportError as e:
+            logger.error(f"Discord connector import error: {e}")
+            # Try minimal imports
+            try:
+                from app.connectors.discord import channels, roles, members
+                from app.connectors.discord import categories, guild, backup
+            except ImportError as e2:
+                logger.error(f"Discord connector critical import error: {e2}")
+                return
 
         # Map tool_name → (module, function_name, schema)
         tool_registry = [
@@ -207,7 +217,22 @@ class DiscordMCPServer(MCPServer):
         ]
 
         for tool_name, module, func_name, schema in tool_registry:
+            handler = None
+            # Try 1: direct function on module
             handler = getattr(module, func_name, None)
+            # Try 2: look inside classes in the module (class-based connectors)
+            if handler is None:
+                for attr_name in dir(module):
+                    obj = getattr(module, attr_name, None)
+                    if isinstance(obj, type):  # It's a class
+                        method = getattr(obj, func_name, None)
+                        if method and callable(method):
+                            # Use staticmethod or classmethod directly
+                            handler = method
+                            break
+            if handler is None:
+                logger.debug(f"Tool handler not found: {func_name} in {module.__name__}")
+
             if handler:
                 self._tool_handlers[tool_name] = handler
                 self._tool_defs.append(ToolDefinition(
