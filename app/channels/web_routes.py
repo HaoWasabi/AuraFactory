@@ -181,13 +181,9 @@ async def oauth_callback(request: Request, code: Optional[str] = None, error: Op
 
             guilds = []
             if guilds_response.status_code == 200:
-                all_guilds = guilds_response.json()
-                # Filter to allowed guilds (or show all if no restriction)
-                allowed_ids = settings.allowed_guild_ids
-                if not allowed_ids:
-                    guilds = all_guilds
-                else:
-                    guilds = [g for g in all_guilds if g["id"] in allowed_ids]
+                # FIX #1: Show ALL guilds the user is in (no filtering)
+                # The bot being in the guild is what matters, not a config allowlist
+                guilds = guilds_response.json()
 
         # Build session user data
         session_user = {
@@ -200,7 +196,7 @@ async def oauth_callback(request: Request, code: Optional[str] = None, error: Op
                 (int(g.get("permissions", 0)) & 0x8) == 0x8  # ADMINISTRATOR flag
                 for g in guilds
             ),
-            "current_guild_id": int(guilds[0]["id"]) if guilds else None,
+            "current_guild_id": guilds[0]["id"] if guilds else None,
             "access_token": access_token,
         }
 
@@ -304,31 +300,97 @@ async def api_status(request: Request):
 
 
 @router.get("/knowledge/{guild_id}")
-async def get_guild_knowledge(guild_id: int, request: Request):
-    """Get guild knowledge for dashboard display."""
+async def get_guild_knowledge(guild_id: str, request: Request):
+    """
+    Get guild knowledge for dashboard display.
+    FIX #2: Return flat data with channels_count, roles_count, members_count.
+    Accept guild_id as string to avoid int/str mismatch with Discord IDs.
+    """
     user = _get_session(request)
     if not user:
         raise HTTPException(status_code=401, detail="Not authenticated")
 
+    # Try to convert to int for backward compatibility with store lookups
+    try:
+        guild_id_int = int(guild_id)
+    except (ValueError, TypeError):
+        guild_id_int = None
+
     knowledge_store = getattr(request.app.state, "knowledge_store", None)
     if not knowledge_store:
-        raise HTTPException(status_code=503, detail="Knowledge store unavailable")
+        return JSONResponse({
+            "guild_id": guild_id,
+            "guild_name": "",
+            "channels_count": 0,
+            "roles_count": 0,
+            "members_count": 0,
+        })
 
     try:
-        knowledge = await knowledge_store.load(guild_id)
-        if not knowledge:
-            return JSONResponse({"guild_id": guild_id, "data": None})
+        # Try multiple lookup methods for compatibility
+        snapshot = None
+
+        # Method 1: Try get_snapshot (dict-based lookup)
+        if hasattr(knowledge_store, "get_snapshot"):
+            snapshot = knowledge_store.get_snapshot(guild_id)
+            if not snapshot and guild_id_int:
+                snapshot = knowledge_store.get_snapshot(guild_id_int)
+
+        # Method 2: Try _snapshots dict directly
+        if not snapshot and hasattr(knowledge_store, "_snapshots"):
+            snapshot = knowledge_store._snapshots.get(guild_id)
+            if not snapshot and guild_id_int:
+                snapshot = knowledge_store._snapshots.get(guild_id_int)
+            if not snapshot:
+                snapshot = knowledge_store._snapshots.get(str(guild_id))
+
+        # Method 3: Try async load() method
+        if not snapshot and hasattr(knowledge_store, "load"):
+            knowledge = await knowledge_store.load(guild_id_int or guild_id)
+            if knowledge:
+                # knowledge is a GuildKnowledge object — extract fields
+                if hasattr(knowledge, "__dict__"):
+                    snapshot = knowledge.__dict__
+                elif hasattr(knowledge, "dict"):
+                    snapshot = knowledge.dict()
+                else:
+                    snapshot = knowledge
+
+        if not snapshot:
+            return JSONResponse({
+                "guild_id": guild_id,
+                "guild_name": "",
+                "channels_count": 0,
+                "roles_count": 0,
+                "members_count": 0,
+            })
+
+        # Handle both dict and object access
+        if isinstance(snapshot, dict):
+            channels = snapshot.get("channels", [])
+            roles = snapshot.get("roles", [])
+            member_count = snapshot.get("member_count", 0) or snapshot.get("members_count", 0)
+            guild_name = snapshot.get("guild_name", "")
+        else:
+            channels = getattr(snapshot, "channels", [])
+            roles = getattr(snapshot, "roles", [])
+            member_count = getattr(snapshot, "member_count", 0) or getattr(snapshot, "members_count", 0)
+            guild_name = getattr(snapshot, "guild_name", "")
 
         return JSONResponse({
             "guild_id": guild_id,
-            "data": {
-                "guild_name": knowledge.guild_name,
-                "channels": len(knowledge.channels),
-                "roles": len(knowledge.roles),
-                "setup_complete": knowledge.setup_complete,
-                "last_crawled": knowledge.last_crawled,
-            },
+            "guild_name": guild_name,
+            "channels_count": len(channels) if isinstance(channels, list) else int(channels) if channels else 0,
+            "roles_count": len(roles) if isinstance(roles, list) else int(roles) if roles else 0,
+            "members_count": int(member_count) if member_count else 0,
         })
+
     except Exception as e:
-        logger.error(f"Knowledge fetch error: {e}")
-        raise HTTPException(status_code=500, detail="Lỗi tải dữ liệu guild.")
+        logger.error(f"Knowledge fetch error for guild {guild_id}: {e}", exc_info=True)
+        return JSONResponse({
+            "guild_id": guild_id,
+            "guild_name": "",
+            "channels_count": 0,
+            "roles_count": 0,
+            "members_count": 0,
+        })

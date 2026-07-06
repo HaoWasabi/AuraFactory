@@ -180,6 +180,24 @@ body {
     color: var(--danger);
 }
 
+/* ===== Language Toggle Button ===== */
+.btn-lang {
+    padding: 6px 12px;
+    background: rgba(88, 101, 242, 0.1);
+    border: 1px solid var(--border-color);
+    color: var(--text-accent);
+    border-radius: var(--radius-sm);
+    font-size: 13px;
+    cursor: pointer;
+    transition: var(--transition);
+    white-space: nowrap;
+}
+
+.btn-lang:hover {
+    background: rgba(88, 101, 242, 0.2);
+    border-color: var(--accent-primary);
+}
+
 .hamburger {
     display: none;
     background: none;
@@ -261,6 +279,72 @@ body {
 .info-item .value {
     color: var(--text-accent);
     font-weight: 600;
+}
+
+/* ===== Toggle Switch (Assistant Mode) ===== */
+.toggle-wrapper {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+}
+
+.toggle-switch {
+    position: relative;
+    display: inline-block;
+    width: 44px;
+    height: 24px;
+    flex-shrink: 0;
+}
+
+.toggle-switch input {
+    opacity: 0;
+    width: 0;
+    height: 0;
+}
+
+.toggle-slider {
+    position: absolute;
+    cursor: pointer;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    background-color: var(--bg-hover);
+    border: 1px solid var(--border-color);
+    border-radius: 24px;
+    transition: var(--transition);
+}
+
+.toggle-slider::before {
+    position: absolute;
+    content: "";
+    height: 18px;
+    width: 18px;
+    left: 2px;
+    bottom: 2px;
+    background-color: var(--text-muted);
+    border-radius: 50%;
+    transition: var(--transition);
+}
+
+.toggle-switch input:checked + .toggle-slider {
+    background-color: rgba(88, 101, 242, 0.3);
+    border-color: var(--accent-primary);
+}
+
+.toggle-switch input:checked + .toggle-slider::before {
+    transform: translateX(20px);
+    background-color: var(--accent-primary);
+}
+
+.toggle-switch input:focus + .toggle-slider {
+    box-shadow: 0 0 0 3px var(--accent-glow);
+}
+
+.toggle-label {
+    font-size: 13px;
+    font-weight: 500;
+    color: var(--text-secondary);
 }
 
 /* ===== Chat Area ===== */
@@ -717,6 +801,11 @@ body {
     color: #fff;
 }
 
+.toast.warning {
+    background: var(--warning);
+    color: #1a1a2e;
+}
+
 @keyframes toastIn {
     from {
         opacity: 0;
@@ -805,6 +894,11 @@ body {
 
     .user-name {
         display: none;
+    }
+
+    .btn-lang {
+        padding: 4px 8px;
+        font-size: 12px;
     }
 
     .sidebar {

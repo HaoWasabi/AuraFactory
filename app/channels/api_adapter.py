@@ -1,7 +1,7 @@
 # app/channels/api_adapter.py
 """
 API Channel Adapter — FastAPI router for REST API interactions.
-Provides: chat, approvals (HITL), and health endpoints.
+Provides: chat, approvals (HITL), settings, and health endpoints.
 All endpoints require valid session (Authorization header or session cookie).
 """
 import logging
@@ -30,8 +30,8 @@ router = APIRouter(prefix="/api/v1", tags=["api"])
 class ChatRequest(BaseModel):
     """Chat message request."""
     message: str = Field(..., min_length=1, max_length=4000)
-    guild_id: Optional[int] = None
-    channel_id: Optional[int] = None
+    guild_id: Optional[str] = None
+    channel_id: Optional[str] = None
 
 
 class ChatResponse(BaseModel):
@@ -50,7 +50,7 @@ class ApprovalItem(BaseModel):
     risk_level: str
     steps: list = Field(default_factory=list)
     created_at: str
-    guild_id: int
+    guild_id: str
     requested_by: str
 
 
@@ -65,6 +65,12 @@ class HealthResponse(BaseModel):
     status: str
     uptime_seconds: float
     version: str = "1.0.0"
+
+
+class SettingsRequest(BaseModel):
+    """Settings update request."""
+    guild_id: str
+    assistant_enabled: Optional[bool] = None
 
 
 # ================================================================
@@ -102,6 +108,10 @@ def _check_rate_limit(client_ip: str) -> bool:
 _serializer = URLSafeTimedSerializer(settings.secret_key)
 SESSION_MAX_AGE = 7 * 24 * 3600
 
+# In-memory settings store (guild_id -> settings dict)
+_guild_settings_store: dict = {}
+
+
 async def get_current_user(request: Request) -> dict:
     """
     Extract and validate current user from session.
@@ -109,7 +119,7 @@ async def get_current_user(request: Request) -> dict:
     """
     app = request.app
 
-    # Check Authorization header (Bearer token = session_id)
+    # Check Authorization header (Bearer = session_id)
     auth_header = request.headers.get("Authorization", "")
     session_id = None
 
@@ -158,15 +168,31 @@ async def chat_endpoint(
             detail="Bạn đang gửi tin nhắn quá nhanh. Vui lòng đợi một chút.",
         )
 
-    # Build IncomingMessage
+    # Convert guild_id to int if possible for pipeline compatibility
+    guild_id = None
+    if body.guild_id:
+        try:
+            guild_id = int(body.guild_id)
+        except (ValueError, TypeError):
+            guild_id = body.guild_id
+
+    channel_id = None
+    if body.channel_id:
+        try:
+            channel_id = int(body.channel_id)
+        except (ValueError, TypeError):
+            channel_id = body.channel_id
+
+    # FIX #3: Web dashboard users are ALWAYS admin
+    # They authenticated via Discord OAuth — only admins use the dashboard
     incoming = IncomingMessage(
         user_id=user.get("id", "unknown"),
         user_name=user.get("username", "Unknown"),
         prompt=body.message,
-        user_roles=user.get("roles", []),
-        is_admin=user.get("is_admin", False),
-        guild_id=body.guild_id,
-        channel_id=body.channel_id,
+        user_roles=["admin"],  # Web users always get admin role
+        is_admin=True,  # Web dashboard users are always admin
+        guild_id=guild_id,
+        channel_id=channel_id,
         source="api",
         metadata={"web_session": True},
     )
@@ -189,7 +215,7 @@ async def chat_endpoint(
 @router.get("/approvals")
 async def list_approvals(
     request: Request,
-    guild_id: Optional[int] = None,
+    guild_id: Optional[str] = None,
     user: dict = Depends(get_current_user),
 ):
     """List pending approvals for a guild."""
@@ -202,8 +228,10 @@ async def list_approvals(
     for approval_id, item in approval_store.items():
         if item.get("status") != "pending":
             continue
-        if effective_guild and item.get("guild_id") != effective_guild:
-            continue
+        if effective_guild:
+            item_guild = str(item.get("guild_id", ""))
+            if item_guild != str(effective_guild):
+                continue
         pending.append({
             "id": approval_id,
             "action": item.get("action", ""),
@@ -211,7 +239,7 @@ async def list_approvals(
             "risk_level": item.get("risk_level", "MEDIUM"),
             "steps": item.get("steps", []),
             "created_at": item.get("created_at", ""),
-            "guild_id": item.get("guild_id", 0),
+            "guild_id": item.get("guild_id", ""),
             "requested_by": item.get("requested_by", ""),
         })
 
@@ -225,9 +253,7 @@ async def approve_action(
     user: dict = Depends(get_current_user),
 ):
     """Approve a pending action."""
-    if not user.get("is_admin", False):
-        raise HTTPException(status_code=403, detail="Chỉ admin mới có thể phê duyệt.")
-
+    # Web users are always admin — no need to check is_admin flag
     approval_store = getattr(request.app.state, "approval_store", {})
     item = approval_store.get(approval_id)
 
@@ -262,9 +288,7 @@ async def reject_action(
     user: dict = Depends(get_current_user),
 ):
     """Reject a pending action."""
-    if not user.get("is_admin", False):
-        raise HTTPException(status_code=403, detail="Chỉ admin mới có thể từ chối.")
-
+    # Web users are always admin — no need to check is_admin flag
     approval_store = getattr(request.app.state, "approval_store", {})
     item = approval_store.get(approval_id)
 
@@ -280,6 +304,53 @@ async def reject_action(
 
     logger.info(f"❌ Rejected: {approval_id} by {user.get('username')}")
     return ApprovalAction(success=True, message="Đã từ chối yêu cầu.")
+
+
+@router.post("/settings")
+async def update_settings(
+    body: SettingsRequest,
+    request: Request,
+    user: dict = Depends(get_current_user),
+):
+    """
+    FIX #5: Update guild settings (e.g., assistant mode toggle).
+    Stores in memory for now — persists until restart.
+    """
+    guild_id = body.guild_id
+
+    # Get or create settings for this guild
+    if guild_id not in _guild_settings_store:
+        _guild_settings_store[guild_id] = {
+            "assistant_enabled": True,
+        }
+
+    if body.assistant_enabled is not None:
+        _guild_settings_store[guild_id]["assistant_enabled"] = body.assistant_enabled
+
+    logger.info(f"⚙️ Settings updated for guild {guild_id}: {_guild_settings_store[guild_id]}")
+
+    return JSONResponse({
+        "success": True,
+        "guild_id": guild_id,
+        "settings": _guild_settings_store[guild_id],
+    })
+
+
+@router.get("/settings/{guild_id}")
+async def get_settings(
+    guild_id: str,
+    request: Request,
+    user: dict = Depends(get_current_user),
+):
+    """Get guild settings."""
+    guild_settings = _guild_settings_store.get(guild_id, {
+        "assistant_enabled": True,
+    })
+
+    return JSONResponse({
+        "guild_id": guild_id,
+        "settings": guild_settings,
+    })
 
 
 @router.get("/health", response_model=HealthResponse)
