@@ -2,13 +2,15 @@
 
 Stores guild snapshots as JSON and provides keyword search over
 the stored data for context injection into LLM prompts.
+
+Falls back to in-memory storage when no database is configured.
 """
 
 from __future__ import annotations
 
 import json
 import logging
-from typing import Any
+from typing import Any, Optional
 
 logger = logging.getLogger(__name__)
 
@@ -28,19 +30,31 @@ class ServerKnowledgeStore:
 
     Stores complete guild structure as JSONB and provides keyword
     search plus formatted context strings for LLM injection.
+
+    Falls back to in-memory dict when no db is provided.
     """
 
-    def __init__(self, db: Any) -> None:
-        """Initialize with database connection pool.
+    def __init__(self, db: Any = None) -> None:
+        """Initialize with optional database connection pool.
 
         Args:
-            db: asyncpg connection pool instance.
+            db: asyncpg connection pool instance (optional).
+                If None, uses in-memory storage.
         """
         self._db = db
-        logger.info("ServerKnowledgeStore initialized")
+        # In-memory fallback when db is not available
+        self._memory_store: dict[int, dict[str, Any]] = {}
+        self._memory_summaries: dict[int, str] = {}
+        logger.info("ServerKnowledgeStore initialized (db=%s)", "connected" if db else "in-memory")
+
+    def set_db(self, db: Any) -> None:
+        """Set database connection after initialization."""
+        self._db = db
 
     async def ensure_table(self) -> None:
         """Create the knowledge_store table if it does not exist."""
+        if self._db is None:
+            return
         async with self._db.acquire() as conn:
             await conn.execute(CREATE_TABLE_SQL)
         logger.info("Ensured knowledge_store table exists")
@@ -53,6 +67,14 @@ class ServerKnowledgeStore:
             snapshot: Full guild knowledge dict (from GuildKnowledge.to_dict()).
         """
         summary = self._build_summary(snapshot)
+
+        if self._db is None:
+            # In-memory fallback
+            self._memory_store[guild_id] = snapshot
+            self._memory_summaries[guild_id] = summary
+            logger.info("Saved knowledge snapshot in-memory for guild=%d", guild_id)
+            return
+
         query = """
             INSERT INTO knowledge_store (guild_id, snapshot, summary, updated_at)
             VALUES ($1, $2::jsonb, $3, NOW())
@@ -74,6 +96,9 @@ class ServerKnowledgeStore:
         Returns:
             Snapshot dict or None if not found.
         """
+        if self._db is None:
+            return self._memory_store.get(guild_id)
+
         query = "SELECT snapshot FROM knowledge_store WHERE guild_id = $1"
         async with self._db.acquire() as conn:
             row = await conn.fetchrow(query, guild_id)
@@ -85,6 +110,33 @@ class ServerKnowledgeStore:
         if isinstance(snapshot, str):
             return json.loads(snapshot)
         return snapshot
+
+    async def load(self, guild_id: int) -> Optional[Any]:
+        """Load guild knowledge — returns snapshot as namespace-like object.
+
+        Args:
+            guild_id: Discord guild identifier.
+
+        Returns:
+            Object with guild attributes or None.
+        """
+        snapshot = await self.get_snapshot(guild_id)
+        if snapshot is None:
+            return None
+
+        # Return as a simple namespace for attribute access
+        class _KnowledgeView:
+            def __init__(self, data: dict):
+                self.guild_name = data.get("guild_name", "Unknown")
+                self.channels = data.get("channels", [])
+                self.roles = data.get("roles", [])
+                self.categories = data.get("categories", [])
+                self.member_count = data.get("member_count", 0)
+                self.rules = data.get("rules", [])
+                self.setup_complete = data.get("setup_complete", False)
+                self.last_crawled = data.get("crawled_at", None)
+
+        return _KnowledgeView(snapshot)
 
     async def search(self, guild_id: int, query: str) -> list[dict[str, Any]]:
         """Keyword search over stored snapshot JSON.
@@ -142,6 +194,10 @@ class ServerKnowledgeStore:
         Returns:
             Compact summary or 'No knowledge available' if not found.
         """
+        if self._db is None:
+            summary = self._memory_summaries.get(guild_id)
+            return summary if summary else "No knowledge available for this guild."
+
         query = "SELECT summary FROM knowledge_store WHERE guild_id = $1"
         async with self._db.acquire() as conn:
             row = await conn.fetchrow(query, guild_id)

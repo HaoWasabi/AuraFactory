@@ -179,12 +179,12 @@ async def oauth_callback(request: Request, code: Optional[str] = None, error: Op
             guilds = []
             if guilds_response.status_code == 200:
                 all_guilds = guilds_response.json()
-                # Filter to allowed guilds (or show all if allow_all)
+                # Filter to allowed guilds (or show all if no restriction)
                 allowed_ids = settings.allowed_guild_ids
-                if settings.allow_all_guilds or not allowed_ids:
+                if not allowed_ids:
                     guilds = all_guilds
                 else:
-                    guilds = [g for g in all_guilds if int(g["id"]) in allowed_ids]
+                    guilds = [g for g in all_guilds if g["id"] in allowed_ids]
 
         # Build session user data
         session_user = {
@@ -276,11 +276,11 @@ async def health(request: Request):
 @router.get("/metrics")
 async def metrics_endpoint(request: Request):
     """Basic metrics JSON for monitoring."""
-    from app.infra.observability.metrics import metrics as app_metrics
+    from app.infra.observability import metrics as app_metrics
 
+    stats = app_metrics.get_stats()
     return JSONResponse({
-        "counters": app_metrics.get_counters(),
-        "histograms": app_metrics.get_summary(),
+        "stats": stats,
         "timestamp": time.time(),
     })
 

@@ -1,7 +1,6 @@
 # app/agents/admin_agent.py
 """
 AdminAgent — ReAct loop for complex multi-step admin operations.
-
 Pattern: Thought → Action → Observation → repeat (max 5 iterations).
 Generates ExecutionPlan for multi-step requests.
 HITL gate: if plan contains HIGH/CRITICAL risk → store in approvals table → return approval_required=True.
@@ -14,7 +13,6 @@ import logging
 import time
 from typing import Any, Dict, List, Optional
 from uuid import uuid4
-
 from app.agents.base import BaseAgent, LLM_OVERLOAD_MESSAGE
 from app.agents.contracts import (
     AgentRole,

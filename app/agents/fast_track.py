@@ -2,7 +2,6 @@
 """
 FastTrackExecutor — Single-action command handler.
 1 LLM call → extract tool + params → validate → MCP call → format response.
-
 Only handles LOW/MEDIUM risk tools.
 If LLM suggests HIGH+ risk → escalate to AdminAgent.
 Max 1 tool call per request.
@@ -10,10 +9,8 @@ Max 1 tool call per request.
 import json
 import logging
 from typing import Any, Dict, List, Optional
-
 from app.agents.base import BaseAgent, LLM_OVERLOAD_MESSAGE
 from app.agents.contracts import AgentRole, TaskAssignment, TaskResult
-
 logger = logging.getLogger(__name__)
 
 

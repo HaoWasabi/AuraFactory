@@ -7,383 +7,432 @@
     <link rel="stylesheet" href="/static/style.css">
     <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
 </head>
-<body class="dashboard-page">
-    <div class="dashboard-layout">
-        <!-- Sidebar -->
-        <aside class="sidebar" id="sidebar">
-            <div class="sidebar-header">
-                <h2 class="sidebar-title">AuraFactory</h2>
-                <button class="sidebar-close" id="sidebar-close" aria-label="Đóng sidebar">✕</button>
+<body>
+    <div class="app-layout">
+        <!-- Navbar -->
+        <nav class="navbar">
+            <div class="navbar-brand">
+                <button class="hamburger" onclick="toggleSidebar()" aria-label="Menu">☰</button>
+                <div class="navbar-logo">A</div>
+                <span class="navbar-title">AuraFactory</span>
             </div>
-
-            <!-- User Info -->
-            <div class="user-info" id="user-info">
-                <div class="user-avatar" id="user-avatar"></div>
-                <span class="user-name" id="user-name">Đang tải...</span>
+            <div class="navbar-user">
+                <span class="user-name" id="navUsername">{{ user.username if user else '' }}</span>
+                <img class="user-avatar" id="navAvatar" src="" alt="Avatar" onerror="this.style.display='none'">
+                <button class="btn-logout" onclick="logout()">Đăng xuất</button>
             </div>
-
-            <!-- Guild Selector -->
-            <div class="guild-selector">
-                <label for="guild-select">Server:</label>
-                <select id="guild-select" class="guild-select">
-                    <option value="">Chọn server...</option>
-                </select>
-            </div>
-
-            <!-- Guild Info -->
-            <div class="guild-info" id="guild-info" style="display:none;">
-                <div class="info-item">
-                    <span class="info-label">Channels:</span>
-                    <span class="info-value" id="info-channels">—</span>
-                </div>
-                <div class="info-item">
-                    <span class="info-label">Roles:</span>
-                    <span class="info-value" id="info-roles">—</span>
-                </div>
-                <div class="info-item">
-                    <span class="info-label">Trạng thái:</span>
-                    <span class="info-value" id="info-status">—</span>
-                </div>
-            </div>
-
-            <!-- Nav -->
-            <nav class="sidebar-nav">
-                <a href="/auth/logout" class="nav-link logout-link">🚪 Đăng xuất</a>
-            </nav>
-        </aside>
+        </nav>
 
         <!-- Main Content -->
-        <main class="main-content">
-            <!-- Top Bar (mobile) -->
-            <header class="top-bar">
-                <button class="sidebar-toggle" id="sidebar-toggle" aria-label="Mở sidebar">☰</button>
-                <h1 class="page-title">Chat</h1>
-                <button class="approvals-toggle" id="approvals-toggle" aria-label="Phê duyệt">
-                    🔔 <span class="badge" id="approval-badge" style="display:none;">0</span>
-                </button>
-            </header>
+        <div class="main-content">
+            <!-- Sidebar -->
+            <aside class="sidebar" id="sidebar">
+                <div class="sidebar-section">
+                    <div class="sidebar-section-title">Server</div>
+                    <select class="guild-select" id="guildSelect" onchange="selectGuild(this.value)">
+                        <option value="">Chọn server...</option>
+                    </select>
+                </div>
+                <div class="sidebar-section">
+                    <div class="sidebar-section-title">Thông tin Server</div>
+                    <div class="server-info" id="serverInfo">
+                        <div class="info-item">
+                            <span class="label">Kênh</span>
+                            <span class="value" id="channelCount">—</span>
+                        </div>
+                        <div class="info-item">
+                            <span class="label">Vai trò</span>
+                            <span class="value" id="roleCount">—</span>
+                        </div>
+                        <div class="info-item">
+                            <span class="label">Thành viên</span>
+                            <span class="value" id="memberCount">—</span>
+                        </div>
+                    </div>
+                </div>
+                <div class="sidebar-section">
+                    <div class="sidebar-section-title">Hướng dẫn nhanh</div>
+                    <div style="font-size: 12px; color: var(--text-muted); line-height: 1.6;">
+                        <p>💬 Gõ lệnh bằng tiếng Việt hoặc tiếng Anh</p>
+                        <p style="margin-top: 6px;">📋 Xem phê duyệt ở panel bên phải</p>
+                        <p style="margin-top: 6px;">⚡ Ví dụ: "Tạo channel #general"</p>
+                    </div>
+                </div>
+            </aside>
 
             <!-- Chat Area -->
-            <div class="chat-container">
-                <div class="chat-messages" id="chat-messages">
-                    <div class="message bot-message">
+            <main class="chat-area">
+                <div class="chat-messages" id="chatMessages">
+                    <!-- Welcome message -->
+                    <div class="message bot">
                         <div class="message-avatar">🤖</div>
                         <div class="message-content">
-                            <div class="message-text">
-                                Xin chào! Tôi là AuraFactory. Tôi có thể giúp bạn quản lý Discord server. Hãy hỏi tôi bất cứ điều gì!
-                            </div>
+                            <p>Xin chào! Tôi là <strong>AuraFactory</strong> — trợ lý AI quản trị Discord server.</p>
+                            <p>Hãy chọn server ở sidebar và gửi lệnh cho tôi. Ví dụ:</p>
+                            <ul>
+                                <li>"Tạo channel #announcements với topic Thông báo chung"</li>
+                                <li>"Liệt kê tất cả role trong server"</li>
+                                <li>"Xóa channel #spam"</li>
+                            </ul>
                         </div>
                     </div>
                 </div>
 
                 <!-- Typing Indicator -->
-                <div class="typing-indicator" id="typing-indicator" style="display:none;">
-                    <span class="typing-dot"></span>
-                    <span class="typing-dot"></span>
-                    <span class="typing-dot"></span>
-                    <span class="typing-text">AuraFactory đang xử lý...</span>
+                <div class="typing-indicator" id="typingIndicator">
+                    <div class="typing-dot"></div>
+                    <div class="typing-dot"></div>
+                    <div class="typing-dot"></div>
                 </div>
 
                 <!-- Input Area -->
                 <div class="chat-input-area">
-                    <textarea
-                        id="chat-input"
-                        class="chat-input"
-                        placeholder="Nhập tin nhắn... (Enter để gửi, Shift+Enter xuống dòng)"
-                        rows="1"
-                    ></textarea>
-                    <button class="send-btn" id="send-btn" aria-label="Gửi">
-                        <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor">
-                            <path d="M2.01 21L23 12 2.01 3 2 10l15 2-15 2z"/>
-                        </svg>
-                    </button>
+                    <div class="chat-input-wrapper">
+                        <input
+                            type="text"
+                            class="chat-input"
+                            id="chatInput"
+                            placeholder="Nhập lệnh hoặc câu hỏi..."
+                            autocomplete="off"
+                            onkeydown="handleInputKey(event)"
+                        >
+                        <button class="btn-send" onclick="sendMessage()" aria-label="Gửi">
+                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                                <line x1="22" y1="2" x2="11" y2="13"></line>
+                                <polygon points="22 2 15 22 11 13 2 9 22 2"></polygon>
+                            </svg>
+                        </button>
+                    </div>
                 </div>
-            </div>
-        </main>
+            </main>
 
-        <!-- Approvals Panel -->
-        <aside class="approvals-panel" id="approvals-panel">
-            <div class="panel-header">
-                <h3>Phê duyệt chờ xử lý</h3>
-                <button class="panel-close" id="panel-close" aria-label="Đóng">✕</button>
-            </div>
-            <div class="approvals-list" id="approvals-list">
-                <div class="empty-state">
-                    <p>Không có yêu cầu phê duyệt nào.</p>
+            <!-- Approval Panel -->
+            <aside class="approval-panel" id="approvalPanel">
+                <div class="approval-header">
+                    <span class="approval-title">Phê duyệt chờ xử lý</span>
+                    <span class="approval-badge" id="approvalCount">0</span>
                 </div>
-            </div>
-        </aside>
+                <div class="approval-list" id="approvalList">
+                    <div class="empty-state" id="approvalEmpty">
+                        <div class="empty-state-icon">✅</div>
+                        <p class="empty-state-text">Không có yêu cầu chờ duyệt</p>
+                    </div>
+                </div>
+            </aside>
+        </div>
     </div>
 
+    <!-- Mobile Toggle Buttons -->
+    <button class="mobile-toggle toggle-sidebar" onclick="toggleSidebar()" aria-label="Sidebar">📋</button>
+    <button class="mobile-toggle toggle-approvals" onclick="toggleApprovals()" aria-label="Approvals">🔔</button>
+
+    <!-- Overlay for mobile panels -->
+    <div class="overlay" id="overlay" onclick="closeAllPanels()"></div>
+
+    <!-- Scripts -->
+    <script src="/static/app.js"></script>
     <script>
-    // ================================================================
-    // AuraFactory Dashboard JS
-    // ================================================================
+        // ===== State =====
+        let currentGuild = null;
+        let approvalPollTimer = null;
+        let isWaitingResponse = false;
 
-    const API_BASE = '/api/v1';
-    let currentGuildId = null;
-    let pollInterval = null;
+        // Configure marked.js
+        marked.setOptions({
+            breaks: true,
+            gfm: true,
+        });
 
-    // ---- Init ----
-    document.addEventListener('DOMContentLoaded', async () => {
-        await loadUserInfo();
-        setupEventListeners();
-        startApprovalPolling();
-    });
+        // ===== Initialize =====
+        document.addEventListener('DOMContentLoaded', () => {
+            loadUser();
+            startApprovalPolling();
+        });
 
-    // ---- User Info ----
-    async function loadUserInfo() {
-        try {
-            const res = await fetch('/auth/me');
-            if (!res.ok) { window.location.href = '/'; return; }
-            const data = await res.json();
+        // ===== User & Auth =====
+        async function loadUser() {
+            try {
+                const user = await api('GET', '/auth/me');
+                if (!user) return;
 
-            document.getElementById('user-name').textContent = data.username;
-            if (data.avatar) {
-                document.getElementById('user-avatar').innerHTML =
-                    `<img src="https://cdn.discordapp.com/avatars/${data.id}/${data.avatar}.png?size=64" alt="Avatar">`;
-            } else {
-                document.getElementById('user-avatar').textContent = data.username[0].toUpperCase();
+                // Update navbar
+                const navUsername = document.getElementById('navUsername');
+                const navAvatar = document.getElementById('navAvatar');
+
+                navUsername.textContent = user.username || user.global_name || 'User';
+
+                if (user.avatar_url) {
+                    navAvatar.src = user.avatar_url;
+                    navAvatar.style.display = 'block';
+                } else if (user.id && user.avatar) {
+                    navAvatar.src = `https://cdn.discordapp.com/avatars/${user.id}/${user.avatar}.png?size=64`;
+                    navAvatar.style.display = 'block';
+                }
+
+                // Populate guild selector
+                if (user.guilds && user.guilds.length > 0) {
+                    const select = document.getElementById('guildSelect');
+                    select.innerHTML = '<option value="">Chọn server...</option>';
+                    user.guilds.forEach(guild => {
+                        const option = document.createElement('option');
+                        option.value = guild.id;
+                        option.textContent = guild.name;
+                        select.appendChild(option);
+                    });
+
+                    // Auto-select first guild or saved guild
+                    const savedGuild = storageGet('selectedGuild');
+                    if (savedGuild && user.guilds.find(g => g.id === savedGuild)) {
+                        select.value = savedGuild;
+                        selectGuild(savedGuild);
+                    }
+                }
+            } catch (err) {
+                console.error('Failed to load user:', err);
+                showToast('Không thể tải thông tin người dùng', 'error');
             }
-
-            // Populate guild selector
-            const select = document.getElementById('guild-select');
-            select.innerHTML = '';
-            if (data.guilds && data.guilds.length > 0) {
-                data.guilds.forEach(g => {
-                    const opt = document.createElement('option');
-                    opt.value = g.id;
-                    opt.textContent = g.name;
-                    select.appendChild(opt);
-                });
-                currentGuildId = parseInt(data.guilds[0].id);
-                select.value = data.guilds[0].id;
-                loadGuildInfo(currentGuildId);
-            }
-        } catch (e) {
-            console.error('Failed to load user info:', e);
         }
-    }
 
-    // ---- Guild Info ----
-    async function loadGuildInfo(guildId) {
-        try {
-            const res = await fetch(`/knowledge/${guildId}`);
-            if (!res.ok) return;
-            const data = await res.json();
-            if (data.data) {
-                document.getElementById('guild-info').style.display = 'block';
-                document.getElementById('info-channels').textContent = data.data.channels || '—';
-                document.getElementById('info-roles').textContent = data.data.roles || '—';
-                document.getElementById('info-status').textContent =
-                    data.data.setup_complete ? '✅ Sẵn sàng' : '⏳ Chưa thiết lập';
-            }
-        } catch (e) {
-            console.error('Failed to load guild info:', e);
+        function logout() {
+            window.location.href = '/auth/logout';
         }
-    }
 
-    // ---- Event Listeners ----
-    function setupEventListeners() {
-        // Send message
-        document.getElementById('send-btn').addEventListener('click', sendMessage);
-        document.getElementById('chat-input').addEventListener('keydown', (e) => {
-            if (e.key === 'Enter' && !e.shiftKey) {
-                e.preventDefault();
+        // ===== Guild Selection =====
+        function selectGuild(guildId) {
+            if (!guildId) {
+                currentGuild = null;
+                return;
+            }
+            currentGuild = guildId;
+            storageSet('selectedGuild', guildId);
+            loadKnowledge(guildId);
+        }
+
+        async function loadKnowledge(guildId) {
+            try {
+                const data = await api('GET', `/knowledge/${guildId}`);
+                if (data) {
+                    document.getElementById('channelCount').textContent = data.channels_count || data.channels?.length || '—';
+                    document.getElementById('roleCount').textContent = data.roles_count || data.roles?.length || '—';
+                    document.getElementById('memberCount').textContent = data.members_count || data.member_count || '—';
+                }
+            } catch (err) {
+                // Knowledge endpoint might not exist yet — show defaults
+                document.getElementById('channelCount').textContent = '—';
+                document.getElementById('roleCount').textContent = '—';
+                document.getElementById('memberCount').textContent = '—';
+            }
+        }
+
+        // ===== Chat =====
+        function handleInputKey(event) {
+            if (event.key === 'Enter' && !event.shiftKey) {
+                event.preventDefault();
                 sendMessage();
             }
-        });
+        }
 
-        // Auto-resize textarea
-        const input = document.getElementById('chat-input');
-        input.addEventListener('input', () => {
-            input.style.height = 'auto';
-            input.style.height = Math.min(input.scrollHeight, 120) + 'px';
-        });
+        async function sendMessage() {
+            const input = document.getElementById('chatInput');
+            const text = input.value.trim();
 
-        // Guild selector
-        document.getElementById('guild-select').addEventListener('change', (e) => {
-            currentGuildId = parseInt(e.target.value) || null;
-            if (currentGuildId) loadGuildInfo(currentGuildId);
-        });
+            if (!text || isWaitingResponse) return;
 
-        // Sidebar toggle (mobile)
-        document.getElementById('sidebar-toggle').addEventListener('click', () => {
-            document.getElementById('sidebar').classList.toggle('open');
-        });
-        document.getElementById('sidebar-close').addEventListener('click', () => {
-            document.getElementById('sidebar').classList.remove('open');
-        });
+            // Append user message
+            appendMessage('user', text);
+            input.value = '';
 
-        // Approvals panel toggle
-        document.getElementById('approvals-toggle').addEventListener('click', () => {
-            document.getElementById('approvals-panel').classList.toggle('open');
-        });
-        document.getElementById('panel-close').addEventListener('click', () => {
-            document.getElementById('approvals-panel').classList.remove('open');
-        });
-    }
+            // Show typing indicator
+            setTyping(true);
+            isWaitingResponse = true;
 
-    // ---- Send Message ----
-    async function sendMessage() {
-        const input = document.getElementById('chat-input');
-        const text = input.value.trim();
-        if (!text) return;
-
-        // Add user message to chat
-        appendMessage(text, 'user');
-        input.value = '';
-        input.style.height = 'auto';
-
-        // Show typing
-        showTyping(true);
-
-        try {
-            const res = await fetch(`${API_BASE}/chat`, {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({
+            try {
+                const payload = {
                     message: text,
-                    guild_id: currentGuildId,
-                }),
-            });
+                    guild_id: currentGuild,
+                };
 
-            showTyping(false);
+                const response = await api('POST', '/api/v1/chat', payload);
 
-            if (!res.ok) {
-                const err = await res.json().catch(() => ({}));
-                appendMessage(`⚠️ Lỗi: ${err.detail || 'Không thể xử lý'}`, 'bot', true);
+                setTyping(false);
+                isWaitingResponse = false;
+
+                if (response) {
+                    const botText = response.response || response.message || response.reply || JSON.stringify(response);
+                    appendMessage('bot', botText);
+
+                    // If the response triggered approvals, refresh immediately
+                    if (response.requires_approval || response.approval_id) {
+                        pollApprovals();
+                    }
+                }
+            } catch (err) {
+                setTyping(false);
+                isWaitingResponse = false;
+                appendMessage('bot', `❌ Lỗi: ${err.message || 'Không thể gửi tin nhắn'}`);
+                showToast('Gửi tin nhắn thất bại', 'error');
+            }
+        }
+
+        function appendMessage(role, content) {
+            const container = document.getElementById('chatMessages');
+            const msgDiv = document.createElement('div');
+            msgDiv.className = `message ${role}`;
+
+            const avatar = document.createElement('div');
+            avatar.className = 'message-avatar';
+            avatar.textContent = role === 'user' ? '👤' : '🤖';
+
+            const contentDiv = document.createElement('div');
+            contentDiv.className = 'message-content';
+
+            if (role === 'bot') {
+                contentDiv.innerHTML = renderMarkdown(content);
+            } else {
+                contentDiv.innerHTML = `<p>${escapeHtml(content)}</p>`;
+            }
+
+            msgDiv.appendChild(avatar);
+            msgDiv.appendChild(contentDiv);
+            container.appendChild(msgDiv);
+
+            // Scroll to bottom
+            container.scrollTop = container.scrollHeight;
+        }
+
+        function renderMarkdown(text) {
+            if (!text) return '';
+            try {
+                return marked.parse(text);
+            } catch {
+                return `<p>${escapeHtml(text)}</p>`;
+            }
+        }
+
+        function setTyping(active) {
+            const indicator = document.getElementById('typingIndicator');
+            if (active) {
+                indicator.classList.add('active');
+            } else {
+                indicator.classList.remove('active');
+            }
+        }
+
+        // ===== Approvals =====
+        function startApprovalPolling() {
+            pollApprovals();
+            approvalPollTimer = setInterval(pollApprovals, 3000);
+        }
+
+        async function pollApprovals() {
+            try {
+                const data = await api('GET', '/api/v1/approvals');
+                if (data) {
+                    renderApprovals(Array.isArray(data) ? data : data.approvals || []);
+                }
+            } catch (err) {
+                // Silently fail — polling will retry
+            }
+        }
+
+        function renderApprovals(approvals) {
+            const list = document.getElementById('approvalList');
+            const badge = document.getElementById('approvalCount');
+            const empty = document.getElementById('approvalEmpty');
+
+            badge.textContent = approvals.length;
+
+            if (approvals.length === 0) {
+                list.innerHTML = '';
+                list.appendChild(createEmptyState());
                 return;
             }
 
-            const data = await res.json();
-            appendMessage(data.content, 'bot');
-        } catch (e) {
-            showTyping(false);
-            appendMessage('⚠️ Lỗi kết nối. Vui lòng thử lại.', 'bot', true);
-        }
-    }
-
-    // ---- Append Message ----
-    function appendMessage(content, sender, isError = false) {
-        const container = document.getElementById('chat-messages');
-        const msgDiv = document.createElement('div');
-        msgDiv.className = `message ${sender}-message${isError ? ' error' : ''}`;
-
-        const avatar = sender === 'bot' ? '🤖' : '👤';
-        let rendered = content;
-        if (sender === 'bot' && typeof marked !== 'undefined') {
-            try { rendered = marked.parse(content); } catch(e) { rendered = content; }
+            list.innerHTML = '';
+            approvals.forEach(item => {
+                list.appendChild(createApprovalCard(item));
+            });
         }
 
-        msgDiv.innerHTML = `
-            <div class="message-avatar">${avatar}</div>
-            <div class="message-content">
-                <div class="message-text">${sender === 'bot' ? rendered : escapeHtml(content)}</div>
-            </div>
-        `;
-
-        container.appendChild(msgDiv);
-        container.scrollTop = container.scrollHeight;
-    }
-
-    // ---- Typing Indicator ----
-    function showTyping(show) {
-        document.getElementById('typing-indicator').style.display = show ? 'flex' : 'none';
-    }
-
-    // ---- Approvals Polling ----
-    function startApprovalPolling() {
-        pollApprovals();
-        pollInterval = setInterval(pollApprovals, 3000);
-    }
-
-    async function pollApprovals() {
-        try {
-            const params = currentGuildId ? `?guild_id=${currentGuildId}` : '';
-            const res = await fetch(`${API_BASE}/approvals${params}`);
-            if (!res.ok) return;
-
-            const data = await res.json();
-            renderApprovals(data.approvals || []);
-
-            // Update badge
-            const badge = document.getElementById('approval-badge');
-            if (data.count > 0) {
-                badge.textContent = data.count;
-                badge.style.display = 'inline';
-            } else {
-                badge.style.display = 'none';
-            }
-        } catch (e) {
-            // Silently fail polling
-        }
-    }
-
-    function renderApprovals(approvals) {
-        const list = document.getElementById('approvals-list');
-        if (approvals.length === 0) {
-            list.innerHTML = '<div class="empty-state"><p>Không có yêu cầu phê duyệt nào.</p></div>';
-            return;
+        function createEmptyState() {
+            const div = document.createElement('div');
+            div.className = 'empty-state';
+            div.innerHTML = `
+                <div class="empty-state-icon">✅</div>
+                <p class="empty-state-text">Không có yêu cầu chờ duyệt</p>
+            `;
+            return div;
         }
 
-        list.innerHTML = approvals.map(a => `
-            <div class="approval-item risk-${a.risk_level.toLowerCase()}">
-                <div class="approval-header">
-                    <span class="approval-action">${escapeHtml(a.action)}</span>
-                    <span class="risk-badge ${a.risk_level.toLowerCase()}">${a.risk_level}</span>
+        function createApprovalCard(item) {
+            const risk = (item.risk_level || item.risk || 'low').toLowerCase();
+            const card = document.createElement('div');
+            card.className = `approval-card risk-${risk}`;
+
+            const description = item.description || item.action || item.summary || 'Hành động chờ duyệt';
+            const stepsCount = item.steps_count || item.steps?.length || 0;
+
+            card.innerHTML = `
+                <div class="approval-description">${escapeHtml(description)}</div>
+                <div class="approval-meta">
+                    <span class="risk-badge ${risk}">${risk.toUpperCase()}</span>
+                    ${stepsCount ? `<span class="steps-count">${stepsCount} bước</span>` : ''}
                 </div>
-                <p class="approval-desc">${escapeHtml(a.description)}</p>
-                ${a.steps.length > 0 ? `
-                    <ul class="approval-steps">
-                        ${a.steps.map(s => `<li>${escapeHtml(s)}</li>`).join('')}
-                    </ul>
-                ` : ''}
                 <div class="approval-actions">
-                    <button class="btn-approve" onclick="approveAction('${a.id}')">✅ Phê duyệt</button>
-                    <button class="btn-reject" onclick="rejectAction('${a.id}')">❌ Từ chối</button>
+                    <button class="btn-approve" onclick="approveAction('${item.id}')">✓ Duyệt</button>
+                    <button class="btn-reject" onclick="rejectAction('${item.id}')">✕ Từ chối</button>
                 </div>
-            </div>
-        `).join('');
-    }
+            `;
 
-    // ---- Approve / Reject ----
-    async function approveAction(id) {
-        try {
-            const res = await fetch(`${API_BASE}/approve/${id}`, { method: 'POST' });
-            const data = await res.json();
-            if (data.success) {
-                appendMessage(`✅ Đã phê duyệt: ${data.message}`, 'bot');
-                pollApprovals();
-            } else {
-                appendMessage(`⚠️ ${data.message}`, 'bot', true);
-            }
-        } catch (e) {
-            appendMessage('⚠️ Lỗi khi phê duyệt.', 'bot', true);
+            return card;
         }
-    }
 
-    async function rejectAction(id) {
-        try {
-            const res = await fetch(`${API_BASE}/reject/${id}`, { method: 'POST' });
-            const data = await res.json();
-            if (data.success) {
-                appendMessage(`❌ Đã từ chối: ${data.message}`, 'bot');
+        async function approveAction(id) {
+            try {
+                await api('POST', `/api/v1/approve/${id}`);
+                showToast('Đã phê duyệt thành công', 'success');
                 pollApprovals();
-            } else {
-                appendMessage(`⚠️ ${data.message}`, 'bot', true);
+            } catch (err) {
+                showToast('Phê duyệt thất bại: ' + err.message, 'error');
             }
-        } catch (e) {
-            appendMessage('⚠️ Lỗi khi từ chối.', 'bot', true);
         }
-    }
 
-    // ---- Utils ----
-    function escapeHtml(str) {
-        const div = document.createElement('div');
-        div.textContent = str;
-        return div.innerHTML;
-    }
+        async function rejectAction(id) {
+            try {
+                await api('POST', `/api/v1/reject/${id}`);
+                showToast('Đã từ chối yêu cầu', 'info');
+                pollApprovals();
+            } catch (err) {
+                showToast('Từ chối thất bại: ' + err.message, 'error');
+            }
+        }
+
+        // ===== Mobile Panel Toggles =====
+        function toggleSidebar() {
+            const sidebar = document.getElementById('sidebar');
+            const overlay = document.getElementById('overlay');
+            const approvalPanel = document.getElementById('approvalPanel');
+
+            approvalPanel.classList.remove('open');
+            sidebar.classList.toggle('open');
+            overlay.classList.toggle('active', sidebar.classList.contains('open'));
+        }
+
+        function toggleApprovals() {
+            const sidebar = document.getElementById('sidebar');
+            const overlay = document.getElementById('overlay');
+            const approvalPanel = document.getElementById('approvalPanel');
+
+            sidebar.classList.remove('open');
+            approvalPanel.classList.toggle('open');
+            overlay.classList.toggle('active', approvalPanel.classList.contains('open'));
+        }
+
+        function closeAllPanels() {
+            document.getElementById('sidebar').classList.remove('open');
+            document.getElementById('approvalPanel').classList.remove('open');
+            document.getElementById('overlay').classList.remove('active');
+        }
     </script>
 </body>
 </html>

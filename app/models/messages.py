@@ -1,35 +1,37 @@
-"""Message models for incoming and outgoing Discord messages."""
-
+"""Message models for AuraFactory pipeline."""
 import uuid
 from dataclasses import dataclass, field
-from typing import Optional
+from typing import Any, Dict, List, Optional
 
 
 @dataclass
 class IncomingMessage:
-    """Represents a message received from a Discord user."""
-
+    """Standardized incoming message from any channel (Discord/API/Web)."""
     user_id: str
     user_name: str
-    guild_id: str
-    content: str
-    channel_id: str
+    prompt: str  # The cleaned user message content
+    guild_id: Optional[int] = None
+    channel_id: Optional[int] = None
+    message_id: Optional[str] = None
+    source: str = "discord"  # discord | api | web
+    user_roles: List[str] = field(default_factory=list)
+    is_admin: bool = False
+    attachments: List[str] = field(default_factory=list)
+    metadata: Dict[str, Any] = field(default_factory=dict)
     trace_id: str = field(default_factory=lambda: str(uuid.uuid4()))
-
-    def __post_init__(self) -> None:
-        if not self.content:
-            raise ValueError("Message content cannot be empty")
 
 
 @dataclass
 class OutgoingMessage:
-    """Represents a message to be sent back to Discord."""
-
+    """Standardized outgoing message to any channel."""
     content: str
-    trace_id: str
-    status: str = "pending"
+    trace_id: str = ""
+    target_channel_id: Optional[int] = None
+    source: str = "discord"
+    status: str = "success"
     approval_required: bool = False
     approval_id: Optional[str] = None
+    metadata: Dict[str, Any] = field(default_factory=dict)
 
     def mark_approved(self) -> None:
         """Mark this message as approved for sending."""

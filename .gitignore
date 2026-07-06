@@ -31,6 +31,7 @@ Thumbs.db
 # Logs
 logs/*.log
 logs/traces/*.json
+logs/traces/*.jsonl
 
 # Data (local only)
 data/knowledge/*.json

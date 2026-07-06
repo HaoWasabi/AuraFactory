@@ -2,16 +2,13 @@
 """
 IntentClassifier — Classifies user messages into routing intents.
 Uses LLM with structured prompt, with heuristic fallback.
-
 Output: FAST_TRACK | ADMIN_COMPLEX | ASSISTANT
 """
 import json
 import logging
 from typing import Optional
-
 from app.agents.contracts import IntentType
 from app.infra.llm.base import LLMProvider
-
 logger = logging.getLogger(__name__)
 
 

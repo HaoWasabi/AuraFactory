@@ -9,19 +9,14 @@ import logging
 from abc import ABC, abstractmethod
 from pathlib import Path
 from typing import Any, Dict, List, Optional
-
 from app.agents.contracts import AgentRole, TaskAssignment, TaskResult
 from app.infra.llm.base import LLMProvider, LLMResponse
-
 logger = logging.getLogger(__name__)
-
 # Retry configuration
 MAX_RETRIES: int = 1
 RETRY_BACKOFF_SECONDS: float = 2.0
-
 # Error message when LLM fails after retries
 LLM_OVERLOAD_MESSAGE: str = "Hệ thống đang quá tải, thử lại sau"
-
 # Prompts directory
 PROMPTS_DIR: Path = Path(__file__).parent.parent.parent / "prompts"
 

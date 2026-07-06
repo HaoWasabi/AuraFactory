@@ -64,3 +64,7 @@ class BaseLLM(ABC):
             LLMResponse with content, tool_calls, and usage stats.
         """
         ...
+
+
+# Alias used by orchestrator.py and base agent
+LLMProvider = BaseLLM

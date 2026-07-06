@@ -52,11 +52,13 @@ class GatewayPipeline:
         session_manager: Optional[SessionManager] = None,
         cost_tracker: Optional[CostTracker] = None,
         db: Any = None,
+        tracer: Any = None,
     ) -> None:
         self._rate_limiter = rate_limiter or RateLimiter()
         self._guardrails = guardrails or Guardrails()
         self._session_manager = session_manager or SessionManager(db=db)
         self._cost_tracker = cost_tracker or CostTracker(db=db)
+        self._tracer = tracer
 
     async def process(self, message: IncomingMessage) -> GatewayResult:
         """
@@ -128,6 +130,7 @@ class GatewayPipeline:
             passed=True,
             session=session,
             user_role=user_role,
+            trace_id=message.trace_id,
         )
 
     def _detect_role_from_message(self, message: IncomingMessage) -> str:

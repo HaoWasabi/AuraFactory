@@ -14,7 +14,6 @@ Permission denied at gateway → never reaches agents.
 """
 import logging
 from typing import Any, Dict, Optional
-
 from app.agents.base import BaseAgent
 from app.agents.contracts import (
     AgentRole,
@@ -24,7 +23,6 @@ from app.agents.contracts import (
 )
 from app.agents.classifier import IntentClassifier
 from app.infra.llm.base import LLMProvider
-
 logger = logging.getLogger(__name__)
 
 # Permission error messages

@@ -7,9 +7,10 @@ for LLM system prompt injection.
 from __future__ import annotations
 
 import logging
+from pathlib import Path
 from typing import Any
 
-from app.skills.loader import SkillTool
+from app.skills.loader import SkillLoader, SkillTool
 
 logger = logging.getLogger(__name__)
 
@@ -25,7 +26,44 @@ class SkillRegistry:
 
     def __init__(self) -> None:
         self._tools: dict[str, SkillTool] = {}
+        self._loader = SkillLoader()
         logger.info("SkillRegistry initialized")
+
+    # ============================================================
+    # INITIALIZATION — load all skill files from skills/ directory
+    # ============================================================
+
+    async def init_skills(self) -> None:
+        """Load all skill definition files from the skills/ directory.
+
+        Scans for .md files in the skills directory and registers
+        all tools found in them.
+        """
+        from app.config.settings import settings
+
+        skills_dir = Path(settings.skills_dir)
+        if not skills_dir.exists():
+            logger.warning("Skills directory not found: %s", skills_dir)
+            return
+
+        skill_files = list(skills_dir.glob("*.md"))
+        if not skill_files:
+            logger.info("No skill files found in %s", skills_dir)
+            return
+
+        for skill_file in skill_files:
+            try:
+                tools = self._loader.load_skill_file(str(skill_file))
+                for tool in tools:
+                    self.register_skill(tool)
+            except Exception as e:
+                logger.warning("Failed to load skill file %s: %s", skill_file.name, e)
+
+        logger.info("Loaded %d skills from %d files", len(self._tools), len(skill_files))
+
+    # ============================================================
+    # REGISTRATION & LOOKUP
+    # ============================================================
 
     def register_skill(self, skill_tool: SkillTool) -> None:
         """Register a skill tool in the registry.
@@ -131,6 +169,14 @@ class SkillRegistry:
         formatted = "\n".join(lines)
         logger.debug("Formatted %d tools for prompt (%d chars)", len(tools), len(formatted))
         return formatted
+
+    # ============================================================
+    # CONVENIENCE METHODS (used by main.py)
+    # ============================================================
+
+    def count(self) -> int:
+        """Return the number of registered tools."""
+        return len(self._tools)
 
     @property
     def tool_count(self) -> int:

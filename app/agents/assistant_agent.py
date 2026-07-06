@@ -1,7 +1,6 @@
 # app/agents/assistant_agent.py
 """
 AssistantAgent — Q&A from knowledge store (read-only).
-
 NO write tools available.
 Flow: search knowledge_store → format answer → return.
 If knowledge_store empty/no match → say "Tôi chưa có thông tin về server này"
@@ -9,10 +8,8 @@ Fallback gracefully if vector store disabled (keyword search only).
 """
 import logging
 from typing import Any, Dict, Optional
-
 from app.agents.base import BaseAgent, LLM_OVERLOAD_MESSAGE
 from app.agents.contracts import AgentRole, TaskAssignment, TaskResult
-
 logger = logging.getLogger(__name__)
 
 

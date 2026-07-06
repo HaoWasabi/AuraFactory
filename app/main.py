@@ -80,7 +80,7 @@ async def lifespan(app: FastAPI):
 
     # Observability
     from app.infra.observability import Tracer, metrics
-    tracer = Tracer(log_dir=settings.trace_log_dir)
+    tracer = Tracer()
     app.state.tracer = tracer
     app.state.metrics = metrics
     logger.info("✅ Tracer initialized")
@@ -133,10 +133,11 @@ async def lifespan(app: FastAPI):
     # === Agents ===
     from app.agents import OrchestratorAgent, AdminAgent, AssistantAgent, ArchitectAgent
     from app.agents.fast_track import FastTrackExecutor
+    from app.agents.contracts import AgentRole, IntentType, TaskAssignment, TaskResult
 
     orchestrator = OrchestratorAgent(
         llm=primary_provider,
-        tracer=tracer,
+        mcp_client=mcp_client,
         knowledge_store=knowledge_store,
         memory=memory_service,
     )
@@ -144,28 +145,23 @@ async def lifespan(app: FastAPI):
     admin_agent = AdminAgent(
         llm=primary_provider,
         mcp_client=mcp_client,
-        tracer=tracer,
         knowledge_store=knowledge_store,
-        approval_store=app.state.approval_store,
     )
 
     assistant_agent = AssistantAgent(
         llm=primary_provider,
         knowledge_store=knowledge_store,
         memory=memory_service,
-        tracer=tracer,
     )
 
     architect_agent = ArchitectAgent(
         llm=primary_provider,
         mcp_client=mcp_client,
-        tracer=tracer,
     )
 
     fast_track = FastTrackExecutor(
         llm=primary_provider,
         mcp_client=mcp_client,
-        tracer=tracer,
     )
 
     # Wire agents
@@ -189,30 +185,35 @@ async def lifespan(app: FastAPI):
         # Run through gateway
         gateway_result = await gateway.process(msg)
 
-        if not gateway_result.allowed:
+        if not gateway_result.passed:
             return OutgoingMessage(
-                content=gateway_result.rejection_reason,
-                trace_id="rejected",
+                content=gateway_result.reason,
+                trace_id=msg.trace_id,
                 target_channel_id=msg.channel_id,
                 source=msg.source,
             )
 
-        # Route to orchestrator
-        result = await orchestrator.handle(
-            prompt=gateway_result.message.prompt,
-            user_id=msg.user_id,
+        # Build TaskAssignment from IncomingMessage + GatewayResult
+        task = TaskAssignment(
+            trace_id=msg.trace_id,
+            intent=IntentType.FAST_TRACK,  # placeholder — orchestrator will re-classify
+            agent_role=AgentRole.ORCHESTRATOR,
+            message=msg,
+            context={"user_role": gateway_result.user_role, "session": gateway_result.session},
+            user_role=gateway_result.user_role,
             guild_id=msg.guild_id,
-            trace_id=gateway_result.context.trace_id,
-            session_id=gateway_result.context.session_id,
-            context=gateway_result.context,
+            session_id=gateway_result.session.session_id if gateway_result.session else "",
         )
 
+        # Route to orchestrator
+        result = await orchestrator.execute(task)
+
         return OutgoingMessage(
-            content=result.get("content", "Không thể xử lý yêu cầu."),
-            trace_id=gateway_result.context.trace_id,
+            content=result.content,
+            trace_id=result.trace_id,
             target_channel_id=msg.channel_id,
             source=msg.source,
-            metadata=result,
+            metadata={"tools_called": result.tools_called, "status": result.status},
         )
 
     app.state.process_message = process_message
