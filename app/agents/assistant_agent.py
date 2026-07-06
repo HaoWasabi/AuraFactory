@@ -97,7 +97,7 @@ class AssistantAgent:
         # Build server context from knowledge store
         server_context = "No server knowledge available."
         if guild_id:
-            server_context = await self._knowledge.get_context_string(guild_id)
+            server_context = await self._knowledge.get_summary_string(guild_id)
 
         system_prompt = ASSISTANT_SYSTEM_PROMPT.format(server_context=server_context)
 
@@ -143,7 +143,7 @@ class AssistantAgent:
         Generate a personalized onboarding DM for a new member.
         Called by lifecycle event handler when member joins.
         """
-        server_context = await self._knowledge.get_context_string(guild_id)
+        server_context = await self._knowledge.get_summary_string(guild_id)
 
         prompt = f"""A new member named "{member_name}" just joined the server.
 Generate a short, warm welcome DM that:

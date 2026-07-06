@@ -23,6 +23,22 @@ class Settings:
     def discord_token(self) -> str:
         return os.getenv("DISCORD_TOKEN", "")
 
+    @property
+    def discord_client_id(self) -> str:
+        return os.getenv("DISCORD_CLIENT_ID", "")
+
+    @property
+    def discord_client_secret(self) -> str:
+        return os.getenv("DISCORD_CLIENT_SECRET", "")
+
+    @property
+    def discord_redirect_uri(self) -> str:
+        return os.getenv("DISCORD_REDIRECT_URI", "http://localhost:8000/auth/callback")
+
+    @property
+    def secret_key(self) -> str:
+        return os.getenv("SECRET_KEY", "aurafactory-dev-secret-change-in-production")
+
     # === Multi-Guild ===
     @property
     def allowed_guild_ids(self) -> List[int]:

@@ -32,6 +32,7 @@ class ServerKnowledgeStore:
         self._storage_dir.mkdir(parents=True, exist_ok=True)
         # In-memory cache for fast access
         self._cache: dict[int, ServerKnowledge] = {}
+        self._summary_cache: dict[int, str] = {}
 
     def _guild_path(self, guild_id: int) -> Path:
         """Path to a guild's knowledge JSON file."""
@@ -40,6 +41,8 @@ class ServerKnowledgeStore:
     async def save(self, knowledge: ServerKnowledge) -> None:
         """Persist server knowledge to storage."""
         self._cache[knowledge.guild_id] = knowledge
+        # Invalidate summary cache on save
+        self._summary_cache.pop(knowledge.guild_id, None)
 
         data = self._serialize(knowledge)
         path = self._guild_path(knowledge.guild_id)
@@ -95,6 +98,20 @@ class ServerKnowledgeStore:
         if knowledge is None:
             return "No server knowledge available."
         return knowledge.to_context_string()
+
+    async def get_summary_string(self, guild_id: int) -> str:
+        """Get compact cached summary for LLM prompts (~200 tokens)."""
+        # Return from cache if available
+        if guild_id in self._summary_cache:
+            return self._summary_cache[guild_id]
+
+        knowledge = await self.load(guild_id)
+        if knowledge is None:
+            return "New server — no knowledge yet."
+
+        summary = knowledge.to_summary_string()
+        self._summary_cache[guild_id] = summary
+        return summary
 
     async def query(self, guild_id: int, question: str) -> str:
         """

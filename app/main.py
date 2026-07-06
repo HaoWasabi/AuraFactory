@@ -7,12 +7,19 @@ FastAPI + Discord Bot co-running.
 import asyncio
 import logging
 from contextlib import asynccontextmanager
+from pathlib import Path
+
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, PlainTextResponse
+from fastapi.staticfiles import StaticFiles
+from fastapi.templating import Jinja2Templates
+from starlette.middleware.sessions import SessionMiddleware
 from app.config import settings
 logger = logging.getLogger(__name__)
 
+
+FRONTEND_DIR = Path(__file__).parent.parent / "frontend"
 
 # ============================================================
 # DI CONTAINER
@@ -115,6 +122,7 @@ async def lifespan(app: FastAPI):
     # === Layer 3: Agents ===
     if container.llm:
         from app.agents import OrchestratorAgent, AdminAgent, AssistantAgent, ArchitectAgent
+        from app.agents.fast_track import FastTrackExecutor
 
         # Create agents
         container.assistant_agent = AssistantAgent(
@@ -137,6 +145,13 @@ async def lifespan(app: FastAPI):
         architect.set_mcp_client(container.mcp_client)
         container.admin_agent.register_specialist("architect", architect)
 
+        # Fast Track executor (simple commands — 1 LLM call)
+        fast_track = FastTrackExecutor(
+            llm=container.llm,
+            tracer=container.tracer,
+            mcp_client=container.mcp_client,
+        )
+
         # Orchestrator (thin router)
         container.orchestrator = OrchestratorAgent(
             llm=container.llm,
@@ -146,6 +161,7 @@ async def lifespan(app: FastAPI):
         )
         container.orchestrator.set_admin_agent(container.admin_agent)
         container.orchestrator.set_assistant_agent(container.assistant_agent)
+        container.orchestrator.set_fast_track(fast_track)
 
         print("🤖 Agents: orchestrator → admin_agent, assistant_agent, architect")
 
@@ -183,6 +199,9 @@ async def lifespan(app: FastAPI):
         if container.admin_agent:
             from app.skills.startup import get_validator
             container.admin_agent.set_skill_registry(
+                container.skill_registry, get_validator()
+            )
+            fast_track.set_skill_registry(
                 container.skill_registry, get_validator()
             )
 
@@ -324,13 +343,26 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+# Session middleware (for Discord OAuth)
+app.add_middleware(SessionMiddleware, secret_key=settings.secret_key)
+
+# Templates
+templates = Jinja2Templates(directory=str(FRONTEND_DIR / "templates"))
+app.state.templates = templates
+
+# Static files
+app.mount("/static", StaticFiles(directory=str(FRONTEND_DIR / "static")), name="static")
+
 from app.channels.api_adapter import router as api_router
 app.include_router(api_router)
 
+from app.channels.web_routes import router as web_router
+app.include_router(web_router)
 
-@app.api_route("/", methods=["GET", "HEAD"], tags=["system"])
-async def root():
-    """Root endpoint — for health checks and quick status."""
+
+@app.api_route("/api/status", methods=["GET", "HEAD"], tags=["system"])
+async def api_status():
+    """API status endpoint — for health checks and quick status."""
     return JSONResponse(content={"status": "ok", "service": "AuraFactory"})
 
 

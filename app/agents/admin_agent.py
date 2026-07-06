@@ -25,7 +25,7 @@ from app.gateway.pipeline import GatewayContext
 
 logger = logging.getLogger(__name__)
 
-MAX_ITERATIONS = 10
+MAX_ITERATIONS = 3
 LOOP_TIMEOUT_SECONDS = 30
 
 
@@ -33,33 +33,14 @@ LOOP_TIMEOUT_SECONDS = 30
 # PROMPTS
 # ============================================================
 
-SETUP_SYSTEM_PROMPT = """You are AuraFactory Setup Wizard — helping an admin configure their Discord server for the first time.
+SETUP_SYSTEM_PROMPT = """You are AuraFactory — AI that helps set up Discord servers.
 
-## Current Server State:
-{server_context}
+Server: {server_context}
 
-## Your Role:
-- Guide the admin through server setup in a friendly, step-by-step conversation.
-- Ask what the server is for, then propose a channel/role structure.
-- Present your plan clearly and wait for confirmation before executing.
-- After setup confirmed + executed, announce switching to normal mode.
-
-## When proposing a plan, format it clearly:
-```
-📋 Proposed Structure:
-📁 Category: NAME
-  #channel-1 — description
-  #channel-2 — description
-🎭 Roles: role1, role2, role3
-```
-
-Then ask: "✅ Tạo luôn | ✏️ Chỉnh sửa | 🔍 Giải thích thêm"
-
-## When executing (after user confirms):
-Use ReAct format — one action at a time.
-Always create #aura-admin channel for future admin commands.
-
-## Language Rule:
+Rules:
+- Ask what the server is for, propose channels/roles structure.
+- Format plan: 📁 Category > #channels. 🎭 Roles list.
+- End with: "✅ Tạo luôn | ✏️ Chỉnh sửa"
 - Respond in the same language the user used.
 """
 
@@ -197,7 +178,7 @@ class AdminAgent:
                 exec_prompt = f"User confirmed execution. Previous plan:\n{pending_plan}\n\nUser said: {prompt}"
                 await self._clear_pending_plan(session_id)
 
-            result = await self._run_react_loop(exec_prompt, trace_id, guild_id, guild, server_context, session_id)
+            result = await self._run_react_loop(exec_prompt, trace_id, guild_id, guild, server_context, session_id, mode="setup")
             # Mark setup as complete after successful execution
             if result.get("status") == "response":
                 await self._knowledge.mark_setup_complete(guild_id)
@@ -258,7 +239,7 @@ class AdminAgent:
     # ============================================================
 
     async def _run_react_loop(
-        self, prompt: str, trace_id: str, guild_id: int, guild, server_context: str, session_id: str = ""
+        self, prompt: str, trace_id: str, guild_id: int, guild, server_context: str, session_id: str = "", mode: str = "admin"
     ) -> Dict[str, Any]:
         """
         ReAct loop: Think → Act → Observe → Repeat.
@@ -274,7 +255,7 @@ class AdminAgent:
             }
 
         # Build tools block from SkillRegistry (with risk metadata)
-        tools_block = self._build_tools_block()
+        tools_block = self._build_tools_block(mode=mode)
 
         system_prompt = ADMIN_REACT_PROMPT.format(
             max_iter=MAX_ITERATIONS,
@@ -435,18 +416,32 @@ class AdminAgent:
     # TOOLS BLOCK BUILDER
     # ============================================================
 
-    def _build_tools_block(self) -> str:
-        """Build tools list for LLM prompt — from SkillRegistry if available, else MCP."""
+    def _build_tools_block(self, mode: str = "admin") -> str:
+        """Build tools list for LLM prompt — filtered by mode."""
         if self._skill_registry and self._skill_registry.is_loaded:
-            # Use SkillRegistry (includes risk metadata)
             tools = self._skill_registry.get_all_tools()
+
+            # Setup mode: only creation tools (save tokens)
+            setup_names = {
+                "create_channel", "create_category", "create_role", "assign_role",
+                "setup_welcome",
+            }
+            # Admin mode: broader set
+            admin_names = {
+                "create_channel", "create_category", "create_role", "assign_role",
+                "edit_channel", "delete_channel", "delete_role",
+                "list_channels", "list_roles", "get_guild_info",
+                "set_channel_permission", "kick_member", "ban_member",
+                "create_automod_rule", "create_invite", "backup_server",
+            }
+
+            allowed = setup_names if mode == "setup" else admin_names
+            filtered = [t for t in tools if t.name in allowed]
+            if not filtered:
+                filtered = tools[:10]
             lines = []
-            for t in tools:
-                # Hide guild_id from LLM (auto-injected)
-                params = [k for k in t.input_schema.get("properties", {}).keys() if k != "guild_id"]
-                required = [k for k in t.input_schema.get("required", []) if k != "guild_id"]
-                params_str = ", ".join(f"{p}*" if p in required else p for p in params) if params else ""
-                lines.append(f"- {t.name} [{t.risk_level}]: {t.description} | params: {params_str}")
+            for t in filtered:
+                lines.append(f"- {t.name} [{t.risk_level}]: {t.description}")
             return "\n".join(lines)
         else:
             # Fallback to raw MCP list
@@ -507,7 +502,7 @@ class AdminAgent:
     async def _get_server_context(self, guild_id: int, guild) -> str:
         """Get server context string for prompts."""
         if guild_id:
-            ctx = await self._knowledge.get_context_string(guild_id)
+            ctx = await self._knowledge.get_summary_string(guild_id)
             if ctx != "No server knowledge available.":
                 return ctx
 

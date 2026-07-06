@@ -108,3 +108,27 @@ class ServerKnowledge:
             parts.append(f"\n## Server Rules:\n{self.rules_text[:500]}")
 
         return "\n".join(parts)
+
+    def to_summary_string(self) -> str:
+        """Compact summary for LLM context — ~200 tokens max."""
+        cats = ", ".join(self.categories[:8]) if self.categories else "none"
+        ch_count = len(self.channels)
+        role_names = [r.name for r in self.roles[:10] if r.name != "@everyone"]
+        roles_str = ", ".join(role_names) if role_names else "none"
+
+        # Channel names grouped compact
+        text_chs = [f"#{c.name}" for c in self.channels if c.type == "text"][:15]
+        voice_chs = [f"🔊{c.name}" for c in self.channels if c.type == "voice"][:5]
+
+        summary = (
+            f"Server: {self.guild_name} | {self.member_count} members\n"
+            f"Categories: {cats}\n"
+            f"Channels ({ch_count}): {', '.join(text_chs[:10])}"
+            f"{', ...' if len(text_chs) > 10 else ''}\n"
+        )
+        if voice_chs:
+            summary += f"Voice: {', '.join(voice_chs)}\n"
+        summary += f"Roles: {roles_str}\n"
+        if self.rules_text:
+            summary += f"Rules: {self.rules_text[:150]}\n"
+        return summary
