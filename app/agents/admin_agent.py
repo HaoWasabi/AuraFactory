@@ -391,6 +391,17 @@ class AdminAgent:
         3. Execute via MCP
         """
         # --- Step 1: Validate ---
+        # Auto-inject guild_id (LLM doesn't need to know this)
+        if guild_id and "guild_id" not in params:
+            params["guild_id"] = guild_id
+
+        # Auto-coerce guild_id to int if string
+        if "guild_id" in params and isinstance(params["guild_id"], str):
+            try:
+                params["guild_id"] = int(params["guild_id"])
+            except ValueError:
+                pass
+
         if self._skill_validator:
             result = self._skill_validator.validate(tool_name, params)
             if not result.is_valid:
@@ -431,7 +442,11 @@ class AdminAgent:
             tools = self._skill_registry.get_all_tools()
             lines = []
             for t in tools:
-                lines.append(f"- {t.name} [{t.risk_level}]: {t.description}")
+                # Hide guild_id from LLM (auto-injected)
+                params = [k for k in t.input_schema.get("properties", {}).keys() if k != "guild_id"]
+                required = [k for k in t.input_schema.get("required", []) if k != "guild_id"]
+                params_str = ", ".join(f"{p}*" if p in required else p for p in params) if params else ""
+                lines.append(f"- {t.name} [{t.risk_level}]: {t.description} | params: {params_str}")
             return "\n".join(lines)
         else:
             # Fallback to raw MCP list
