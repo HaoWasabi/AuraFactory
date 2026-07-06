@@ -328,7 +328,7 @@ from app.channels.api_adapter import router as api_router
 app.include_router(api_router)
 
 
-@app.get("/", tags=["system"])
+@app.api_route("/", methods=["GET", "HEAD"], tags=["system"])
 async def root():
     """Root endpoint — for health checks and quick status."""
     return JSONResponse(content={"status": "ok", "service": "AuraFactory"})
