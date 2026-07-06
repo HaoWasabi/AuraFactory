@@ -38,11 +38,11 @@ class MemoryItem:
 class MemoryService:
     """Unified memory facade — routes to appropriate sub-memory based on type."""
 
-    def __init__(self, db: Any, cache: Any | None = None) -> None:
+    def __init__(self, db: Any = None, cache: Any = None) -> None:
         self._db = db
         self._cache = cache
         self._working = WorkingMemory()
-        self._procedural = ProceduralMemory(db)
+        self._procedural = ProceduralMemory(db) if db else None
         self._episodic = EpisodicMemory()
         self._semantic = SemanticMemory()
         self._scoring = ImportanceScoring()
@@ -114,12 +114,15 @@ class MemoryService:
             session_id = meta.get("session_id", str(guild_id))
             self._working.store_context(session_id, meta.get("key", "data"), content)
         elif memory_type == MemoryType.PROCEDURAL:
-            await self._procedural.add_rule(
-                guild_id=guild_id,
-                trigger_condition=content.get("trigger", {}),
-                action=content.get("action", {}),
-                confidence=meta.get("confidence", 1.0),
-            )
+            if self._procedural:
+                await self._procedural.add_rule(
+                    guild_id=guild_id,
+                    trigger_condition=content.get("trigger", {}),
+                    action=content.get("action", {}),
+                    confidence=meta.get("confidence", 1.0),
+                )
+            else:
+                logger.warning("Procedural memory unavailable (no DB)")
         elif memory_type == MemoryType.EPISODIC:
             self._episodic.store(guild_id, content, meta)
         elif memory_type == MemoryType.SEMANTIC:
@@ -149,7 +152,10 @@ class MemoryService:
         mem_type_str, item_id = memory_id.split(":", 1)
 
         if mem_type_str == MemoryType.PROCEDURAL.value:
-            await self._procedural.delete_rule(item_id)
+            if self._procedural:
+                await self._procedural.delete_rule(item_id)
+            else:
+                logger.warning("Procedural memory unavailable (no DB)")
         elif mem_type_str == MemoryType.WORKING.value:
             self._working.clear(item_id)
         else:
@@ -166,8 +172,11 @@ class MemoryService:
         parts: list[str] = []
 
         # Procedural rules count
-        rules = await self._procedural.get_rules(guild_id)
-        parts.append(f"Procedural rules: {len(rules)}")
+        if self._procedural:
+            rules = await self._procedural.get_rules(guild_id)
+            parts.append(f"Procedural rules: {len(rules)}")
+        else:
+            parts.append("Procedural rules: N/A (no DB)")
 
         # Working memory sessions
         session_key = str(guild_id)
@@ -182,6 +191,8 @@ class MemoryService:
     ) -> list[MemoryItem]:
         """Internal dispatch for recall by memory type."""
         if mem_type == MemoryType.PROCEDURAL:
+            if not self._procedural:
+                return []
             rules = await self._procedural.get_rules(guild_id)
             items: list[MemoryItem] = []
             query_lower = query.lower()

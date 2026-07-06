@@ -92,7 +92,7 @@ async def lifespan(app: FastAPI):
     logger.info("✅ Knowledge store ready")
 
     from app.memory import MemoryService
-    memory_service = MemoryService()
+    memory_service = MemoryService(db=app.state.db)
     app.state.memory = memory_service
     logger.info("✅ Memory service ready")
 
