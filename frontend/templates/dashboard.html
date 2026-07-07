@@ -33,7 +33,7 @@
                     <select class="guild-select" id="guildSelect" onchange="selectGuild(this.value)" data-i18n-placeholder="select_server">
                         <option value="" data-i18n="select_server">Chọn server...</option>
                     </select>
-                    <button class="btn-refresh" onclick="loadGuilds()" title="Refresh danh sách server">🔄</button>
+                    <button class="btn-refresh" onclick="loadGuilds(true)" title="Refresh danh sách server">🔄</button>
                 </div>
                 <div class="sidebar-section">
                     <div class="sidebar-section-title" data-i18n="server_info">Thông tin Server</div>
@@ -173,10 +173,21 @@
         });
 
         // ===== Guild Loading (§5.1 steps 2-4) =====
-        async function loadGuilds() {
+        async function loadGuilds(forceRefresh = false) {
             try {
-                const data = await api('GET', `/api/auth/guilds?user_id=${currentUser.id}`);
+                const refreshParam = forceRefresh ? '&refresh=true' : '';
+                const data = await api('GET', `/api/auth/guilds?user_id=${currentUser.id}${refreshParam}`);
                 if (!data) return;
+
+                // If no guilds found and haven't tried refresh yet, retry with refresh
+                if (!forceRefresh && data.total === 0 && !data.hint) {
+                    return await loadGuilds(true);
+                }
+
+                // If still empty after refresh, show helpful message
+                if (data.total === 0) {
+                    showToast(data.message || 'Không tìm thấy server nào bạn quản lý', 'warning');
+                }
 
                 const select = document.getElementById('guildSelect');
                 select.innerHTML = '<option value="">Chọn server...</option>';

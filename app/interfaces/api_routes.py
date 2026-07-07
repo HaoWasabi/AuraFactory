@@ -67,15 +67,33 @@ def create_api_router(services: dict) -> APIRouter:
         }
 
     @router.get("/auth/guilds")
-    async def get_guilds(user_id: int):
-        """Get cached guild list for user.
+    async def get_guilds(user_id: int, refresh: bool = False):
+        """Get guild list for user. Auto-refreshes from Discord if cache empty.
         
         Returns guilds split into:
         - ready: bot_installed = True → can use immediately
         - pending: bot_installed = False → needs bot invite
         Each guild includes invite_url for easy activation.
         """
-        guilds = await guild_sync_service.get_user_guilds(user_id)
+        guilds = [] if refresh else await guild_sync_service.get_user_guilds(user_id)
+
+        # If cache is empty or refresh requested, sync from Discord
+        if not guilds:
+            token = await auth_service.get_user_token(user_id)
+            if token:
+                logger.info("Syncing guilds from Discord for user %d (cache empty or refresh)", user_id)
+                guilds = await guild_sync_service.sync_user_guilds(user_id, token)
+            else:
+                logger.warning("No stored token for user %d — cannot sync guilds", user_id)
+            
+            if not guilds:
+                return {
+                    "ready": [],
+                    "pending": [],
+                    "total": 0,
+                    "hint": "no_guilds_found",
+                    "message": "Không tìm thấy server nào bạn có quyền quản lý. Hãy đảm bảo bạn có quyền Administrator hoặc Manage Server trên ít nhất 1 server Discord.",
+                }
         
         ready = []
         pending = []
