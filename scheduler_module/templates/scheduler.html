@@ -1,0 +1,911 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+  <title>AURA SCHEDULING</title>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+  <script src="https://unpkg.com/react@18/umd/react.development.js"></script>
+  <script src="https://unpkg.com/react-dom@18/umd/react-dom.development.js"></script>
+  <script src="https://unpkg.com/htm@3.1.1/dist/htm.js"></script>
+  <style>
+    :root {
+      --bg-primary: #1a1b23;
+      --bg-secondary: #22232d;
+      --bg-sidebar: #1e1f28;
+      --bg-input: #2a2b36;
+      --bg-hover: #2d2e3a;
+      --text-primary: #e4e5e9;
+      --text-secondary: #a0a1b2;
+      --accent: #7c5cfc;
+      --accent-light: #9b8aff;
+      --accent-glow: rgba(124, 92, 252, 0.15);
+      --border: #3a3b48;
+      --danger: #ef4444;
+      --success: #10b981;
+      --warning: #f59e0b;
+      --info: #3b82f6;
+      --font: 'Inter', system-ui, -apple-system, sans-serif;
+      --sidebar-width: 260px;
+      --header-height: 56px;
+      --shadow: 0 4px 24px rgba(0, 0, 0, 0.3);
+      --radius-sm: 8px;
+      --radius-md: 12px;
+      --radius-lg: 16px;
+      --radius-xl: 20px;
+    }
+    .light-theme {
+      --bg-primary: #f5f5f7;
+      --bg-secondary: #ffffff;
+      --bg-sidebar: #ffffff;
+      --bg-input: #ffffff;
+      --bg-hover: #f0f0f5;
+      --text-primary: #1c1c28;
+      --text-secondary: #5a5a72;
+      --border: #e0e0e8;
+      --accent-glow: rgba(124, 92, 252, 0.08);
+      --shadow: 0 4px 24px rgba(0, 0, 0, 0.08);
+    }
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body {
+      font-family: var(--font);
+      background: var(--bg-primary);
+      color: var(--text-primary);
+      height: 100vh;
+      overflow: hidden;
+      transition: background 0.3s, color 0.3s;
+    }
+    #root {
+      width: 100%;
+      height: 100vh;
+      display: flex;
+      position: relative;
+    }
+
+    .sidebar-overlay { display: none; position: fixed; top: 0; left: 0; right: 0; bottom: 0; background: rgba(0,0,0,0.5); z-index: 20; }
+    @media (max-width: 768px) { .sidebar-overlay.active { display: block; } }
+    .sidebar {
+      width: var(--sidebar-width);
+      background: var(--bg-sidebar);
+      border-right: 1px solid var(--border);
+      display: flex;
+      flex-direction: column;
+      height: 100%;
+      z-index: 30;
+      transition: transform 0.25s ease;
+      flex-shrink: 0;
+    }
+    @media (max-width: 768px) { .sidebar { position: fixed; left: 0; top: 0; bottom: 0; transform: translateX(-100%); box-shadow: var(--shadow); } .sidebar.open { transform: translateX(0); } }
+    .sidebar-header { padding: 20px 20px 12px; display: flex; align-items: center; gap: 10px; }
+    .sidebar-logo { font-weight: 700; font-size: 18px; color: var(--accent); letter-spacing: -0.5px; }
+    .sidebar-nav { flex: 1; padding: 8px 12px; display: flex; flex-direction: column; gap: 4px; }
+    .nav-item { display: flex; align-items: center; gap: 10px; padding: 10px 14px; border-radius: var(--radius-md); cursor: pointer; transition: all 0.2s; color: var(--text-secondary); font-weight: 500; font-size: 14px; }
+    .nav-item:hover { background: var(--bg-hover); color: var(--text-primary); }
+    .nav-item.active { background: var(--accent-glow); color: var(--accent); font-weight: 600; }
+    .nav-icon { font-size: 18px; width: 22px; text-align: center; }
+    .sidebar-footer { padding: 12px 20px; border-top: 1px solid var(--border); display: flex; flex-direction: column; gap: 6px; font-size: 14px; }
+    .sidebar-footer-item { display: flex; align-items: center; gap: 10px; padding: 8px 10px; border-radius: var(--radius-sm); cursor: pointer; color: var(--text-secondary); transition: background 0.2s; }
+    .sidebar-footer-item:hover { background: var(--bg-hover); color: var(--text-primary); }
+
+    .main-content { flex: 1; display: flex; flex-direction: column; min-width: 0; background: var(--bg-primary); position: relative; height: 100%; overflow: hidden; }
+    .header { height: var(--header-height); display: flex; align-items: center; justify-content: space-between; padding: 0 24px; border-bottom: 1px solid var(--border); background: var(--bg-secondary); flex-shrink: 0; }
+    .hamburger { background: none; border: none; color: var(--text-primary); font-size: 24px; cursor: pointer; display: none; }
+    @media (max-width: 768px) { .hamburger { display: block; } }
+    .header-title { font-weight: 600; font-size: 18px; display: flex; align-items: center; gap: 8px; }
+    .header-actions { display: flex; align-items: center; gap: 12px; }
+    .btn { padding: 8px 16px; border-radius: var(--radius-sm); font-weight: 600; font-size: 14px; cursor: pointer; border: none; transition: all 0.2s; font-family: var(--font); display: flex; align-items: center; gap: 6px; }
+    .btn-primary { background: var(--accent); color: white; }
+    .btn-primary:hover { background: var(--accent-light); transform: translateY(-1px); box-shadow: 0 4px 12px rgba(124, 92, 252, 0.3); }
+    .btn-outline { background: transparent; border: 1px solid var(--border); color: var(--text-primary); }
+    .btn-outline:hover { background: var(--bg-hover); border-color: var(--accent); }
+    .btn-danger { background: transparent; border: 1px solid var(--danger); color: var(--danger); }
+    .btn-danger:hover { background: var(--danger); color: white; }
+    .btn-sm { padding: 6px 10px; font-size: 12px; border-radius: 6px; }
+    .btn-icon { width: 34px; height: 34px; padding: 0; display: flex; align-items: center; justify-content: center; border-radius: 50%; background: transparent; border: 1px solid var(--border); color: var(--text-secondary); cursor: pointer; font-size: 16px; transition: all 0.2s; }
+    .btn-icon:hover { background: var(--bg-hover); color: var(--text-primary); border-color: var(--accent); }
+
+    .content-area { flex: 1; overflow-y: auto; padding: 24px; display: flex; flex-direction: column; gap: 24px; }
+    .section-title { font-size: 13px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.5px; color: var(--text-secondary); margin-bottom: 4px; }
+    .card { background: var(--bg-secondary); border: 1px solid var(--border); border-radius: var(--radius-lg); padding: 20px; box-shadow: var(--shadow); transition: all 0.2s; }
+    .card-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 16px; }
+    .card-title { font-weight: 600; font-size: 16px; }
+
+    .schedule-list { display: flex; flex-direction: column; gap: 12px; }
+    .schedule-item { display: flex; align-items: center; gap: 16px; padding: 16px; background: var(--bg-primary); border: 1px solid var(--border); border-radius: var(--radius-md); transition: all 0.2s; cursor: pointer; flex-wrap: wrap; }
+    .schedule-item:hover { border-color: var(--accent); box-shadow: 0 0 0 2px var(--accent-glow); }
+    .schedule-item.past { opacity: 0.55; }
+    .schedule-icon { width: 44px; height: 44px; border-radius: var(--radius-md); display: flex; align-items: center; justify-content: center; font-size: 20px; flex-shrink: 0; }
+    .schedule-icon.upcoming { background: rgba(124, 92, 252, 0.15); color: var(--accent); }
+    .schedule-icon.sent { background: rgba(16, 185, 129, 0.15); color: var(--success); }
+    .schedule-icon.failed { background: rgba(239, 68, 68, 0.15); color: var(--danger); }
+    .schedule-info { flex: 1; min-width: 150px; }
+    .schedule-title { font-weight: 600; font-size: 15px; color: var(--text-primary); margin-bottom: 2px; }
+    .schedule-desc { font-size: 13px; color: var(--text-secondary); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 280px; }
+    .schedule-meta { display: flex; flex-wrap: wrap; gap: 12px; font-size: 12px; color: var(--text-secondary); align-items: center; }
+    .schedule-meta span { display: flex; align-items: center; gap: 4px; }
+    .badge { padding: 3px 10px; border-radius: 20px; font-size: 11px; font-weight: 600; white-space: nowrap; }
+    .badge-pending { background: rgba(245, 158, 11, 0.15); color: var(--warning); }
+    .badge-sent { background: rgba(16, 185, 129, 0.15); color: var(--success); }
+    .badge-failed { background: rgba(239, 68, 68, 0.15); color: var(--danger); }
+    .badge-upcoming { background: rgba(59, 130, 246, 0.15); color: var(--info); }
+    .countdown { font-weight: 600; color: var(--accent); font-size: 13px; white-space: nowrap; }
+    .schedule-actions { display: flex; gap: 6px; flex-shrink: 0; }
+
+    .form-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+    @media (max-width: 600px) { .form-grid { grid-template-columns: 1fr; } }
+    .form-group { display: flex; flex-direction: column; gap: 6px; }
+    .form-group.full-width { grid-column: 1 / -1; }
+    .form-label { font-size: 13px; font-weight: 600; color: var(--text-secondary); text-transform: uppercase; letter-spacing: 0.3px; }
+    .form-input, .form-textarea, .form-select { background: var(--bg-input); border: 1px solid var(--border); border-radius: var(--radius-sm); padding: 10px 14px; color: var(--text-primary); font-size: 14px; font-family: var(--font); transition: border-color 0.2s; outline: none; }
+    .form-input:focus, .form-textarea:focus, .form-select:focus { border-color: var(--accent); box-shadow: 0 0 0 2px var(--accent-glow); }
+    .form-textarea { resize: vertical; min-height: 80px; }
+    .form-select { cursor: pointer; appearance: none; background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24' fill='none' stroke='%23a0a1b2' stroke-width='2'%3E%3Cpath d='M6 9l6 6 6-6'%3E%3C/path%3E%3C/svg%3E"); background-repeat: no-repeat; background-position: right 12px center; padding-right: 36px; }
+    .checkbox-group { display: flex; flex-wrap: wrap; gap: 12px; }
+    .checkbox-label { display: flex; align-items: center; gap: 8px; cursor: pointer; font-size: 14px; color: var(--text-primary); padding: 8px 14px; border-radius: var(--radius-sm); border: 1px solid var(--border); transition: all 0.2s; user-select: none; }
+    .checkbox-label:hover { border-color: var(--accent); background: var(--bg-hover); }
+    .checkbox-label.checked { border-color: var(--accent); background: var(--accent-glow); color: var(--accent); font-weight: 600; }
+    .checkbox-label input { display: none; }
+
+    .modal-backdrop { position: fixed; inset: 0; background: rgba(0,0,0,0.65); z-index: 99; animation: fadeIn 0.2s ease; }
+    @keyframes fadeIn { from { opacity: 0; } to { opacity: 1; } }
+    .modal { position: fixed; top: 50%; left: 50%; transform: translate(-50%, -50%); background: var(--bg-secondary); border: 1px solid var(--border); border-radius: var(--radius-xl); padding: 28px; z-index: 100; width: 90%; max-width: 600px; max-height: 85vh; overflow-y: auto; box-shadow: 0 20px 50px rgba(0,0,0,0.5); animation: slideUp 0.25s ease; }
+    @keyframes slideUp { from { opacity: 0; transform: translate(-50%, -45%); } to { opacity: 1; transform: translate(-50%, -50%); } }
+    .modal-title { font-size: 20px; font-weight: 700; margin-bottom: 20px; color: var(--text-primary); }
+    .modal-actions { display: flex; gap: 10px; justify-content: flex-end; margin-top: 20px; }
+
+    .toast-container { position: fixed; top: 20px; right: 20px; z-index: 200; display: flex; flex-direction: column; gap: 8px; }
+    .toast { background: var(--bg-secondary); border: 1px solid var(--border); border-radius: var(--radius-md); padding: 12px 18px; font-size: 14px; color: var(--text-primary); box-shadow: var(--shadow); animation: slideIn 0.3s ease; display: flex; align-items: center; gap: 10px; min-width: 260px; }
+    @keyframes slideIn { from { opacity: 0; transform: translateX(40px); } to { opacity: 1; transform: translateX(0); } }
+    .toast.success { border-left: 4px solid var(--success); }
+    .toast.error { border-left: 4px solid var(--danger); }
+    .toast.info { border-left: 4px solid var(--info); }
+
+    .empty-state { text-align: center; padding: 40px 20px; color: var(--text-secondary); }
+    .empty-state .icon { font-size: 48px; margin-bottom: 12px; }
+    .error-boundary { display: flex; flex-direction: column; align-items: center; justify-content: center; height: 100%; color: var(--danger); gap: 16px; }
+
+    .calendar-container {
+      background: var(--bg-secondary);
+      border: 1px solid var(--border);
+      border-radius: var(--radius-lg);
+      padding: 20px;
+      box-shadow: var(--shadow);
+    }
+    .calendar-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      margin-bottom: 16px;
+    }
+    .calendar-nav {
+      background: none;
+      border: 1px solid var(--border);
+      color: var(--text-primary);
+      padding: 6px 12px;
+      border-radius: var(--radius-sm);
+      cursor: pointer;
+      font-weight: 600;
+      transition: 0.2s;
+    }
+    .calendar-nav:hover { background: var(--bg-hover); border-color: var(--accent); }
+    .calendar-grid {
+      display: grid;
+      grid-template-columns: repeat(7, 1fr);
+      gap: 4px;
+      text-align: center;
+    }
+    .calendar-day-name {
+      font-weight: 600;
+      font-size: 13px;
+      color: var(--text-secondary);
+      padding: 8px 0;
+    }
+    .calendar-cell {
+      padding: 8px 4px;
+      border-radius: var(--radius-sm);
+      cursor: pointer;
+      transition: 0.2s;
+      min-height: 70px;
+      position: relative;
+      background: var(--bg-primary);
+      border: 1px solid transparent;
+    }
+    .calendar-cell:hover { border-color: var(--accent); background: var(--bg-hover); }
+    .calendar-cell.other-month { opacity: 0.3; }
+    .calendar-cell.today { border-color: var(--accent); background: var(--accent-glow); }
+    .calendar-cell.selected { border-color: var(--accent); box-shadow: 0 0 0 2px var(--accent-glow); }
+    .calendar-date {
+      font-weight: 600;
+      font-size: 14px;
+      margin-bottom: 4px;
+    }
+    .calendar-event-dot {
+      display: inline-block;
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      margin: 1px;
+    }
+    .calendar-event-dot.upcoming { background: var(--accent); }
+    .calendar-event-dot.sent { background: var(--success); }
+    .calendar-event-dot.failed { background: var(--danger); }
+    .calendar-event-dot.past { background: var(--text-secondary); }
+    .calendar-event-title {
+      font-size: 11px;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      color: var(--text-secondary);
+      margin-top: 2px;
+    }
+    .day-detail-panel {
+      background: var(--bg-secondary);
+      border: 1px solid var(--border);
+      border-radius: var(--radius-lg);
+      padding: 16px;
+      margin-top: 16px;
+    }
+    .day-detail-header {
+      font-weight: 600;
+      margin-bottom: 12px;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+  </style>
+</head>
+<body>
+  <div id="root"></div>
+
+  <script>
+   {% raw %}
+    // ========== CONFIG ==========
+    const API_URL = "";
+    const html = htm.bind(React.createElement);
+
+    // ========== ERROR BOUNDARY ==========
+    class ErrorBoundary extends React.Component {
+      constructor(props) {
+        super(props);
+        this.state = { hasError: false, error: null };
+      }
+      static getDerivedStateFromError(error) {
+        return { hasError: true, error };
+      }
+      componentDidCatch(error, errorInfo) {
+        console.error("ErrorBoundary caught:", error, errorInfo);
+      }
+      render() {
+        if (this.state.hasError) {
+          return html`
+            <div className="error-boundary">
+              <h2>⚠️ Đã xảy ra lỗi</h2>
+              <pre>${this.state.error?.message || 'Lỗi không xác định'}</pre>
+              <button className="btn btn-primary" onClick=${() => this.setState({ hasError: false, error: null })}>
+                Thử lại
+              </button>
+            </div>
+          `;
+        }
+        return this.props.children;
+      }
+    }
+
+    // ========== UTILS ==========
+    function formatDateTime(isoString) {
+      if (!isoString) return '—';
+      try {
+        const d = new Date(isoString);
+        if (isNaN(d.getTime())) return '—';
+        return d.toLocaleString('vi-VN', { day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit' });
+      } catch (e) { return '—'; }
+    }
+
+    function getTimeRemaining(isoString) {
+      try {
+        const now = new Date();
+        const target = new Date(isoString);
+        if (isNaN(target.getTime())) return { text: '—', negative: true };
+        const diff = target - now;
+        if (diff < 0) return { text: 'Đã qua', negative: true };
+        const hours = Math.floor(diff / (1000 * 60 * 60));
+        const minutes = Math.floor((diff % (1000 * 60 * 60)) / (1000 * 60));
+        if (hours >= 24) {
+          const days = Math.floor(hours / 24);
+          return { text: `Còn ${days} ngày ${hours % 24} giờ`, negative: false };
+        }
+        if (hours > 0) return { text: `Còn ${hours} giờ ${minutes} phút`, negative: false };
+        if (minutes > 0) return { text: `Còn ${minutes} phút`, negative: false };
+        return { text: 'Sắp diễn ra', negative: false };
+      } catch (e) { return { text: '—', negative: true }; }
+    }
+
+    function getStatusBadge(schedule) {
+      try {
+        const now = new Date();
+        const scheduled = new Date(schedule.scheduled_time);
+        if (schedule.notification_sent) return { label: 'Đã gửi', cls: 'badge-sent' };
+        if (schedule.notification_failed) return { label: 'Lỗi gửi', cls: 'badge-failed' };
+        if (isNaN(scheduled.getTime())) return { label: 'Không rõ', cls: 'badge-pending' };
+        if (scheduled < now) return { label: 'Quá hạn', cls: 'badge-failed' };
+        const diff = scheduled - now;
+        const hoursLeft = diff / (1000 * 60 * 60);
+        if (hoursLeft <= 1) return { label: 'Sắp đến', cls: 'badge-pending' };
+        if (hoursLeft <= 24) return { label: 'Trong ngày', cls: 'badge-upcoming' };
+        return { label: 'Đã lên lịch', cls: 'badge-upcoming' };
+      } catch (e) { return { label: 'Lỗi', cls: 'badge-failed' }; }
+    }
+
+    // ========== TOAST ==========
+    const ToastContainer = ({ toasts, removeToast }) => {
+      if (!toasts || toasts.length === 0) return null;
+      return html`
+        <div className="toast-container">
+          ${toasts.map(t => html`
+            <div key=${t.id} className=${`toast ${t.type || 'info'}`}>
+              <span>${t.type === 'success' ? '✅' : t.type === 'error' ? '❌' : 'ℹ️'}</span>
+              <span>${t.message}</span>
+              <button onClick=${() => removeToast(t.id)} style=${{ marginLeft: 'auto', background: 'none', border: 'none', color: 'var(--text-secondary)', cursor: 'pointer', fontSize: 16 }}>✕</button>
+            </div>
+          `)}
+        </div>
+      `;
+    };
+
+    // ========== MODAL ==========
+    const ScheduleModal = ({ isOpen, onClose, onSave, editData, defaultDate }) => {
+      const [form, setForm] = React.useState({
+        title: '',
+        description: '',
+        notes: '',
+        scheduled_time: '',
+        email_to: '',
+        notify_before: [1, 12, 24]
+      });
+      const [errors, setErrors] = React.useState({});
+
+      React.useEffect(() => {
+        if (!isOpen) return;
+        if (editData) {
+          setForm({
+            title: editData.title || '',
+            description: editData.description || '',
+            notes: editData.notes || '',
+            scheduled_time: editData.scheduled_time ? editData.scheduled_time.slice(0, 16) : '',
+            email_to: editData.email_to || '',
+            notify_before: Array.isArray(editData.notify_before) ? editData.notify_before : [1, 12, 24]
+          });
+        } else {
+          const base = {
+            title: '',
+            description: '',
+            notes: '',
+            scheduled_time: '',
+            email_to: '',
+            notify_before: [1, 12, 24]
+          };
+          if (defaultDate) {
+            const d = new Date(defaultDate);
+            const year = d.getFullYear();
+            const month = String(d.getMonth() + 1).padStart(2, '0');
+            const day = String(d.getDate()).padStart(2, '0');
+            const hours = String(d.getHours()).padStart(2, '0');
+            const minutes = String(d.getMinutes()).padStart(2, '0');
+            base.scheduled_time = `${year}-${month}-${day}T${hours}:${minutes}`;
+          }
+          setForm(base);
+        }
+        setErrors({});
+      }, [editData, isOpen, defaultDate]);
+
+      if (!isOpen) return null;
+
+      const toggleNotify = (hour) => {
+        setForm(prev => ({
+          ...prev,
+          notify_before: prev.notify_before.includes(hour)
+            ? prev.notify_before.filter(h => h !== hour)
+            : [...prev.notify_before, hour].sort((a, b) => a - b)
+        }));
+      };
+
+      const validate = () => {
+        const errs = {};
+        if (!form.title.trim()) errs.title = 'Vui lòng nhập tiêu đề';
+        if (!form.scheduled_time) errs.scheduled_time = 'Vui lòng chọn thời gian';
+        else {
+          const d = new Date(form.scheduled_time);
+          if (isNaN(d.getTime())) errs.scheduled_time = 'Thời gian không hợp lệ';
+          else if (d <= new Date()) errs.scheduled_time = 'Thời gian phải trong tương lai';
+        }
+        if (!form.email_to.trim()) errs.email_to = 'Vui lòng nhập email';
+        else if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(form.email_to)) errs.email_to = 'Email không hợp lệ';
+        if (!Array.isArray(form.notify_before) || form.notify_before.length === 0) errs.notify_before = 'Chọn ít nhất một mốc nhắc';
+        setErrors(errs);
+        return Object.keys(errs).length === 0;
+      };
+
+      const handleSubmit = (e) => {
+        e.preventDefault();
+        if (!validate()) return;
+        const d = new Date(form.scheduled_time);
+        if (isNaN(d.getTime())) {
+          setErrors(prev => ({ ...prev, scheduled_time: 'Thời gian không hợp lệ' }));
+          return;
+        }
+        const payload = {
+          ...form,
+          scheduled_time: d.toISOString()
+        };
+        onSave(payload);
+      };
+
+      const notifyOptions = [
+        { hour: 1, label: '1 tiếng' },
+        { hour: 12, label: '12 tiếng' },
+        { hour: 24, label: '24 tiếng' }
+      ];
+
+      return html`
+        <div className="modal-backdrop" onClick=${onClose}></div>
+        <div className="modal">
+          <h2 className="modal-title">${editData ? '✏️ Chỉnh sửa lịch' : '📅 Tạo lịch nhắc hẹn mới'}</h2>
+          <form onSubmit=${handleSubmit}>
+            <div className="form-grid">
+              <div className="form-group full-width">
+                <label className="form-label">Tiêu đề *</label>
+                <input className="form-input" type="text" placeholder="Ví dụ: Họp dự án Aura Factory"
+                  value=${form.title} onChange=${(e) => setForm(prev => ({ ...prev, title: e.target.value }))} />
+                ${errors.title && html`<span style=${{ color: 'var(--danger)', fontSize: 12 }}>${errors.title}</span>`}
+              </div>
+              <div className="form-group full-width">
+                <label className="form-label">Mô tả</label>
+                <textarea className="form-textarea" placeholder="Nội dung nhắc nhở chi tiết..."
+                  value=${form.description} onChange=${(e) => setForm(prev => ({ ...prev, description: e.target.value }))} />
+              </div>
+              <div className="form-group full-width">
+                <label className="form-label">Ghi chú khi nhắc hẹn</label>
+                <textarea className="form-textarea" placeholder="Ghi chú riêng cho lần nhắc này..."
+                  value=${form.notes} onChange=${(e) => setForm(prev => ({ ...prev, notes: e.target.value }))} />
+              </div>
+              <div className="form-group">
+                <label className="form-label">Thời gian diễn ra *</label>
+                <input className="form-input" type="datetime-local"
+                  value=${form.scheduled_time} onChange=${(e) => setForm(prev => ({ ...prev, scheduled_time: e.target.value }))} />
+                ${errors.scheduled_time && html`<span style=${{ color: 'var(--danger)', fontSize: 12 }}>${errors.scheduled_time}</span>`}
+              </div>
+              <div className="form-group">
+                <label className="form-label">Email nhận thông báo *</label>
+                <input className="form-input" type="email" placeholder="your@email.com"
+                  value=${form.email_to} onChange=${(e) => setForm(prev => ({ ...prev, email_to: e.target.value }))} />
+                ${errors.email_to && html`<span style=${{ color: 'var(--danger)', fontSize: 12 }}>${errors.email_to}</span>`}
+              </div>
+              <div className="form-group full-width">
+                <label className="form-label">Nhắc trước</label>
+                <div className="checkbox-group">
+                  ${notifyOptions.map(opt => html`
+                    <label key=${opt.hour}
+                      className=${`checkbox-label ${form.notify_before.includes(opt.hour) ? 'checked' : ''}`}
+                      onClick=${(e) => { e.preventDefault(); toggleNotify(opt.hour); }}>
+                      <input type="checkbox" checked=${form.notify_before.includes(opt.hour)} readOnly=${true} />
+                      ⏰ ${opt.label}
+                    </label>
+                  `)}
+                </div>
+                ${errors.notify_before && html`<span style=${{ color: 'var(--danger)', fontSize: 12 }}>${errors.notify_before}</span>`}
+              </div>
+            </div>
+            <div className="modal-actions">
+              <button type="button" className="btn btn-outline" onClick=${onClose}>Hủy</button>
+              <button type="submit" className="btn btn-primary">
+                ${editData ? '💾 Cập nhật' : '✅ Tạo lịch'}
+              </button>
+            </div>
+          </form>
+        </div>
+      `;
+    };
+
+    // ========== CALENDAR VIEW ==========
+    const CalendarView = ({ schedules, onEdit, onDelete, onTestNotify, onCreateAtDate }) => {
+      const today = new Date();
+      const [currentMonth, setCurrentMonth] = React.useState(today.getMonth());
+      const [currentYear, setCurrentYear] = React.useState(today.getFullYear());
+      const [selectedDate, setSelectedDate] = React.useState(null);
+
+      const daysInMonth = new Date(currentYear, currentMonth + 1, 0).getDate();
+      const firstDayOfMonth = new Date(currentYear, currentMonth, 1).getDay();
+
+      const prevMonth = () => {
+        if (currentMonth === 0) {
+          setCurrentMonth(11);
+          setCurrentYear(currentYear - 1);
+        } else {
+          setCurrentMonth(currentMonth - 1);
+        }
+        setSelectedDate(null);
+      };
+      const nextMonth = () => {
+        if (currentMonth === 11) {
+          setCurrentMonth(0);
+          setCurrentYear(currentYear + 1);
+        } else {
+          setCurrentMonth(currentMonth + 1);
+        }
+        setSelectedDate(null);
+      };
+
+      const getEventsForDate = (year, month, day) => {
+        return schedules.filter(s => {
+          const d = new Date(s.scheduled_time);
+          return d.getFullYear() === year && d.getMonth() === month && d.getDate() === day;
+        });
+      };
+
+      const handleDateClick = (year, month, day) => {
+        setSelectedDate({ year, month, day });
+      };
+
+      const handleCreateOnDate = () => {
+        if (selectedDate) {
+          const d = new Date(selectedDate.year, selectedDate.month, selectedDate.day, new Date().getHours(), new Date().getMinutes());
+          onCreateAtDate(d.toISOString());
+        }
+      };
+
+      const selectedEvents = selectedDate
+        ? getEventsForDate(selectedDate.year, selectedDate.month, selectedDate.day)
+        : [];
+
+      const calendarCells = [];
+      const totalCells = 42;
+      for (let i = 0; i < totalCells; i++) {
+        const dayNumber = i - firstDayOfMonth + 1;
+        const isCurrentMonth = dayNumber >= 1 && dayNumber <= daysInMonth;
+        const dateObj = new Date(currentYear, currentMonth, dayNumber);
+        const isToday = isCurrentMonth && dateObj.toDateString() === today.toDateString();
+        const isSelected = selectedDate && isCurrentMonth &&
+          selectedDate.year === currentYear && selectedDate.month === currentMonth && selectedDate.day === dayNumber;
+        const events = isCurrentMonth ? getEventsForDate(currentYear, currentMonth, dayNumber) : [];
+
+        let cellClass = 'calendar-cell';
+        if (!isCurrentMonth) cellClass += ' other-month';
+        if (isToday) cellClass += ' today';
+        if (isSelected) cellClass += ' selected';
+
+        calendarCells.push(html`
+          <div key=${i} className=${cellClass} onClick=${() => isCurrentMonth && handleDateClick(currentYear, currentMonth, dayNumber)}>
+            <div className="calendar-date">${isCurrentMonth ? dayNumber : ''}</div>
+            ${events.slice(0, 3).map((ev, idx) => {
+              const status = getStatusBadge(ev);
+              return html`<div key=${idx} className="calendar-event-title" style=${{ color: status.cls.includes('sent') ? 'var(--success)' : status.cls.includes('failed') ? 'var(--danger)' : status.cls.includes('pending') ? 'var(--warning)' : 'var(--accent)' }}>${ev.title}</div>`;
+            })}
+            ${events.length > 3 && html`<div className="calendar-event-title">+${events.length - 3} thêm</div>`}
+          </div>
+        `);
+      }
+
+      const dayNames = ['CN', 'T2', 'T3', 'T4', 'T5', 'T6', 'T7'];
+
+      return html`
+        <div>
+          <div className="calendar-container">
+            <div className="calendar-header">
+              <button className="calendar-nav" onClick=${prevMonth}>‹</button>
+              <span style=${{ fontWeight: 600 }}>
+                Tháng ${currentMonth + 1} / ${currentYear}
+              </span>
+              <button className="calendar-nav" onClick=${nextMonth}>›</button>
+            </div>
+            <div className="calendar-grid">
+              ${dayNames.map(d => html`<div key=${d} className="calendar-day-name">${d}</div>`)}
+              ${calendarCells}
+            </div>
+          </div>
+          ${selectedDate && html`
+            <div className="day-detail-panel">
+              <div className="day-detail-header">
+                <span>📅 ${selectedDate.day}/${selectedDate.month + 1}/${selectedDate.year}</span>
+                <button className="btn btn-primary btn-sm" onClick=${handleCreateOnDate}>＋ Tạo lịch mới</button>
+              </div>
+              ${selectedEvents.length > 0 ? html`
+                <div className="schedule-list">
+                  ${selectedEvents.map(schedule => {
+                    const status = getStatusBadge(schedule);
+                    return html`
+                      <div key=${schedule.id} className="schedule-item">
+                        <div className=${`schedule-icon ${schedule.notification_sent ? 'sent' : schedule.notification_failed ? 'failed' : 'upcoming'}`}>
+                          ${schedule.notification_sent ? '✅' : schedule.notification_failed ? '⚠️' : '🔔'}
+                        </div>
+                        <div className="schedule-info">
+                          <div className="schedule-title">${schedule.title}</div>
+                          ${schedule.description && html`<div className="schedule-desc">${schedule.description}</div>`}
+                          ${schedule.notes && html`<div className="schedule-desc" style=${{ fontStyle: 'italic' }}>📝 ${schedule.notes}</div>`}
+                          <div className="schedule-meta">
+                            <span>🕐 ${formatDateTime(schedule.scheduled_time)}</span>
+                            <span>📧 ${schedule.email_to}</span>
+                          </div>
+                        </div>
+                        <span className=${`badge ${status.cls}`}>${status.label}</span>
+                        <div className="schedule-actions">
+                          <button className="btn-icon" title="Gửi test email (có thể tuỳ chỉnh nội dung)" onClick=${(e) => { e.stopPropagation(); onTestNotify(schedule); }}>📧</button>
+                          <button className="btn-icon" title="Chỉnh sửa" onClick=${(e) => { e.stopPropagation(); onEdit(schedule); }}>✏️</button>
+                          <button className="btn-icon" title="Xóa" onClick=${(e) => { e.stopPropagation(); onDelete(schedule.id); }} style=${{ color: 'var(--danger)' }}>🗑️</button>
+                        </div>
+                      </div>
+                    `;
+                  })}
+                </div>
+              ` : html`
+                <div style=${{ color: 'var(--text-secondary)', textAlign: 'center', padding: '12px' }}>Không có lịch nào trong ngày này.</div>
+              `}
+            </div>
+          `}
+        </div>
+      `;
+    };
+
+    // ========== APP CHÍNH ==========
+    function App() {
+      const [theme, setTheme] = React.useState('dark');
+      const [sidebarOpen, setSidebarOpen] = React.useState(false);
+      const [schedules, setSchedules] = React.useState([]);
+      const [loading, setLoading] = React.useState(true);
+      const [modalOpen, setModalOpen] = React.useState(false);
+      const [editingSchedule, setEditingSchedule] = React.useState(null);
+      const [toasts, setToasts] = React.useState([]);
+      const [viewMode, setViewMode] = React.useState('list');
+      const [defaultDate, setDefaultDate] = React.useState(null);
+      const toastIdRef = React.useRef(0);
+
+      const addToast = (message, type = 'info') => {
+        const id = ++toastIdRef.current;
+        setToasts(prev => [...prev, { id, message, type }]);
+        setTimeout(() => setToasts(prev => prev.filter(t => t.id !== id)), 4000);
+      };
+      const removeToast = (id) => setToasts(prev => prev.filter(t => t.id !== id));
+
+      const fetchSchedules = React.useCallback(() => {
+        setLoading(true);
+        fetch(API_URL + '/api/schedules')
+          .then(res => res.json().catch(() => ({})))
+          .then(data => {
+            const list = Array.isArray(data?.schedules) ? data.schedules :
+                         Array.isArray(data) ? data : [];
+            if (list.length === 0) {
+              const now = new Date().toISOString();
+              list.push(
+                { id: 'mock-1', title: 'Họp sprint', scheduled_time: new Date(Date.now() + 2*3600000).toISOString(), email_to: 'dev@aura.com', notify_before: [1], notification_sent: false, notes: '' },
+                { id: 'mock-2', title: 'Workshop AI', scheduled_time: new Date(Date.now() + 14*3600000).toISOString(), email_to: 'team@aura.com', notify_before: [1,12], notification_sent: false, notes: '' },
+                { id: 'mock-3', title: 'Demo khách', scheduled_time: new Date(Date.now() + 26*3600000).toISOString(), email_to: 'client@example.com', notify_before: [1,12,24], notification_sent: false, notes: '' }
+              );
+            }
+            setSchedules(list);
+            setLoading(false);
+          })
+          .catch(() => {
+            addToast('⚠️ Backend chưa kết nối – hiển thị dữ liệu mẫu.', 'info');
+            setSchedules([
+              { id: 'mock-1', title: 'Họp sprint', scheduled_time: new Date(Date.now() + 2*3600000).toISOString(), email_to: 'dev@aura.com', notify_before: [1], notification_sent: false, notes: '' },
+              { id: 'mock-2', title: 'Workshop AI', scheduled_time: new Date(Date.now() + 14*3600000).toISOString(), email_to: 'team@aura.com', notify_before: [1,12], notification_sent: false, notes: '' },
+              { id: 'mock-3', title: 'Demo khách', scheduled_time: new Date(Date.now() + 26*3600000).toISOString(), email_to: 'client@example.com', notify_before: [1,12,24], notification_sent: false, notes: '' }
+            ]);
+            setLoading(false);
+          });
+      }, []);
+
+      React.useEffect(() => {
+        document.body.className = theme === 'light' ? 'light-theme' : '';
+      }, [theme]);
+
+      React.useEffect(() => {
+        fetchSchedules();
+        const interval = setInterval(fetchSchedules, 30000);
+        return () => clearInterval(interval);
+      }, [fetchSchedules]);
+
+      const handleCreate = (payload) => {
+        fetch(API_URL + '/api/schedules', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload)
+        })
+        .then(res => res.json().catch(() => ({})))
+        .then(() => {
+          addToast('✅ Lịch đã tạo!', 'success');
+          setModalOpen(false);
+          setDefaultDate(null);
+          fetchSchedules();
+        })
+        .catch(() => {
+          const newSchedule = {
+            id: 'local-' + Date.now(),
+            ...payload,
+            notification_sent: false,
+            notification_failed: false,
+            created_at: new Date().toISOString()
+          };
+          setSchedules(prev => [newSchedule, ...prev]);
+          setModalOpen(false);
+          setDefaultDate(null);
+          addToast('✅ Đã tạo (local) – backend chưa kết nối.', 'info');
+        });
+      };
+
+      const handleUpdate = (payload) => {
+        const id = editingSchedule.id;
+        fetch(API_URL + '/api/schedules/' + id, {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload)
+        })
+        .then(res => res.json().catch(() => ({})))
+        .then(() => {
+          addToast('✅ Lịch đã cập nhật!', 'success');
+          setModalOpen(false);
+          setEditingSchedule(null);
+          setDefaultDate(null);
+          fetchSchedules();
+        })
+        .catch(() => {
+          setSchedules(prev => prev.map(s => s.id === id ? { ...s, ...payload } : s));
+          setModalOpen(false);
+          setEditingSchedule(null);
+          setDefaultDate(null);
+          addToast('✅ Cập nhật local.', 'info');
+        });
+      };
+
+      const handleDelete = (id) => {
+        if (!confirm('Xóa lịch này?')) return;
+        fetch(API_URL + '/api/schedules/' + id, { method: 'DELETE' })
+          .then(() => fetchSchedules())
+          .catch(() => {
+            setSchedules(prev => prev.filter(s => s.id !== id));
+            addToast('🗑️ Đã xóa.', 'info');
+          });
+      };
+
+      const handleTestNotify = (schedule) => {
+        const defaultSubject = `[TEST] Nhắc hẹn: ${schedule.title}`;
+        const defaultBody = `Nội dung nhắc hẹn:\nTiêu đề: ${schedule.title}\nMô tả: ${schedule.description || 'Không có'}\nGhi chú: ${schedule.notes || 'Không có'}\nThời gian: ${formatDateTime(schedule.scheduled_time)}`;
+        const custom = prompt('Nhập nội dung nhắc hẹn tạm thời (để trống để dùng mặc định):', defaultBody);
+        const bodyToSend = custom !== null && custom.trim() !== '' ? custom : defaultBody;
+        fetch(API_URL + '/api/schedules/' + schedule.id + '/test-notify', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ email_to: schedule.email_to, custom_body: bodyToSend })
+        })
+        .then(() => addToast('📧 Email test đã gửi đến ' + schedule.email_to, 'success'))
+        .catch(() => addToast('❌ Gửi test thất bại.', 'error'));
+      };
+
+      const openCreateModal = (date = null) => {
+        setEditingSchedule(null);
+        setDefaultDate(date);
+        setModalOpen(true);
+      };
+      const openEditModal = (schedule) => {
+        setEditingSchedule(schedule);
+        setDefaultDate(null);
+        setModalOpen(true);
+      };
+
+      const safeSchedules = Array.isArray(schedules) ? schedules : [];
+      const sortedSchedules = [...safeSchedules].sort((a, b) => {
+        const ta = new Date(a.scheduled_time).getTime() || 0;
+        const tb = new Date(b.scheduled_time).getTime() || 0;
+        const now = Date.now();
+        const aPast = ta < now;
+        const bPast = tb < now;
+        if (aPast !== bPast) return aPast ? 1 : -1;
+        return ta - tb;
+      });
+
+      const upcomingCount = safeSchedules.filter(s => new Date(s.scheduled_time) >= Date.now() && !s.notification_sent).length;
+
+      return html`
+        <div style=${{ display: 'flex', height: '100%', width: '100%' }}>
+          <${ToastContainer} toasts=${toasts} removeToast=${removeToast} />
+          <div className=${`sidebar-overlay ${sidebarOpen ? 'active' : ''}`} onClick=${() => setSidebarOpen(false)}></div>
+          <aside className=${`sidebar ${sidebarOpen ? 'open' : ''}`}>
+            <div className="sidebar-header">
+              <span style=${{ fontSize: 22 }}></span>
+              <span className="sidebar-logo">SCHEDULING</span>
+            </div>
+            <nav className="sidebar-nav">
+              <div className="nav-item" onClick=${() => addToast('Chuyển sang Chat .', 'info')}><span className="nav-icon">💬</span> Chat</div>
+              <div className="nav-item active"><span className="nav-icon">📅</span> Lịch & Nhắc hẹn</div>
+            </nav>
+            <div className="sidebar-footer">
+              <div className="sidebar-footer-item" onClick=${() => setTheme(t => t === 'dark' ? 'light' : 'dark')}>
+                <span>🌓</span> Giao diện ${theme === 'dark' ? 'Sáng' : 'Tối'}
+              </div>
+            </div>
+          </aside>
+
+          <div className="main-content">
+            <header className="header">
+              <button className="hamburger" onClick=${() => setSidebarOpen(!sidebarOpen)}>☰</button>
+              <div className="header-title"><span>📅</span> Quản lý Lịch & Nhắc hẹn</div>
+              <div className="header-actions">
+                <span style=${{ fontSize: 13, color: 'var(--text-secondary)' }}>
+                  Sắp tới: <strong style=${{ color: 'var(--accent)' }}>${upcomingCount}</strong>
+                </span>
+                <button className="btn btn-outline btn-sm" onClick=${() => setViewMode(viewMode === 'list' ? 'calendar' : 'list')}>
+                  ${viewMode === 'list' ? '📅 Lịch' : '📋 Danh sách'}
+                </button>
+                <button className="btn btn-primary" onClick=${() => openCreateModal()}>＋ Tạo lịch mới</button>
+              </div>
+            </header>
+
+            <div className="content-area">
+              ${loading ? html`<div className="empty-state"><div className="icon">⏳</div><p>Đang tải...</p></div>` :
+                viewMode === 'calendar' ? html`
+                  <${CalendarView}
+                    schedules=${safeSchedules}
+                    onEdit=${openEditModal}
+                    onDelete=${handleDelete}
+                    onTestNotify=${handleTestNotify}
+                    onCreateAtDate=${(iso) => openCreateModal(iso)}
+                  />
+                ` :
+                safeSchedules.length === 0 ? html`<div className="empty-state"><div className="icon">📭</div><p>Chưa có lịch nào.</p></div>` :
+                html`<div className="schedule-list">
+                  ${sortedSchedules.map(schedule => {
+                    const status = getStatusBadge(schedule);
+                    const remaining = getTimeRemaining(schedule.scheduled_time);
+                    const isPast = new Date(schedule.scheduled_time) < new Date();
+                    return html`
+                      <div key=${schedule.id} className=${`schedule-item ${isPast ? 'past' : ''}`}>
+                        <div className=${`schedule-icon ${schedule.notification_sent ? 'sent' : schedule.notification_failed ? 'failed' : 'upcoming'}`}>
+                          ${schedule.notification_sent ? '✅' : schedule.notification_failed ? '⚠️' : '🔔'}
+                        </div>
+                        <div className="schedule-info">
+                          <div className="schedule-title">${schedule.title}</div>
+                          ${schedule.description && html`<div className="schedule-desc">${schedule.description}</div>`}
+                          ${schedule.notes && html`<div className="schedule-desc" style=${{ fontStyle: 'italic' }}>📝 ${schedule.notes}</div>`}
+                          <div className="schedule-meta">
+                            <span>🕐 ${formatDateTime(schedule.scheduled_time)}</span>
+                            <span>📧 ${schedule.email_to}</span>
+                            <span>🔔 ${Array.isArray(schedule.notify_before) ? schedule.notify_before.map(h => h + 'h').join(', ') : '—'}</span>
+                          </div>
+                        </div>
+                        <span className=${`badge ${status.cls}`}>${status.label}</span>
+                        ${!isPast && !schedule.notification_sent && html`<span className="countdown">${remaining.text}</span>`}
+                        <div className="schedule-actions">
+                          <button className="btn-icon" title="Gửi test email (có thể tuỳ chỉnh nội dung)" onClick=${(e) => { e.stopPropagation(); handleTestNotify(schedule); }}>📧</button>
+                          <button className="btn-icon" title="Chỉnh sửa" onClick=${(e) => { e.stopPropagation(); openEditModal(schedule); }}>✏️</button>
+                          <button className="btn-icon" title="Xóa" onClick=${(e) => { e.stopPropagation(); handleDelete(schedule.id); }} style=${{ color: 'var(--danger)' }}>🗑️</button>
+                        </div>
+                      </div>
+                    `;
+                  })}
+                </div>`
+              }
+            </div>
+          </div>
+
+          <${ScheduleModal}
+            isOpen=${modalOpen}
+            onClose=${() => { setModalOpen(false); setEditingSchedule(null); setDefaultDate(null); }}
+            onSave=${editingSchedule ? handleUpdate : handleCreate}
+            editData=${editingSchedule}
+            defaultDate=${defaultDate}
+          />
+        </div>
+      `;
+    }
+
+    // ========== RENDER ==========
+    const rootElement = document.getElementById('root');
+    const root = ReactDOM.createRoot(rootElement);
+    root.render(html`
+      <${ErrorBoundary}>
+        <${App} />
+      <//>
+    `);
+   {% endraw %}
+  </script>
+</body>
+</html>
