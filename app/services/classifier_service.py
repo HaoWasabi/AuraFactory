@@ -30,12 +30,11 @@ Given a user message, classify it into ONE of these intents:
 - clarify: Message is too vague, need more info
 - out_of_scope: Not related to Discord server management
 
-Also determine tool_mode:
-- "action": requires executing tools (setup, manage, moderate, server_settings, automod)
-- "read_only": only needs to read info (query)
-- "none": no tools needed (clarify, out_of_scope)
+Also determine:
+- tool_mode: "action" (setup/manage/moderate/server_settings/automod), "read_only" (query), "none" (clarify/out_of_scope)
+- lang: detect the language of the user message — "vi" for Vietnamese, "en" for English
 
-Respond in JSON only: {"intent": "...", "tool_mode": "...", "confidence": 0.0-1.0}"""
+Respond in JSON only: {"intent": "...", "tool_mode": "...", "confidence": 0.0-1.0, "lang": "vi"|"en"}"""
 
 
 class ClassifierService:
@@ -48,8 +47,12 @@ class ClassifierService:
         """Classify a user message.
 
         Returns:
-            {"intent": str, "tool_mode": str, "confidence": float}
+            {"intent": str, "tool_mode": str, "confidence": float, "lang": str}
         """
+        if self.llm is None:
+            logger.error("LLM not initialized — cannot classify")
+            return {"intent": "clarify", "tool_mode": "none", "confidence": 0.0, "lang": self._detect_lang_simple(message)}
+
         messages = []
         if history:
             # Include last 2 messages for context
@@ -70,7 +73,19 @@ class ClassifierService:
                 result["intent"] = "clarify"
             if result.get("tool_mode") not in ("action", "read_only", "none"):
                 result["tool_mode"] = "none"
+            if result.get("lang") not in ("vi", "en"):
+                result["lang"] = self._detect_lang_simple(message)
             return result
         except (json.JSONDecodeError, Exception) as e:
             logger.warning("Classification failed: %s — defaulting to clarify", e)
-            return {"intent": "clarify", "tool_mode": "none", "confidence": 0.0}
+            return {"intent": "clarify", "tool_mode": "none", "confidence": 0.0, "lang": self._detect_lang_simple(message)}
+
+    @staticmethod
+    def _detect_lang_simple(text: str) -> str:
+        """Simple heuristic language detection fallback."""
+        # Vietnamese-specific characters
+        viet_chars = set("àáảãạăắằẳẵặâấầẩẫậèéẻẽẹêếềểễệìíỉĩịòóỏõọôốồổỗộơớờởỡợùúủũụưứừửữựỳýỷỹỵđ")
+        text_lower = text.lower()
+        if any(c in viet_chars for c in text_lower):
+            return "vi"
+        return "en"

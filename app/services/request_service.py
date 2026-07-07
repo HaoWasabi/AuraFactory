@@ -40,7 +40,7 @@ class RequestService:
         if active:
             return {
                 "ok": False,
-                "reason": f"Bạn có 1 yêu cầu đang xử lý — xử lý xong đã nhé.",
+                "reason": "active_request_locked",
                 "active_request_id": str(active["id"]),
             }
 

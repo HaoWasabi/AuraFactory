@@ -102,8 +102,30 @@ class MCPClient:
 
     def get_tools_for_intent(self, intent: str) -> List[ToolDefinition]:
         """Return tools whose category matches the given intent keyword."""
+        # Map intents to relevant connector module prefixes
+        INTENT_MODULES = {
+            "setup": ["channels", "categories", "roles", "permissions"],
+            "manage": ["channels", "categories", "roles", "permissions", "threads"],
+            "moderate": ["members"],
+            "query": ["channels", "categories", "roles", "guild", "members"],
+            "server_settings": ["guild", "features", "webhooks", "emojis", "invites"],
+            "automod": ["automod"],
+        }
+
         intent_lower = intent.lower()
-        return [
-            t for t in self.list_all_tools()
-            if intent_lower in t.category.lower()
-        ]
+        modules = INTENT_MODULES.get(intent_lower)
+
+        if not modules:
+            # Unknown intent — return all tools
+            return self.list_all_tools()
+
+        # Filter tools by module prefix (discord.{module}.{action})
+        filtered = []
+        for tool in self.list_all_tools():
+            parts = tool.name.split(".")
+            if len(parts) >= 2:
+                module = parts[1]  # discord.{module}.action
+                if module in modules:
+                    filtered.append(tool)
+
+        return filtered if filtered else self.list_all_tools()

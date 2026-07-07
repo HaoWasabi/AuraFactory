@@ -191,10 +191,10 @@ class ApprovalService:
 
         # Fetch plan steps
         steps = await self.db.fetch(
-            """SELECT step_order, tool_name, tool_params, description, risk_level
+            """SELECT step_number, tool_name, tool_params, description, risk_level
                FROM plan_steps
                WHERE plan_id = $1
-               ORDER BY step_order ASC""",
+               ORDER BY step_number ASC""",
             plan["id"],
         )
 
@@ -207,7 +207,7 @@ class ApprovalService:
             "created_at": plan["created_at"].isoformat() if plan["created_at"] else None,
             "steps": [
                 {
-                    "step_order": s["step_order"],
+                    "step_number": s["step_number"],
                     "tool_name": s["tool_name"],
                     "tool_params": s["tool_params"],
                     "description": s["description"],

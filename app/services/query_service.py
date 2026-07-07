@@ -15,6 +15,7 @@ from typing import Dict, List, Optional
 from app.llm.base import BaseLLM, LLMResponse
 from app.mcp.client import MCPClient
 from app.services.context_service import ContextService
+from app.messages import msg
 
 logger = logging.getLogger(__name__)
 
@@ -30,7 +31,7 @@ Guidelines:
 - Format lists and structured data clearly.
 - Use Discord-friendly formatting (bold, bullet points) when appropriate.
 - Do NOT suggest making changes — this is a read-only query.
-- Respond in the same language the user used."""
+- IMPORTANT: Respond in the SAME language the user used (Vietnamese or English)."""
 
 
 class QueryService:

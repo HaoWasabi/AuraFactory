@@ -77,7 +77,7 @@ class ContextService:
             "discord.roles.list", {"guild_id": guild_id}
         )
         info_resp = await self.mcp_client.call_tool(
-            "discord.guild.info", {"guild_id": guild_id}
+            "discord.guild.get_info", {"guild_id": guild_id}
         )
 
         return {

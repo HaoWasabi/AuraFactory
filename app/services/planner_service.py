@@ -32,7 +32,7 @@ IMPORTANT RULES:
 - Assign a risk_level to each step: LOW (read-only, create), MEDIUM (edit, move), HIGH (delete channel/role, kick), CRITICAL (ban, bulk delete, server settings)
 - Steps should be in the correct execution order (e.g., create category before creating channels in it)
 - Use the server context to resolve IDs (category_id, role_id, etc.)
-- Write step descriptions in Vietnamese
+- Write step descriptions in the SAME language the user used in their request
 
 Respond with ONLY valid JSON, no markdown fences:
 {

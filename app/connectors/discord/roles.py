@@ -273,6 +273,34 @@ class RolesConnector(BaseConnector):
         except nextcord.errors.HTTPException as exc:
             raise RuntimeError(f"Failed to remove role: {exc}")
 
+    async def list(
+        self,
+        guild: nextcord.Guild,
+    ) -> Dict[str, Any]:
+        """List all roles in the guild.
+
+        Args:
+            guild: The target guild.
+
+        Returns:
+            Dict with list of roles.
+        """
+        roles = [
+            {
+                "id": str(role.id),
+                "name": role.name,
+                "color": str(role.color),
+                "position": role.position,
+                "permissions": role.permissions.value,
+                "member_count": len(role.members),
+                "mentionable": role.mentionable,
+                "hoist": role.hoist,
+            }
+            for role in guild.roles
+            if not role.is_default()
+        ]
+        return {"roles": roles, "count": len(roles)}
+
     # ------------------------------------------------------------------
     # BaseConnector interface
     # ------------------------------------------------------------------
@@ -286,6 +314,7 @@ class RolesConnector(BaseConnector):
             "set_permissions": self.set_permissions,
             "assign": self.assign,
             "remove": self.remove,
+            "list": self.list,
         }
         handler = actions.get(action)
         if handler is None:
@@ -383,5 +412,18 @@ class RolesConnector(BaseConnector):
                     "required": ["guild_id", "member_id", "role_id"],
                 },
                 risk_level="medium",
+            ),
+            ToolDefinition(
+                name="discord.roles.list",
+                description="List all roles in the guild with member counts and permissions.",
+                parameters={
+                    "type": "object",
+                    "properties": {
+                        "guild_id": {"type": "string", "description": "Target guild ID."},
+                    },
+                    "required": ["guild_id"],
+                },
+                risk_level="low",
+                category="query",
             ),
         ]

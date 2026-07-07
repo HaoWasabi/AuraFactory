@@ -3,6 +3,8 @@ import logging
 import nextcord
 from nextcord.ext import commands
 
+from app.messages import msg
+
 logger = logging.getLogger(__name__)
 
 
@@ -87,15 +89,16 @@ class DiscordBot(commands.Bot):
             origin_channel_id=message.channel.id,
         )
         if not req_result["ok"]:
-            await message.reply(f"⏳ {req_result['reason']}")
+            await message.reply(msg("request_locked", lang="vi"))
             return
 
         request_id = req_result["request_id"]
 
-        # Step 2: Classify intent
+        # Step 2: Classify intent + detect language
         classification = await self.classifier_service.classify(content)
         intent = classification["intent"]
         tool_mode = classification["tool_mode"]
+        lang = classification.get("lang", "vi")
 
         await self.request_service.update_status(request_id, "classified", intent=intent, tool_mode=tool_mode)
 
@@ -107,10 +110,7 @@ class DiscordBot(commands.Bot):
             return
 
         if intent in ("clarify", "out_of_scope"):
-            if intent == "clarify":
-                reply = "🤔 Bạn có thể mô tả cụ thể hơn được không? Ví dụ: tạo những channel gì, cho ai, trong category nào?"
-            else:
-                reply = "❌ Yêu cầu này nằm ngoài phạm vi AuraFactory. Tôi chỉ hỗ trợ quản lý Discord server (channels, roles, permissions, moderation)."
+            reply = msg(intent, lang=lang)
             await message.reply(reply)
             await self.request_service.update_status(request_id, "completed", response=reply)
             return
@@ -124,7 +124,7 @@ class DiscordBot(commands.Bot):
             intent=intent,
         )
         if not plan_result.get("ok"):
-            await message.reply(f"❌ Không tạo được kế hoạch: {plan_result.get('error', 'Unknown error')}")
+            await message.reply(msg("plan_failed", lang=lang, error=plan_result.get("error", "Unknown error")))
             await self.request_service.update_status(request_id, "failed", error_message=plan_result.get("error"))
             return
 
@@ -135,13 +135,16 @@ class DiscordBot(commands.Bot):
 
         if plan_result["risk_level"] in ("HIGH", "CRITICAL"):
             # Need approval — send with buttons
-            view = ApprovalView(self, plan_id, user_id)
-            await message.reply(f"📋 **Kế hoạch** (risk: {plan_result['risk_level']})\n{plan_text}\n\n⚠️ Cần bạn duyệt trước khi thực thi:", view=view)
+            view = ApprovalView(self, plan_id, user_id, lang=lang)
+            await message.reply(
+                msg("plan_header_approval", lang=lang, risk=plan_result["risk_level"], plan_text=plan_text),
+                view=view,
+            )
         else:
             # Auto-approved — execute immediately
-            await message.reply(f"📋 **Kế hoạch** (auto-approved)\n{plan_text}\n\n⏳ Đang thực thi...")
+            await message.reply(msg("plan_header_auto", lang=lang, plan_text=plan_text))
             exec_result = await self.executor_service.execute_plan(plan_id)
-            summary = self._format_execution_result(exec_result)
+            summary = self._format_execution_result(exec_result, lang=lang)
             await message.reply(summary)
             await self.request_service.update_status(request_id, "completed", response=summary)
 
@@ -153,31 +156,32 @@ class DiscordBot(commands.Bot):
             lines.append(f"{risk_emoji} Step {i}: {step.get('description', step.get('tool_name', ''))}")
         return "\n".join(lines)
 
-    def _format_execution_result(self, result: dict) -> str:
+    def _format_execution_result(self, result: dict, lang: str = "vi") -> str:
         """Format execution results for Discord."""
         if result.get("status") == "completed":
-            return f"✅ **Hoàn thành!** {result.get('completed_steps', 0)}/{result.get('total_steps', 0)} bước thành công."
+            return msg("exec_completed", lang=lang, done=result.get("completed_steps", 0), total=result.get("total_steps", 0))
         else:
             failed_step = result.get("failed_step")
             error_msg = result.get("error", "Unknown error")
             if failed_step:
-                return f"⚠️ **Thực thi dừng** tại bước {failed_step}/{result.get('total_steps', '?')}: {error_msg}"
-            return f"⚠️ **Lỗi:** {error_msg} ({result.get('completed_steps', 0)}/{result.get('total_steps', 0)} bước hoàn thành)"
+                return msg("exec_partial", lang=lang, failed=failed_step, total=result.get("total_steps", "?"), error=error_msg)
+            return msg("exec_error", lang=lang, error=error_msg, done=result.get("completed_steps", 0), total=result.get("total_steps", 0))
 
 
 class ApprovalView(nextcord.ui.View):
     """Discord UI buttons for plan approval (§5.5 HITL)."""
 
-    def __init__(self, bot: DiscordBot, plan_id: str, user_id: int):
+    def __init__(self, bot: DiscordBot, plan_id: str, user_id: int, lang: str = "vi"):
         super().__init__(timeout=1800)  # 30 min timeout (matches plan expiry)
         self.bot = bot
         self.plan_id = plan_id
         self.user_id = user_id
+        self.lang = lang
 
-    @nextcord.ui.button(label="✅ Duyệt", style=nextcord.ButtonStyle.green)
+    @nextcord.ui.button(label="✅ Approve", style=nextcord.ButtonStyle.green)
     async def approve_button(self, button: nextcord.ui.Button, interaction: nextcord.Interaction):
         if interaction.user.id != self.user_id:
-            await interaction.response.send_message("❌ Chỉ người tạo yêu cầu mới được duyệt.", ephemeral=True)
+            await interaction.response.send_message(msg("only_creator_approve", lang=self.lang), ephemeral=True)
             return
 
         # Defer immediately to avoid 3s Discord interaction timeout
@@ -186,24 +190,24 @@ class ApprovalView(nextcord.ui.View):
         try:
             result = await self.bot.approval_service.approve_plan(self.plan_id, interaction.user.id)
             if not result["ok"]:
-                await interaction.followup.send(f"❌ {result.get('error', 'Lỗi không xác định')}", ephemeral=True)
+                await interaction.followup.send(f"❌ {result.get('error', 'Error')}", ephemeral=True)
                 return
 
             self.stop()
-            await interaction.followup.send("✅ Đã duyệt! Đang thực thi...")
+            await interaction.followup.send(msg("approved", lang=self.lang))
 
             # Execute plan
             exec_result = await self.bot.executor_service.execute_plan(self.plan_id)
-            summary = self.bot._format_execution_result(exec_result)
+            summary = self.bot._format_execution_result(exec_result, lang=self.lang)
             await interaction.followup.send(summary)
         except Exception as e:
             logger.exception("Approve button error: %s", e)
-            await interaction.followup.send(f"❌ Lỗi: {str(e)[:200]}", ephemeral=True)
+            await interaction.followup.send(f"❌ Error: {str(e)[:200]}", ephemeral=True)
 
-    @nextcord.ui.button(label="❌ Từ chối", style=nextcord.ButtonStyle.red)
+    @nextcord.ui.button(label="❌ Reject", style=nextcord.ButtonStyle.red)
     async def reject_button(self, button: nextcord.ui.Button, interaction: nextcord.Interaction):
         if interaction.user.id != self.user_id:
-            await interaction.response.send_message("❌ Chỉ người tạo yêu cầu mới được từ chối.", ephemeral=True)
+            await interaction.response.send_message(msg("only_creator_reject", lang=self.lang), ephemeral=True)
             return
 
         await interaction.response.defer()
@@ -211,10 +215,10 @@ class ApprovalView(nextcord.ui.View):
         try:
             result = await self.bot.approval_service.reject_plan(self.plan_id, interaction.user.id, "User rejected via Discord")
             if result["ok"]:
-                await interaction.followup.send("🚫 Đã hủy kế hoạch.")
+                await interaction.followup.send(msg("rejected", lang=self.lang))
             else:
-                await interaction.followup.send(f"❌ {result.get('error', 'Lỗi không xác định')}", ephemeral=True)
+                await interaction.followup.send(f"❌ {result.get('error', 'Error')}", ephemeral=True)
             self.stop()
         except Exception as e:
             logger.exception("Reject button error: %s", e)
-            await interaction.followup.send(f"❌ Lỗi: {str(e)[:200]}", ephemeral=True)
+            await interaction.followup.send(f"❌ Error: {str(e)[:200]}", ephemeral=True)

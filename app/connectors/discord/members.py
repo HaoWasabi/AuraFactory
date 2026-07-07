@@ -262,6 +262,45 @@ class MembersConnector(BaseConnector):
             })
         return {"members": members, "count": len(members)}
 
+    async def get_info(
+        self,
+        guild: nextcord.Guild,
+        member_id: int,
+    ) -> Dict[str, Any]:
+        """Get detailed info about a specific member including permissions.
+
+        Args:
+            guild: The target guild.
+            member_id: Discord user ID.
+
+        Returns:
+            Dict with member info and guild_permissions.
+        """
+        member = guild.get_member(int(member_id))
+        if member is None:
+            # Try fetching if not in cache
+            try:
+                member = await guild.fetch_member(int(member_id))
+            except (nextcord.errors.NotFound, nextcord.errors.HTTPException):
+                raise ValueError(f"Member {member_id} not found in guild")
+
+        return {
+            "id": str(member.id),
+            "name": member.name,
+            "display_name": member.display_name,
+            "bot": member.bot,
+            "roles": [{"id": str(r.id), "name": r.name} for r in member.roles if r != guild.default_role],
+            "joined_at": member.joined_at.isoformat() if member.joined_at else None,
+            "permissions": {
+                "administrator": member.guild_permissions.administrator,
+                "manage_guild": member.guild_permissions.manage_guild,
+                "manage_channels": member.guild_permissions.manage_channels,
+                "manage_roles": member.guild_permissions.manage_roles,
+                "kick_members": member.guild_permissions.kick_members,
+                "ban_members": member.guild_permissions.ban_members,
+            },
+        }
+
     # ------------------------------------------------------------------
     # BaseConnector interface
     # ------------------------------------------------------------------
@@ -275,6 +314,7 @@ class MembersConnector(BaseConnector):
             "mute": self.mute,
             "timeout": self.timeout,
             "list": self.list,
+            "get_info": self.get_info,
         }
         handler = actions.get(action)
         if handler is None:
@@ -369,5 +409,19 @@ class MembersConnector(BaseConnector):
                     "required": ["guild_id"],
                 },
                 risk_level="low",
+            ),
+            ToolDefinition(
+                name="discord.members.get_info",
+                description="Get detailed info about a specific member including their guild permissions.",
+                parameters={
+                    "type": "object",
+                    "properties": {
+                        "guild_id": {"type": "string", "description": "Target guild ID."},
+                        "member_id": {"type": "string", "description": "Member/user ID to look up."},
+                    },
+                    "required": ["guild_id", "member_id"],
+                },
+                risk_level="low",
+                category="query",
             ),
         ]

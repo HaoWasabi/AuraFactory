@@ -161,6 +161,32 @@ class CategoriesConnector(BaseConnector):
         except nextcord.errors.HTTPException as exc:
             raise RuntimeError(f"Failed to reorder categories: {exc}")
 
+    async def list(
+        self,
+        guild: nextcord.Guild,
+    ) -> Dict[str, Any]:
+        """List all categories in the guild.
+
+        Args:
+            guild: The target guild.
+
+        Returns:
+            Dict with list of categories.
+        """
+        categories = [
+            {
+                "id": str(ch.id),
+                "name": ch.name,
+                "position": ch.position,
+                "channels": [
+                    {"id": str(c.id), "name": c.name, "type": str(c.type)}
+                    for c in ch.channels
+                ],
+            }
+            for ch in guild.categories
+        ]
+        return {"categories": categories, "count": len(categories)}
+
     # ------------------------------------------------------------------
     # BaseConnector interface
     # ------------------------------------------------------------------
@@ -172,6 +198,7 @@ class CategoriesConnector(BaseConnector):
             "delete": self.delete,
             "rename": self.rename,
             "reorder": self.reorder,
+            "list": self.list,
         }
         handler = actions.get(action)
         if handler is None:
@@ -240,5 +267,18 @@ class CategoriesConnector(BaseConnector):
                     "required": ["guild_id", "category_ids"],
                 },
                 risk_level="medium",
+            ),
+            ToolDefinition(
+                name="discord.categories.list",
+                description="List all categories in the guild with their channels.",
+                parameters={
+                    "type": "object",
+                    "properties": {
+                        "guild_id": {"type": "string", "description": "Target guild ID."},
+                    },
+                    "required": ["guild_id"],
+                },
+                risk_level="low",
+                category="query",
             ),
         ]
