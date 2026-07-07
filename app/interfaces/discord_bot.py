@@ -1,9 +1,12 @@
 """Discord Bot Interface — I/O layer only, delegates all logic to services."""
 import asyncio
 import logging
+from typing import Set
+
 import nextcord
 from nextcord.ext import commands
 
+from app.config import settings
 from app.messages import msg
 
 logger = logging.getLogger(__name__)
@@ -38,9 +41,23 @@ class DiscordBot(commands.Bot):
         self._mcp_client = services.get("_mcp_client")
         # DB reference for token tracking
         self._db = getattr(services.get("approval_service"), "db", None)
+        # Set of Discord user IDs that own this bot application (populated in on_ready)
+        self._bot_owner_ids: Set[int] = set()
 
     async def on_ready(self):
         logger.info("🤖 AuraFactory bot ready: %s (ID: %d)", self.user.name, self.user.id)
+
+        # Resolve bot application owner(s) — used for admin-only commands
+        try:
+            app_info = await self.application_info()
+            if app_info.team:
+                # Team app — all team members are considered owners
+                self._bot_owner_ids = {m.id for m in app_info.team.members}
+            else:
+                self._bot_owner_ids = {app_info.owner.id}
+            logger.info("✅ Bot owner IDs resolved: %s", self._bot_owner_ids)
+        except Exception as e:
+            logger.warning("⚠️ Could not resolve bot owner IDs: %s", e)
 
         # Register all current guilds in bot_installs (in case DB was wiped)
         for guild in self.guilds:
@@ -54,6 +71,83 @@ class DiscordBot(commands.Bot):
             if self._mcp_client:
                 self._mcp_client.reindex()
                 logger.info("✅ MCP tools re-indexed after bot ready (%d tools)", len(self._mcp_client._tool_index))
+
+    # ── Admin: update Gemini API key ──────────────────────────────────────────
+
+    @nextcord.slash_command(
+        name="setgeminikey",
+        description="[Bot Admin] Cập nhật Gemini API key cho toàn hệ thống",
+    )
+    async def set_gemini_key(
+        self,
+        interaction: nextcord.Interaction,
+        api_key: str = nextcord.SlashOption(
+            name="api_key",
+            description="Gemini API key mới (bắt đầu bằng AIza...)",
+            required=True,
+        ),
+    ):
+        """Slash command to update the Gemini API key at runtime.
+        
+        Only usable by Discord users listed in BOT_ADMIN_IDS env variable.
+        Responds ephemerally so the key is never visible in channel history.
+        """
+        # Always defer as ephemeral — key must never appear in channel
+        await interaction.response.defer(ephemeral=True)
+
+        # Authorization: only the Discord application owner(s) may use this command
+        if interaction.user.id not in self._bot_owner_ids:
+            await interaction.followup.send(
+                "❌ Không có quyền. Chỉ owner của bot application mới được sử dụng lệnh này.",
+                ephemeral=True,
+            )
+            return
+
+        new_key = api_key.strip()
+        if not new_key:
+            await interaction.followup.send("❌ API key không được để trống.", ephemeral=True)
+            return
+
+        if not new_key.startswith("AIza"):
+            await interaction.followup.send(
+                "❌ API key không hợp lệ. Gemini key phải bắt đầu bằng `AIza`.",
+                ephemeral=True,
+            )
+            return
+
+        # Update config singleton
+        settings.GEMINI_API_KEY = new_key
+
+        # Update all live LLM instances via update_api_key()
+        updated_services = []
+        for attr in (
+            "classifier_service",
+            "planner_service",
+            "executor_service",
+            "query_service",
+        ):
+            svc = getattr(self, attr, None)
+            if svc is None:
+                continue
+            llm = getattr(svc, "llm", None)
+            if llm is not None and hasattr(llm, "update_api_key"):
+                llm.update_api_key(new_key)
+                updated_services.append(attr)
+
+        logger.info(
+            "Gemini API key updated via Discord slash command by user %d (%s) — services: %s",
+            interaction.user.id,
+            interaction.user.name,
+            updated_services,
+        )
+
+        masked = f"{new_key[:8]}...{new_key[-4:]}" if len(new_key) > 12 else "***"
+        await interaction.followup.send(
+            f"✅ Gemini API key đã được cập nhật thành công!\n"
+            f"🔑 Key mới: `{masked}`\n"
+            f"📦 Services đã cập nhật: {', '.join(updated_services) or 'không có'}",
+            ephemeral=True,
+        )
 
     async def on_guild_join(self, guild: nextcord.Guild):
         """Bot was added to a guild."""

@@ -295,6 +295,77 @@ def create_api_router(services: dict) -> APIRouter:
             logger.error("Failed to get guild info: %s", e)
             return {"ok": False, "error": str(e)}
 
+    # === Admin endpoints ===
+
+    class UpdateGeminiKeyRequest(BaseModel):
+        api_key: str
+        user_id: str  # Discord user ID of the requester
+
+    def _get_bot_owner_ids(request: Request) -> set:
+        """Retrieve owner IDs from the live Discord bot instance."""
+        bot = getattr(request.app.state, "bot", None)
+        if bot is None:
+            return set()
+        return getattr(bot, "_bot_owner_ids", set())
+
+    @router.post("/admin/update-gemini-key")
+    async def update_gemini_key(req: UpdateGeminiKeyRequest, request: Request):
+        """Update Gemini API key at runtime.
+        
+        Only callable by the Discord application owner(s) — the account(s) that
+        own the bot token (DISCORD_TOKEN). No extra env variable required.
+        """
+        from app.config import settings as _settings
+
+        uid = int(req.user_id)
+        owner_ids = _get_bot_owner_ids(request)
+
+        # If bot hasn't connected yet, owner_ids will be empty — deny for safety
+        if not owner_ids or uid not in owner_ids:
+            raise HTTPException(
+                status_code=403,
+                detail="Không có quyền: chỉ owner của bot application mới được cập nhật API key",
+            )
+
+        new_key = req.api_key.strip()
+        if not new_key:
+            raise HTTPException(status_code=400, detail="API key không được để trống")
+
+        if not new_key.startswith("AIza"):
+            raise HTTPException(
+                status_code=400,
+                detail="API key không hợp lệ (Gemini key phải bắt đầu bằng 'AIza')",
+            )
+
+        # Update settings singleton
+        _settings.GEMINI_API_KEY = new_key
+
+        # Update all live LLM instances that support runtime key updates
+        updated_services = []
+        svc_map = getattr(request.app.state, "services", {})
+        for svc_name, svc in svc_map.items():
+            llm = getattr(svc, "llm", None)
+            if llm is not None and hasattr(llm, "update_api_key"):
+                llm.update_api_key(new_key)
+                updated_services.append(svc_name)
+
+        logger.info(
+            "Gemini API key updated by user %d — affected services: %s",
+            uid, updated_services,
+        )
+        return {
+            "ok": True,
+            "message": "Gemini API key đã được cập nhật thành công",
+            "updated_services": updated_services,
+        }
+
+    @router.get("/admin/status")
+    async def admin_status(user_id: str, request: Request):
+        """Check if a user is the bot application owner."""
+        uid = int(user_id)
+        owner_ids = _get_bot_owner_ids(request)
+        return {"is_admin": bool(owner_ids) and uid in owner_ids}
+
     # === Health ===
 
     @router.get("/health")

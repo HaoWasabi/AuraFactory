@@ -42,6 +42,19 @@ class GeminiLLM(BaseLLM):
             # Fallback: no safety override
             self.safety_settings = None
 
+    def update_api_key(self, new_api_key: str) -> None:
+        """Update the Gemini API key at runtime without restarting.
+        
+        Reconfigures the global google-generativeai client so all subsequent
+        model instantiations (which happen per-call) use the new key.
+        
+        Args:
+            new_api_key: New Gemini API key to use.
+        """
+        self.api_key = new_api_key
+        genai.configure(api_key=new_api_key)
+        logger.info("Gemini API key updated at runtime")
+
     def _convert_tools_to_gemini(self, tools: List[Dict[str, Any]]) -> List[genai.types.Tool]:
         """Convert tool definitions to Gemini FunctionDeclaration format.
         
