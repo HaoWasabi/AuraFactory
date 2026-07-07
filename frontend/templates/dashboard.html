@@ -253,6 +253,97 @@ body { background: var(--bg-primary); color: var(--text-primary); font-family: v
     animation: pulse-dot 2s infinite;
 }
 @keyframes pulse-dot { 0%, 100% { opacity:1; } 50% { opacity:0.5; } }
+
+/* Settings button in sidebar footer */
+.btn-settings {
+    display: flex; align-items: center; justify-content: center; gap: 8px;
+    width: 100%; padding: 10px; background: transparent;
+    border: 1px solid var(--border-light); border-radius: var(--radius);
+    color: var(--text-secondary); cursor: pointer; font-size: 13px;
+    margin-bottom: 8px; transition: all 0.2s;
+}
+.btn-settings:hover { border-color: var(--accent); color: var(--accent-light); }
+
+/* Modal overlay */
+.modal-overlay {
+    display: none; position: fixed; inset: 0;
+    background: rgba(0,0,0,0.65); z-index: 200;
+    align-items: center; justify-content: center;
+}
+.modal-overlay.active { display: flex; }
+
+/* Modal box */
+.modal {
+    background: var(--bg-secondary);
+    border: 1px solid var(--border-light);
+    border-radius: 16px;
+    padding: 28px 32px;
+    width: 100%;
+    max-width: 440px;
+    box-shadow: 0 16px 64px rgba(0,0,0,0.5);
+    animation: modalIn 0.2s ease;
+}
+@keyframes modalIn { from { opacity:0; transform:scale(0.95) translateY(8px); } to { opacity:1; transform:scale(1) translateY(0); } }
+
+.modal-header {
+    display: flex; align-items: center; justify-content: space-between;
+    margin-bottom: 20px;
+}
+.modal-title { font-size: 16px; font-weight: 700; color: var(--text-primary); }
+.modal-close {
+    background: none; border: none; color: var(--text-muted);
+    font-size: 20px; cursor: pointer; padding: 4px; line-height: 1;
+    transition: color 0.2s;
+}
+.modal-close:hover { color: var(--text-primary); }
+
+.modal-section { margin-bottom: 20px; }
+.modal-label {
+    display: block; font-size: 12px; font-weight: 600;
+    color: var(--text-muted); text-transform: uppercase;
+    letter-spacing: 0.5px; margin-bottom: 8px;
+}
+.modal-description {
+    font-size: 12px; color: var(--text-muted); margin-bottom: 10px; line-height: 1.5;
+}
+.modal-input {
+    width: 100%; padding: 10px 14px;
+    background: var(--bg-input); border: 1px solid var(--border-light);
+    border-radius: 10px; color: var(--text-primary); font-size: 14px;
+    font-family: var(--font); outline: none; transition: border-color 0.2s;
+}
+.modal-input:focus { border-color: var(--accent); }
+.modal-input::placeholder { color: var(--text-muted); font-size: 13px; }
+
+.modal-actions { display: flex; gap: 10px; margin-top: 24px; }
+.btn-modal-primary {
+    flex: 1; padding: 10px; border-radius: 10px;
+    background: var(--accent); color: white;
+    border: none; cursor: pointer; font-size: 14px; font-weight: 600;
+    transition: all 0.2s;
+}
+.btn-modal-primary:hover { background: var(--accent-light); transform: translateY(-1px); }
+.btn-modal-primary:disabled { opacity: 0.5; cursor: not-allowed; transform: none; }
+.btn-modal-cancel {
+    padding: 10px 20px; border-radius: 10px;
+    background: transparent; color: var(--text-secondary);
+    border: 1px solid var(--border-light); cursor: pointer; font-size: 14px;
+    transition: all 0.2s;
+}
+.btn-modal-cancel:hover { border-color: var(--border-light); color: var(--text-primary); }
+
+.modal-feedback {
+    margin-top: 12px; padding: 10px 14px; border-radius: 8px;
+    font-size: 13px; display: none;
+}
+.modal-feedback.success {
+    display: block; background: rgba(16,185,129,0.1);
+    border: 1px solid rgba(16,185,129,0.3); color: #34d399;
+}
+.modal-feedback.error {
+    display: block; background: rgba(239,68,68,0.1);
+    border: 1px solid rgba(239,68,68,0.3); color: #f87171;
+}
 </style>
 </head>
 <body>
@@ -273,6 +364,9 @@ body { background: var(--bg-primary); color: var(--text-primary); font-family: v
     <div class="server-list" id="server-list"></div>
 
     <div class="sidebar-footer">
+        <button class="btn-settings" onclick="openSettings()">
+            <span>⚙️</span> Cài đặt hệ thống
+        </button>
         <a class="btn-logout" href="/auth/logout">
             <span>🚪</span> Đăng xuất
         </a>
@@ -309,11 +403,124 @@ body { background: var(--bg-primary); color: var(--text-primary); font-family: v
     </div>
 </div>
 
+<!-- Settings Modal -->
+<div class="modal-overlay" id="settings-modal">
+    <div class="modal">
+        <div class="modal-header">
+            <span class="modal-title">⚙️ Cài đặt hệ thống</span>
+            <button class="modal-close" onclick="closeSettings()">✕</button>
+        </div>
+
+        <div class="modal-section">
+            <label class="modal-label">🔑 Gemini API Token</label>
+            <p class="modal-description">
+                Cập nhật Gemini API key tại runtime mà không cần restart server.
+                Token mới sẽ được áp dụng ngay lập tức cho toàn bộ hệ thống.
+            </p>
+            <input
+                type="password"
+                class="modal-input"
+                id="gemini-token-input"
+                placeholder="AIza..."
+                autocomplete="off"
+                spellcheck="false"
+            />
+        </div>
+
+        <div id="settings-feedback" class="modal-feedback"></div>
+
+        <div class="modal-actions">
+            <button class="btn-modal-cancel" onclick="closeSettings()">Huỷ</button>
+            <button class="btn-modal-primary" id="save-token-btn" onclick="saveGeminiToken()">
+                💾 Lưu & Áp dụng
+            </button>
+        </div>
+    </div>
+</div>
+
 <script>
 // ─── State ───
 let currentGuildId = null;
 let userData = null;
 let isProcessing = false;
+
+// ─── Settings Modal ───
+function openSettings() {
+    document.getElementById('settings-modal').classList.add('active');
+    document.getElementById('gemini-token-input').focus();
+    hideFeedback();
+    // Close sidebar on mobile
+    document.getElementById('sidebar').classList.remove('open');
+    document.getElementById('sidebar-overlay').classList.remove('active');
+}
+
+function closeSettings() {
+    document.getElementById('settings-modal').classList.remove('active');
+    document.getElementById('gemini-token-input').value = '';
+    hideFeedback();
+}
+
+function hideFeedback() {
+    const fb = document.getElementById('settings-feedback');
+    fb.className = 'modal-feedback';
+    fb.textContent = '';
+}
+
+function showFeedback(message, type) {
+    const fb = document.getElementById('settings-feedback');
+    fb.className = `modal-feedback ${type}`;
+    fb.textContent = message;
+}
+
+async function saveGeminiToken() {
+    const input = document.getElementById('gemini-token-input');
+    const apiKey = input.value.trim();
+
+    if (!apiKey) {
+        showFeedback('⚠️ Vui lòng nhập API key.', 'error');
+        return;
+    }
+
+    const btn = document.getElementById('save-token-btn');
+    btn.disabled = true;
+    btn.textContent = '⏳ Đang áp dụng...';
+    hideFeedback();
+
+    try {
+        const res = await fetch('/api/v1/config/gemini-token', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ api_key: apiKey }),
+        });
+        const data = await res.json();
+
+        if (res.ok) {
+            showFeedback(`✅ ${data.message}`, 'success');
+            input.value = '';
+            setTimeout(closeSettings, 2000);
+        } else {
+            showFeedback(`❌ ${data.detail || 'Cập nhật thất bại.'}`, 'error');
+        }
+    } catch (e) {
+        showFeedback(`❌ Lỗi kết nối: ${e.message}`, 'error');
+    } finally {
+        btn.disabled = false;
+        btn.textContent = '💾 Lưu & Áp dụng';
+    }
+}
+
+// Close modal when clicking overlay
+document.getElementById('settings-modal').addEventListener('click', function(e) {
+    if (e.target === this) closeSettings();
+});
+
+// Allow Enter key in token input
+document.addEventListener('DOMContentLoaded', () => {
+    document.getElementById('gemini-token-input').addEventListener('keydown', (e) => {
+        if (e.key === 'Enter') saveGeminiToken();
+        if (e.key === 'Escape') closeSettings();
+    });
+});
 
 // ─── Init ───
 async function init() {
