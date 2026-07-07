@@ -38,6 +38,12 @@ class DiscordBot(commands.Bot):
 
     async def on_ready(self):
         logger.info("🤖 AuraFactory bot ready: %s (ID: %d)", self.user.name, self.user.id)
+
+        # Register all current guilds in bot_installs (in case DB was wiped)
+        for guild in self.guilds:
+            await self.guild_sync_service.register_bot_install(guild.id, guild.owner_id or 0)
+        logger.info("✅ Registered %d guild(s) in bot_installs", len(self.guilds))
+
         # Set MCP bot reference
         if self.mcp_discord_server:
             self.mcp_discord_server.set_bot(self)

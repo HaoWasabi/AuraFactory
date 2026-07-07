@@ -6,6 +6,8 @@ from typing import Optional
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from pydantic import BaseModel
 
+from app.messages import msg
+
 logger = logging.getLogger(__name__)
 
 
@@ -66,15 +68,35 @@ def create_api_router(services: dict) -> APIRouter:
 
     @router.get("/auth/guilds")
     async def get_guilds(user_id: int):
-        """Get cached guild list for user."""
+        """Get cached guild list for user.
+        
+        Returns guilds split into:
+        - ready: bot_installed = True → can use immediately
+        - pending: bot_installed = False → needs bot invite
+        Each guild includes invite_url for easy activation.
+        """
         guilds = await guild_sync_service.get_user_guilds(user_id)
-        return {"guilds": guilds}
+        
+        ready = []
+        pending = []
+        for g in guilds:
+            g["invite_url"] = guild_sync_service.get_bot_invite_url(g["guild_id"])
+            if g.get("bot_installed"):
+                ready.append(g)
+            else:
+                pending.append(g)
+        
+        return {
+            "ready": ready,
+            "pending": pending,
+            "total": len(guilds),
+        }
 
     @router.get("/auth/bot-invite")
     async def bot_invite(guild_id: int):
         """Get bot invite URL for a specific guild."""
         url = guild_sync_service.get_bot_invite_url(guild_id)
-        return {"url": url}
+        return {"url": url, "guild_id": guild_id}
 
     # === Chat / Pipeline endpoints (§5.3-5.6) ===
 
@@ -82,8 +104,22 @@ def create_api_router(services: dict) -> APIRouter:
     async def chat(req: ChatRequest):
         """Main chat endpoint — same pipeline as Discord bot.
         
-        Flow: request → classify → plan/query → execute (if auto-approve)
+        Flow: check bot → request → classify → plan/query → execute (if auto-approve)
         """
+        # §5.1 step 3: Check bot is installed in this guild
+        bot_row = await guild_sync_service.db.fetchrow(
+            "SELECT is_active FROM bot_installs WHERE guild_id = $1 AND is_active = TRUE",
+            req.guild_id,
+        )
+        if not bot_row:
+            invite_url = guild_sync_service.get_bot_invite_url(req.guild_id)
+            return {
+                "ok": False,
+                "type": "bot_not_installed",
+                "error": msg("bot_not_installed", lang="vi", invite_url=invite_url),
+                "invite_url": invite_url,
+            }
+
         # Create request
         req_result = await request_service.create_request(
             guild_id=req.guild_id,
@@ -92,7 +128,7 @@ def create_api_router(services: dict) -> APIRouter:
             origin="web",
         )
         if not req_result["ok"]:
-            return {"ok": False, "error": req_result["reason"]}
+            return {"ok": False, "type": "locked", "error": msg("request_locked", lang="vi")}
 
         request_id = req_result["request_id"]
 
@@ -100,6 +136,7 @@ def create_api_router(services: dict) -> APIRouter:
         classification = await classifier_service.classify(req.message)
         intent = classification["intent"]
         tool_mode = classification["tool_mode"]
+        lang = classification.get("lang", "vi")
         await request_service.update_status(request_id, "classified", intent=intent, tool_mode=tool_mode)
 
         # Route by intent
@@ -109,10 +146,9 @@ def create_api_router(services: dict) -> APIRouter:
             return {"ok": True, "type": "answer", "content": answer, "request_id": request_id}
 
         if intent in ("clarify", "out_of_scope"):
-            msg = ("Bạn có thể mô tả cụ thể hơn?" if intent == "clarify"
-                   else "Yêu cầu nằm ngoài phạm vi AuraFactory.")
-            await request_service.update_status(request_id, "completed", response=msg)
-            return {"ok": True, "type": "clarify", "content": msg, "request_id": request_id}
+            reply = msg(intent, lang=lang)
+            await request_service.update_status(request_id, "completed", response=reply)
+            return {"ok": True, "type": "clarify", "content": reply, "request_id": request_id}
 
         # Action intents → plan
         plan_result = await planner_service.generate_plan(
@@ -170,6 +206,28 @@ def create_api_router(services: dict) -> APIRouter:
         """Get pending approval for a user in a guild."""
         plan = await approval_service.get_pending_approval(guild_id, user_id)
         return {"plan": plan}
+
+    # === Guild status ===
+
+    @router.get("/guild/{guild_id}/status")
+    async def guild_status(guild_id: int):
+        """Check if bot is installed and active in a guild.
+        Returns bot status + invite URL if not installed.
+        """
+        bot_row = await guild_sync_service.db.fetchrow(
+            "SELECT is_active, installed_at FROM bot_installs WHERE guild_id = $1",
+            guild_id,
+        )
+        if bot_row and bot_row["is_active"]:
+            return {
+                "bot_installed": True,
+                "installed_at": bot_row["installed_at"].isoformat() if bot_row["installed_at"] else None,
+            }
+        return {
+            "bot_installed": False,
+            "invite_url": guild_sync_service.get_bot_invite_url(guild_id),
+            "message": msg("bot_not_installed_short", lang="vi"),
+        }
 
     # === Health ===
 

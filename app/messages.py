@@ -61,6 +61,14 @@ MESSAGES = {
         "vi": "Tôi không tìm thấy thông tin phù hợp để trả lời câu hỏi của bạn. Bạn có thể hỏi cụ thể hơn được không?",
         "en": "I couldn't find relevant information to answer your question. Could you be more specific?",
     },
+    "bot_not_installed": {
+        "vi": "⚠️ Bot chưa được mời vào server này. Vui lòng mời bot trước:\n{invite_url}",
+        "en": "⚠️ Bot hasn't been added to this server yet. Please invite the bot first:\n{invite_url}",
+    },
+    "bot_not_installed_short": {
+        "vi": "⚠️ Server này chưa kích hoạt AuraFactory. Vui lòng mời bot vào server trước khi sử dụng.",
+        "en": "⚠️ This server hasn't activated AuraFactory yet. Please add the bot to your server first.",
+    },
 }
 
 
