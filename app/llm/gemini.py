@@ -210,11 +210,15 @@ class GeminiLLM(BaseLLM):
                     tool_calls.extend(self._extract_tool_calls(part))
         
         # Extract usage stats
-        usage = UsageStats(
-            prompt_tokens=response.usage_metadata.prompt_character_count if response.usage_metadata else 0,
-            completion_tokens=response.usage_metadata.candidates_token_count if response.usage_metadata else 0,
-            total_tokens=response.usage_metadata.total_token_count if response.usage_metadata else 0,
-        )
+        try:
+            um = response.usage_metadata
+            usage = UsageStats(
+                prompt_tokens=getattr(um, 'prompt_token_count', 0) if um else 0,
+                completion_tokens=getattr(um, 'candidates_token_count', 0) if um else 0,
+                total_tokens=getattr(um, 'total_token_count', 0) if um else 0,
+            )
+        except Exception:
+            usage = UsageStats()
         
         return LLMResponse(
             content=content,
