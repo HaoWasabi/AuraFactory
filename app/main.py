@@ -39,6 +39,15 @@ async def lifespan(app: FastAPI):
             await db.connect()
             await db.run_migrations("migrations")
             logger.info("✅ Database connected + migrations applied")
+            
+            # Cleanup stuck requests from previous crash/restart
+            cleaned = await db.execute(
+                """UPDATE requests SET status = 'failed', error_message = 'Server restarted', completed_at = NOW()
+                   WHERE status IN ('planned', 'awaiting_approval', 'executing')"""
+            )
+            if cleaned and 'UPDATE' in cleaned and cleaned != 'UPDATE 0':
+                logger.info("🧹 Cleaned up stuck requests: %s", cleaned)
+            
             db_connected = True
             break
         except Exception as e:
