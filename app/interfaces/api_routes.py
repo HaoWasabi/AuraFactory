@@ -15,12 +15,12 @@ logger = logging.getLogger(__name__)
 class ChatRequest(BaseModel):
     message: str
     guild_id: int
-    user_id: int
+    user_id: str  # String to preserve Discord snowflake precision
 
 class ApprovalRequest(BaseModel):
     plan_id: str
     action: str  # "approve" or "reject"
-    user_id: int
+    user_id: str  # String to preserve Discord snowflake precision
     reason: Optional[str] = None
 
 
@@ -58,7 +58,7 @@ def create_api_router(services: dict) -> APIRouter:
         )
         return {
             "user": {
-                "id": user["discord_user_id"],
+                "id": str(user["discord_user_id"]),
                 "username": user["username"],
                 "avatar": user["avatar"],
             },
@@ -67,7 +67,7 @@ def create_api_router(services: dict) -> APIRouter:
         }
 
     @router.get("/auth/guilds")
-    async def get_guilds(user_id: int, refresh: bool = False):
+    async def get_guilds(user_id: str, refresh: bool = False):
         """Get guild list for user. Auto-refreshes from Discord if cache empty.
         
         Returns guilds split into:
@@ -75,16 +75,17 @@ def create_api_router(services: dict) -> APIRouter:
         - pending: bot_installed = False → needs bot invite
         Each guild includes invite_url for easy activation.
         """
-        guilds = [] if refresh else await guild_sync_service.get_user_guilds(user_id)
+        uid = int(user_id)
+        guilds = [] if refresh else await guild_sync_service.get_user_guilds(uid)
 
         # If cache is empty or refresh requested, sync from Discord
         if not guilds:
-            token = await auth_service.get_user_token(user_id)
+            token = await auth_service.get_user_token(uid)
             if token:
-                logger.info("Syncing guilds from Discord for user %d (cache empty or refresh)", user_id)
-                guilds = await guild_sync_service.sync_user_guilds(user_id, token)
+                logger.info("Syncing guilds from Discord for user %d (cache empty or refresh)", uid)
+                guilds = await guild_sync_service.sync_user_guilds(uid, token)
             else:
-                logger.warning("No stored token for user %d — cannot sync guilds", user_id)
+                logger.warning("No stored token for user %d — cannot sync guilds", uid)
             
             if not guilds:
                 return {
@@ -141,7 +142,7 @@ def create_api_router(services: dict) -> APIRouter:
         # Create request
         req_result = await request_service.create_request(
             guild_id=req.guild_id,
-            user_id=req.user_id,
+            user_id=int(req.user_id),
             message=req.message,
             origin="web",
         )
@@ -172,7 +173,7 @@ def create_api_router(services: dict) -> APIRouter:
         plan_result = await planner_service.generate_plan(
             request_id=request_id,
             guild_id=req.guild_id,
-            user_id=req.user_id,
+            user_id=int(req.user_id),
             message=req.message,
             intent=intent,
         )
@@ -208,14 +209,14 @@ def create_api_router(services: dict) -> APIRouter:
     async def handle_approval(req: ApprovalRequest):
         """Approve or reject a plan from web dashboard."""
         if req.action == "approve":
-            result = await approval_service.approve_plan(req.plan_id, req.user_id)
+            result = await approval_service.approve_plan(req.plan_id, int(req.user_id))
             if result["ok"]:
                 # Execute after approval
                 exec_result = await executor_service.execute_plan(req.plan_id)
                 return {"ok": True, "execution": exec_result}
             return result
         elif req.action == "reject":
-            return await approval_service.reject_plan(req.plan_id, req.user_id, req.reason or "Rejected via web")
+            return await approval_service.reject_plan(req.plan_id, int(req.user_id), req.reason or "Rejected via web")
         else:
             raise HTTPException(status_code=400, detail="action must be 'approve' or 'reject'")
 

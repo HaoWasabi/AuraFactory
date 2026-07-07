@@ -11,7 +11,7 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, Response
 
 from app.config import settings
 
@@ -191,6 +191,11 @@ app.mount("/static", StaticFiles(directory="frontend/static"), name="static")
 @app.get("/")
 async def serve_index():
     return FileResponse("frontend/index.html")
+
+@app.head("/")
+async def head_index():
+    """Health check probe (Render sends HEAD /)."""
+    return Response(status_code=200)
 
 
 @app.get("/login")

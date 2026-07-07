@@ -49,7 +49,7 @@ class GuildSyncService:
             owner_id_match = (int(guild.get("owner_id", 0)) == user_id) if guild.get("owner_id") else False
             if is_admin or is_owner or owner_id_match:
                 admin_guilds.append({
-                    "guild_id": int(guild["id"]),
+                    "guild_id": str(guild["id"]),
                     "guild_name": guild.get("name", ""),
                     "is_owner": is_owner or owner_id_match,
                     "permissions_bitfield": perms,
@@ -69,7 +69,7 @@ class GuildSyncService:
                        is_owner = EXCLUDED.is_owner,
                        permissions_bitfield = EXCLUDED.permissions_bitfield,
                        cached_at = NOW()""",
-                user_id, g["guild_id"], g["guild_name"], g["is_owner"], g["permissions_bitfield"],
+                user_id, int(g["guild_id"]), g["guild_name"], g["is_owner"], g["permissions_bitfield"],
             )
 
         # Check bot installation status for each guild
@@ -77,7 +77,7 @@ class GuildSyncService:
         for g in admin_guilds:
             bot_row = await self.db.fetchrow(
                 "SELECT is_active FROM bot_installs WHERE guild_id = $1",
-                g["guild_id"],
+                int(g["guild_id"]),
             )
             g["bot_installed"] = bool(bot_row and bot_row["is_active"])
             result.append(g)
@@ -117,7 +117,12 @@ class GuildSyncService:
                ORDER BY g.guild_name""",
             user_id,
         )
-        return [dict(r) for r in rows]
+        result = []
+        for r in rows:
+            d = dict(r)
+            d["guild_id"] = str(d["guild_id"])  # String for JS safety
+            result.append(d)
+        return result
 
     def get_bot_invite_url(self, guild_id: int) -> str:
         """Generate bot invite URL for a specific guild."""
