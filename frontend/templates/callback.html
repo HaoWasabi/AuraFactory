@@ -13,38 +13,56 @@
         .container { text-align: center; }
         .spinner { font-size: 48px; animation: pulse 1s infinite; }
         @keyframes pulse { 0%,100% { opacity: 1; } 50% { opacity: 0.5; } }
+        .error { color: #fc8181; }
     </style>
 </head>
 <body>
     <div class="container">
         <div class="spinner">🔄</div>
-        <p>Đang xác thực với Discord...</p>
+        <p id="status">Đang xác thực với Discord...</p>
     </div>
     <script>
         (async function() {
             const params = new URLSearchParams(window.location.search);
             const code = params.get('code');
             const state = params.get('state');
+            const statusEl = document.getElementById('status');
 
             if (!code) {
-                document.querySelector('p').textContent = '❌ Lỗi: Không nhận được mã xác thực.';
+                statusEl.className = 'error';
+                statusEl.textContent = '❌ Lỗi: Không nhận được mã xác thực.';
+                return;
+            }
+
+            // Verify state matches what we stored
+            const savedState = localStorage.getItem('aura_oauth_state');
+            if (state && savedState && state !== savedState) {
+                statusEl.className = 'error';
+                statusEl.textContent = '❌ Lỗi: State mismatch — có thể bị tấn công CSRF.';
                 return;
             }
 
             try {
-                const resp = await fetch(`/api/auth/callback?code=${code}&state=${state}`);
+                const resp = await fetch(`/api/auth/callback?code=${encodeURIComponent(code)}&state=${encodeURIComponent(state || '')}`);
                 const data = await resp.json();
 
-                if (data.user) {
+                if (resp.ok && data.user) {
                     // Save user to localStorage
                     localStorage.setItem('aura_user', JSON.stringify(data.user));
-                    localStorage.setItem('aura_guilds', JSON.stringify(data.guilds || []));
-                    window.location.href = '/dashboard';
+                    // Clean up oauth state
+                    localStorage.removeItem('aura_oauth_state');
+                    
+                    statusEl.textContent = '✅ Đăng nhập thành công! Đang chuyển hướng...';
+                    setTimeout(() => {
+                        window.location.href = '/dashboard';
+                    }, 500);
                 } else {
-                    document.querySelector('p').textContent = '❌ Xác thực thất bại.';
+                    statusEl.className = 'error';
+                    statusEl.textContent = `❌ Xác thực thất bại: ${data.detail || 'Unknown error'}`;
                 }
             } catch (e) {
-                document.querySelector('p').textContent = '❌ Lỗi kết nối: ' + e.message;
+                statusEl.className = 'error';
+                statusEl.textContent = '❌ Lỗi kết nối: ' + e.message;
             }
         })();
     </script>

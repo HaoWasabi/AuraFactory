@@ -1009,3 +1009,15 @@ body {
 .btn-reject:hover {
     opacity: 0.85;
 }
+
+/* Refresh button */
+.btn-refresh {
+    background: none;
+    border: 1px solid var(--border-color, #3a3a3a);
+    border-radius: 6px;
+    padding: 6px 10px;
+    cursor: pointer;
+    font-size: 14px;
+    margin-top: 6px;
+}
+.btn-refresh:hover { background: var(--bg-hover, #2a2a2a); }

@@ -229,6 +229,44 @@ def create_api_router(services: dict) -> APIRouter:
             "message": msg("bot_not_installed_short", lang="vi"),
         }
 
+    @router.get("/guild/{guild_id}/info")
+    async def guild_info(guild_id: int):
+        """Get server info for sidebar display (channel/role/member counts).
+        Requires bot to be installed.
+        """
+        bot_row = await guild_sync_service.db.fetchrow(
+            "SELECT is_active FROM bot_installs WHERE guild_id = $1 AND is_active = TRUE",
+            guild_id,
+        )
+        if not bot_row:
+            return {"ok": False, "error": "Bot not installed"}
+
+        # Get context via ContextService (which calls MCP tools)
+        context_service = services.get("context_service")
+        if not context_service:
+            return {"ok": False, "error": "Context service unavailable"}
+
+        try:
+            ctx = await context_service.get_server_context(guild_id)
+            import json
+            channels = json.loads(ctx.get("channels", "[]")) if isinstance(ctx.get("channels"), str) else ctx.get("channels", [])
+            roles = json.loads(ctx.get("roles", "[]")) if isinstance(ctx.get("roles"), str) else ctx.get("roles", [])
+            server_info = json.loads(ctx.get("server_info", "{}")) if isinstance(ctx.get("server_info"), str) else ctx.get("server_info", {})
+            categories = json.loads(ctx.get("categories", "[]")) if isinstance(ctx.get("categories"), str) else ctx.get("categories", [])
+
+            return {
+                "ok": True,
+                "guild_id": guild_id,
+                "channels": len(channels) if isinstance(channels, list) else 0,
+                "roles": len(roles) if isinstance(roles, list) else 0,
+                "categories": len(categories) if isinstance(categories, list) else 0,
+                "member_count": server_info.get("member_count") or server_info.get("approximate_member_count") or "?",
+                "server_name": server_info.get("name", ""),
+            }
+        except Exception as e:
+            logger.error("Failed to get guild info: %s", e)
+            return {"ok": False, "error": str(e)}
+
     # === Health ===
 
     @router.get("/health")

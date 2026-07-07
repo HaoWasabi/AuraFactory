@@ -33,6 +33,7 @@
                     <select class="guild-select" id="guildSelect" onchange="selectGuild(this.value)" data-i18n-placeholder="select_server">
                         <option value="" data-i18n="select_server">Chọn server...</option>
                     </select>
+                    <button class="btn-refresh" onclick="loadGuilds()" title="Refresh danh sách server">🔄</button>
                 </div>
                 <div class="sidebar-section">
                     <div class="sidebar-section-title" data-i18n="server_info">Thông tin Server</div>
@@ -175,14 +176,13 @@
         async function loadGuilds() {
             try {
                 const data = await api('GET', `/api/auth/guilds?user_id=${currentUser.id}`);
-                if (!data || !data.guilds) return;
+                if (!data) return;
 
                 const select = document.getElementById('guildSelect');
                 select.innerHTML = '<option value="">Chọn server...</option>';
 
-                // Split into "ready" and "not installed"
-                const ready = data.guilds.filter(g => g.bot_installed);
-                const notReady = data.guilds.filter(g => !g.bot_installed);
+                const ready = data.ready || [];
+                const pending = data.pending || [];
 
                 if (ready.length > 0) {
                     const group1 = document.createElement('optgroup');
@@ -196,16 +196,24 @@
                     select.appendChild(group1);
                 }
 
-                if (notReady.length > 0) {
+                if (pending.length > 0) {
                     const group2 = document.createElement('optgroup');
                     group2.label = '⚠️ Chưa cài bot';
-                    notReady.forEach(g => {
+                    pending.forEach(g => {
                         const opt = document.createElement('option');
                         opt.value = `install_${g.guild_id}`;
                         opt.textContent = `${g.guild_name} (cài bot →)`;
                         group2.appendChild(opt);
                     });
                     select.appendChild(group2);
+                }
+
+                if (ready.length === 0 && pending.length === 0) {
+                    const opt = document.createElement('option');
+                    opt.value = '';
+                    opt.textContent = 'Không tìm thấy server nào bạn quản lý';
+                    opt.disabled = true;
+                    select.appendChild(opt);
                 }
             } catch (e) {
                 console.error('Failed to load guilds:', e);
@@ -221,6 +229,8 @@
                 const guildId = value.replace('install_', '');
                 const data = await api('GET', `/api/auth/bot-invite?guild_id=${guildId}`);
                 if (data && data.url) {
+                    appendMessage('bot', '🔗 **Mời bot vào server**\n\nNhấn liên kết sau để thêm AuraFactory bot vào server của bạn:\n\n' +
+                        `[👉 Mời bot vào server](${data.url})\n\nSau khi mời xong, nhấn nút "🔄 Refresh" để cập nhật.`);
                     window.open(data.url, '_blank');
                 }
                 document.getElementById('guildSelect').value = '';
@@ -228,10 +238,27 @@
             }
 
             currentGuild = parseInt(value);
-            document.getElementById('channelCount').textContent = '...';
-            document.getElementById('roleCount').textContent = '...';
-            document.getElementById('memberCount').textContent = '...';
-            showToast(`Đã chọn server`, 'info');
+            document.getElementById('channelCount').textContent = '⏳';
+            document.getElementById('roleCount').textContent = '⏳';
+            document.getElementById('memberCount').textContent = '⏳';
+
+            // Load server info for sidebar
+            try {
+                const info = await api('GET', `/api/guild/${currentGuild}/info`);
+                if (info && info.ok) {
+                    document.getElementById('channelCount').textContent = info.channels || 0;
+                    document.getElementById('roleCount').textContent = info.roles || 0;
+                    document.getElementById('memberCount').textContent = info.member_count || '?';
+                    showToast(`✅ ${info.server_name || 'Server'} đã sẵn sàng`, 'info');
+                } else {
+                    document.getElementById('channelCount').textContent = '—';
+                    document.getElementById('roleCount').textContent = '—';
+                    document.getElementById('memberCount').textContent = '—';
+                    showToast('Chọn server thành công', 'info');
+                }
+            } catch (e) {
+                showToast('Không thể tải thông tin server', 'warning');
+            }
         }
 
         // ===== Send Message (§5.3-5.6 Pipeline) =====
@@ -258,7 +285,14 @@
                 if (!data) return;
 
                 if (!data.ok) {
-                    appendMessage('bot', `❌ ${data.error || 'Có lỗi xảy ra'}`);
+                    if (data.type === 'bot_not_installed') {
+                        appendMessage('bot', `⚠️ **Bot chưa được mời vào server này!**\n\n` +
+                            `Vui lòng mời bot trước khi sử dụng:\n\n` +
+                            `[👉 Mời bot vào server](${data.invite_url})\n\n` +
+                            `Sau khi mời bot xong, hãy refresh lại trang.`);
+                    } else {
+                        appendMessage('bot', `❌ ${data.error || 'Có lỗi xảy ra'}`);
+                    }
                     return;
                 }
 
@@ -293,6 +327,8 @@
 
         // ===== Plan Display (§5.4 step 12) =====
         function showPlan(plan, needsApproval) {
+            const planId = plan.plan_id || plan.id || '';
+
             const riskColors = { LOW: 'var(--risk-low)', MEDIUM: 'var(--risk-medium)', HIGH: 'var(--risk-high)', CRITICAL: 'var(--risk-critical)' };
             const riskEmoji = { LOW: '🟢', MEDIUM: '🟡', HIGH: '🟠', CRITICAL: '🔴' };
 
@@ -308,8 +344,8 @@
 
             if (needsApproval) {
                 html += `<div class="plan-actions">`;
-                html += `<button class="btn-approve" onclick="approvePlan('${plan.id}')">✅ Duyệt</button>`;
-                html += `<button class="btn-reject" onclick="rejectPlan('${plan.id}')">❌ Từ chối</button>`;
+                html += `<button class="btn-approve" onclick="approvePlan('${planId}')">✅ Duyệt</button>`;
+                html += `<button class="btn-reject" onclick="rejectPlan('${planId}')">❌ Từ chối</button>`;
                 html += `</div>`;
             }
             html += `</div>`;
@@ -333,7 +369,7 @@
                         appendMessage('bot', `${emoji} ${r.completed_steps || 0}/${r.total_steps || 0} bước hoàn thành.`);
                     }
                 } else {
-                    appendMessage('bot', `❌ ${data?.reason || 'Không thể duyệt'}`);
+                    appendMessage('bot', `❌ ${data?.error || 'Không thể duyệt'}`);
                 }
             } catch (e) {
                 appendMessage('bot', `❌ Lỗi: ${e.message}`);
@@ -405,7 +441,19 @@
             window.location.href = '/login';
         }
 
-        function toggleLanguage() { /* TODO */ }
+        function toggleLanguage() {
+            const btn = document.getElementById('langBtn');
+            const currentLang = storageGet('lang', 'vi');
+            const newLang = currentLang === 'vi' ? 'en' : 'vi';
+            storageSet('lang', newLang);
+            btn.textContent = `🌐 ${newLang.toUpperCase()}`;
+
+            // Update placeholder
+            const input = document.getElementById('chatInput');
+            input.placeholder = newLang === 'vi' ? 'Nhập lệnh hoặc câu hỏi...' : 'Type a command or question...';
+            showToast(newLang === 'vi' ? 'Đã chuyển sang Tiếng Việt' : 'Switched to English', 'info');
+        }
+
         function toggleAssistant() { /* TODO - not in Phase 1 */ }
     </script>
 </body>
