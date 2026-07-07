@@ -30,33 +30,17 @@ class GeminiLLM(BaseLLM):
         super().__init__(model=model, api_key=api_key)
         genai.configure(api_key=self.api_key)
         
-        # Safety settings: allow all content
-        self.safety_settings = [
-            {
-                "category": genai.types.HarmCategory.HARM_CATEGORY_UNSPECIFIED,
-                "threshold": genai.types.HarmBlockThreshold.BLOCK_NONE,
-            },
-            {
-                "category": genai.types.HarmCategory.HARM_CATEGORY_DEROGATORY,
-                "threshold": genai.types.HarmBlockThreshold.BLOCK_NONE,
-            },
-            {
-                "category": genai.types.HarmCategory.HARM_CATEGORY_VIOLENCE,
-                "threshold": genai.types.HarmBlockThreshold.BLOCK_NONE,
-            },
-            {
-                "category": genai.types.HarmCategory.HARM_CATEGORY_SEXUAL,
-                "threshold": genai.types.HarmBlockThreshold.BLOCK_NONE,
-            },
-            {
-                "category": genai.types.HarmCategory.HARM_CATEGORY_MEDICAL,
-                "threshold": genai.types.HarmBlockThreshold.BLOCK_NONE,
-            },
-            {
-                "category": genai.types.HarmCategory.HARM_CATEGORY_DANGEROUS,
-                "threshold": genai.types.HarmBlockThreshold.BLOCK_NONE,
-            },
-        ]
+        # Safety settings: allow all content (compatible with google-generativeai >= 0.4)
+        try:
+            self.safety_settings = {
+                "HARM_CATEGORY_HARASSMENT": "BLOCK_NONE",
+                "HARM_CATEGORY_HATE_SPEECH": "BLOCK_NONE",
+                "HARM_CATEGORY_SEXUALLY_EXPLICIT": "BLOCK_NONE",
+                "HARM_CATEGORY_DANGEROUS_CONTENT": "BLOCK_NONE",
+            }
+        except Exception:
+            # Fallback: no safety override
+            self.safety_settings = None
 
     def _convert_tools_to_gemini(self, tools: List[Dict[str, Any]]) -> List[genai.types.Tool]:
         """Convert tool definitions to Gemini FunctionDeclaration format.

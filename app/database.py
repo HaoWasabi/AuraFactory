@@ -1,4 +1,5 @@
 import asyncpg
+import ssl
 import os
 from typing import Any, List, Optional
 from contextlib import asynccontextmanager
@@ -15,10 +16,21 @@ class Database:
     
     async def connect(self) -> None:
         """Create connection pool."""
+        # Render free-tier PostgreSQL allows ~5 connections
+        # Use SSL if DATABASE_URL contains render.com (external requires SSL)
+        kwargs = {}
+        db_url = config.DATABASE_URL
+        if 'render.com' in db_url or 'onrender.com' in db_url:
+            ssl_ctx = ssl.create_default_context()
+            ssl_ctx.check_hostname = False
+            ssl_ctx.verify_mode = ssl.CERT_NONE
+            kwargs['ssl'] = ssl_ctx
+        
         self.pool = await asyncpg.create_pool(
-            config.DATABASE_URL,
-            min_size=10,
-            max_size=20,
+            db_url,
+            min_size=2,
+            max_size=5,
+            **kwargs,
         )
     
     async def disconnect(self) -> None:

@@ -60,8 +60,8 @@ async def lifespan(app: FastAPI):
         )
         logger.info("✅ LLM provider: %s (%s)", settings.LLM_PROVIDER, settings.GEMINI_MODEL)
     except Exception as e:
-        logger.warning("⚠️ LLM unavailable: %s", e)
-        logger.warning("   Set GEMINI_API_KEY in .env to enable AI features.")
+        logger.error("❌ LLM initialization FAILED: %s", e, exc_info=True)
+        logger.error("   AI features (classify, plan, query) will NOT work.")
 
     # === L4: MCP ===
     from app.mcp import MCPClient
