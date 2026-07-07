@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
-  <title>AURA SCHEDULING</title>
+  <title>AuraFactory — Scheduler</title>
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
   <script src="https://unpkg.com/react@18/umd/react.development.js"></script>
   <script src="https://unpkg.com/react-dom@18/umd/react-dom.development.js"></script>
@@ -77,14 +77,10 @@
       transition: background 0.3s, color 0.3s;
     }
     #root { width: 100%; height: 100vh; display: flex; position: relative; }
-
-    /* ===== SCROLLBAR ===== */
     ::-webkit-scrollbar { width: 6px; height: 6px; }
     ::-webkit-scrollbar-track { background: transparent; }
     ::-webkit-scrollbar-thumb { background: var(--border-light); border-radius: 10px; }
     ::-webkit-scrollbar-thumb:hover { background: var(--accent); }
-
-    /* ===== SIDEBAR ===== */
     .sidebar-overlay { display: none; position: fixed; inset: 0; background: rgba(0,0,0,0.6); z-index: 20; backdrop-filter: blur(2px); }
     @media (max-width: 768px) { .sidebar-overlay.active { display: block; } }
     .sidebar {
@@ -122,7 +118,7 @@
       padding: 10px 14px; border-radius: var(--radius-md);
       cursor: pointer; transition: all 0.18s;
       color: var(--text-secondary); font-weight: 500; font-size: 14px;
-      position: relative;
+      position: relative; text-decoration: none;
     }
     .nav-item:hover { background: var(--bg-hover); color: var(--text-primary); }
     .nav-item.active {
@@ -147,10 +143,7 @@
       padding: 2px 8px; border-radius: 20px;
       min-width: 22px; text-align: center;
     }
-    .sidebar-stats {
-      padding: 12px 16px;
-      display: flex; flex-direction: column; gap: 8px;
-    }
+    .sidebar-stats { padding: 12px 16px; display: flex; flex-direction: column; gap: 8px; }
     .sidebar-stat-item {
       display: flex; align-items: center; justify-content: space-between;
       padding: 10px 12px;
@@ -166,11 +159,9 @@
       padding: 9px 12px; border-radius: var(--radius-sm);
       cursor: pointer; color: var(--text-secondary);
       font-size: 13px; font-weight: 500;
-      transition: background 0.15s;
+      transition: background 0.15s; text-decoration: none;
     }
     .sidebar-footer-item:hover { background: var(--bg-hover); color: var(--text-primary); }
-
-    /* ===== MAIN ===== */
     .main-content { flex: 1; display: flex; flex-direction: column; min-width: 0; background: var(--bg-primary); height: 100%; overflow: hidden; }
     .header {
       height: var(--header-height);
@@ -185,20 +176,14 @@
     .header-title { font-weight: 700; font-size: 17px; display: flex; align-items: center; gap: 8px; }
     .header-subtitle { font-size: 12px; color: var(--text-secondary); font-weight: 400; }
     .header-actions { display: flex; align-items: center; gap: 10px; }
-
-    /* ===== BUTTONS ===== */
     .btn {
       padding: 8px 16px; border-radius: var(--radius-sm);
       font-weight: 600; font-size: 13px; cursor: pointer; border: none;
       transition: all 0.18s; font-family: var(--font);
       display: inline-flex; align-items: center; gap: 6px;
-      white-space: nowrap;
+      white-space: nowrap; text-decoration: none;
     }
-    .btn-primary {
-      background: var(--gradient-accent);
-      color: white;
-      box-shadow: 0 2px 12px var(--accent-glow-strong);
-    }
+    .btn-primary { background: var(--gradient-accent); color: white; box-shadow: 0 2px 12px var(--accent-glow-strong); }
     .btn-primary:hover { opacity: 0.9; transform: translateY(-1px); box-shadow: 0 4px 20px var(--accent-glow-strong); }
     .btn-outline { background: transparent; border: 1px solid var(--border-light); color: var(--text-primary); }
     .btn-outline:hover { background: var(--bg-hover); border-color: var(--accent); }
@@ -218,8 +203,6 @@
     }
     .btn-icon:hover { background: var(--bg-hover); color: var(--text-primary); border-color: var(--accent); }
     .btn-icon.danger:hover { background: var(--danger-glow); color: var(--danger); border-color: var(--danger); }
-
-    /* ===== STATS CARDS ===== */
     .stats-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 16px; }
     @media (max-width: 1024px) { .stats-grid { grid-template-columns: repeat(2, 1fr); } }
     @media (max-width: 480px) { .stats-grid { grid-template-columns: repeat(2, 1fr); gap: 10px; } }
@@ -232,21 +215,14 @@
       transition: all 0.2s;
       position: relative; overflow: hidden;
     }
-    .stat-card::before {
-      content: ''; position: absolute;
-      top: 0; left: 0; right: 0; height: 3px;
-    }
+    .stat-card::before { content: ''; position: absolute; top: 0; left: 0; right: 0; height: 3px; }
     .stat-card.accent::before { background: var(--gradient-accent); }
     .stat-card.success::before { background: var(--gradient-success); }
     .stat-card.danger::before { background: var(--gradient-danger); }
     .stat-card.warning::before { background: var(--gradient-warning); }
     .stat-card:hover { transform: translateY(-2px); box-shadow: var(--shadow); border-color: var(--border-light); }
     .stat-card-header { display: flex; align-items: center; justify-content: space-between; }
-    .stat-card-icon {
-      width: 40px; height: 40px; border-radius: var(--radius-md);
-      display: flex; align-items: center; justify-content: center;
-      font-size: 18px;
-    }
+    .stat-card-icon { width: 40px; height: 40px; border-radius: var(--radius-md); display: flex; align-items: center; justify-content: center; font-size: 18px; }
     .stat-card-icon.accent { background: var(--accent-glow); color: var(--accent); }
     .stat-card-icon.success { background: var(--success-glow); color: var(--success); }
     .stat-card-icon.danger { background: var(--danger-glow); color: var(--danger); }
@@ -254,17 +230,9 @@
     .stat-card-value { font-size: 30px; font-weight: 800; line-height: 1; }
     .stat-card-label { font-size: 12px; color: var(--text-secondary); font-weight: 500; }
     .stat-card-trend { font-size: 11px; color: var(--text-muted); margin-top: -4px; }
-    /* ===== SEARCH & FILTER BAR ===== */
-    .toolbar {
-      display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
-    }
-    .search-box {
-      position: relative; flex: 1; min-width: 200px;
-    }
-    .search-icon {
-      position: absolute; left: 12px; top: 50%; transform: translateY(-50%);
-      color: var(--text-muted); font-size: 15px; pointer-events: none;
-    }
+    .toolbar { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+    .search-box { position: relative; flex: 1; min-width: 200px; }
+    .search-icon { position: absolute; left: 12px; top: 50%; transform: translateY(-50%); color: var(--text-muted); font-size: 15px; pointer-events: none; }
     .search-input {
       width: 100%; background: var(--bg-card);
       border: 1px solid var(--border); border-radius: var(--radius-md);
@@ -279,21 +247,15 @@
       padding: 6px 14px; border-radius: 20px;
       font-size: 12px; font-weight: 600; cursor: pointer;
       border: 1px solid var(--border); color: var(--text-secondary);
-      background: var(--bg-card); transition: all 0.15s;
-      white-space: nowrap;
+      background: var(--bg-card); transition: all 0.15s; white-space: nowrap;
     }
     .filter-chip:hover { border-color: var(--accent); color: var(--accent); }
     .filter-chip.active { background: var(--accent-glow); border-color: var(--accent); color: var(--accent); }
-    .filter-chip.all.active { background: var(--accent-glow); border-color: var(--accent); color: var(--accent); }
     .filter-chip.sent.active { background: var(--success-glow); border-color: var(--success); color: var(--success); }
     .filter-chip.failed.active { background: var(--danger-glow); border-color: var(--danger); color: var(--danger); }
     .filter-chip.pending.active { background: var(--warning-glow); border-color: var(--warning); color: var(--warning); }
-
-    /* ===== CONTENT ===== */
     .content-area { flex: 1; overflow-y: auto; padding: 20px 24px; display: flex; flex-direction: column; gap: 20px; }
     @media (max-width: 600px) { .content-area { padding: 14px 14px; } }
-
-    /* ===== SCHEDULE LIST ===== */
     .schedule-list { display: flex; flex-direction: column; gap: 10px; }
     .schedule-item {
       display: flex; align-items: center; gap: 14px;
@@ -314,11 +276,7 @@
     .schedule-item.past { opacity: 0.45; }
     .schedule-item.sent::after { background: var(--success); opacity: 1; }
     .schedule-item.failed-item::after { background: var(--danger); opacity: 1; }
-    .schedule-icon {
-      width: 42px; height: 42px; border-radius: var(--radius-md);
-      display: flex; align-items: center; justify-content: center;
-      font-size: 18px; flex-shrink: 0;
-    }
+    .schedule-icon { width: 42px; height: 42px; border-radius: var(--radius-md); display: flex; align-items: center; justify-content: center; font-size: 18px; flex-shrink: 0; }
     .schedule-icon.upcoming { background: var(--accent-glow); color: var(--accent); }
     .schedule-icon.sent { background: var(--success-glow); color: var(--success); }
     .schedule-icon.failed { background: var(--danger-glow); color: var(--danger); }
@@ -329,8 +287,6 @@
     .schedule-meta span { display: flex; align-items: center; gap: 3px; }
     .schedule-right { display: flex; flex-direction: column; align-items: flex-end; gap: 8px; flex-shrink: 0; }
     .schedule-actions { display: flex; gap: 5px; }
-
-    /* ===== PROGRESS COUNTDOWN ===== */
     .countdown-wrap { display: flex; flex-direction: column; align-items: flex-end; gap: 3px; }
     .countdown-text { font-size: 12px; font-weight: 700; color: var(--accent); white-space: nowrap; }
     .countdown-text.urgent { color: var(--warning); }
@@ -339,15 +295,12 @@
     .progress-bar-fill { height: 100%; border-radius: 2px; transition: width 1s linear; background: var(--gradient-accent); }
     .progress-bar-fill.urgent { background: var(--gradient-warning); }
     .progress-bar-fill.very-urgent { background: var(--gradient-danger); }
-
-    /* ===== BADGES ===== */
     .badge { padding: 3px 10px; border-radius: 20px; font-size: 11px; font-weight: 700; white-space: nowrap; letter-spacing: 0.2px; }
     .badge-pending { background: var(--warning-glow); color: var(--warning); }
     .badge-sent { background: var(--success-glow); color: var(--success); }
     .badge-failed { background: var(--danger-glow); color: var(--danger); }
     .badge-upcoming { background: var(--info-glow); color: var(--info); }
     .badge-scheduled { background: var(--accent-glow); color: var(--accent); }
-    /* ===== FORM / MODAL ===== */
     .modal-backdrop {
       position: fixed; inset: 0;
       background: rgba(0,0,0,0.72);
@@ -371,11 +324,7 @@
     }
     @keyframes slideUp { from { opacity: 0; transform: translate(-50%,-42%); } to { opacity: 1; transform: translate(-50%,-50%); } }
     .modal-header { display: flex; align-items: center; gap: 12px; margin-bottom: 24px; }
-    .modal-header-icon {
-      width: 40px; height: 40px; border-radius: var(--radius-md);
-      background: var(--accent-glow); color: var(--accent);
-      display: flex; align-items: center; justify-content: center; font-size: 18px; flex-shrink: 0;
-    }
+    .modal-header-icon { width: 40px; height: 40px; border-radius: var(--radius-md); background: var(--accent-glow); color: var(--accent); display: flex; align-items: center; justify-content: center; font-size: 18px; flex-shrink: 0; }
     .modal-title { font-size: 18px; font-weight: 700; }
     .modal-sub { font-size: 12px; color: var(--text-secondary); }
     .form-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
@@ -393,10 +342,7 @@
       transition: border-color 0.2s, box-shadow 0.2s; outline: none;
       width: 100%;
     }
-    .form-input:focus, .form-textarea:focus, .form-select:focus {
-      border-color: var(--accent);
-      box-shadow: 0 0 0 3px var(--accent-glow);
-    }
+    .form-input:focus, .form-textarea:focus, .form-select:focus { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-glow); }
     .form-input.error, .form-textarea.error { border-color: var(--danger); box-shadow: 0 0 0 3px var(--danger-glow); }
     .form-input::placeholder, .form-textarea::placeholder { color: var(--text-muted); }
     .form-textarea { resize: vertical; min-height: 76px; }
@@ -415,8 +361,6 @@
     .checkbox-label input { display: none; }
     .modal-divider { border: none; border-top: 1px solid var(--border); margin: 4px 0; }
     .modal-actions { display: flex; gap: 10px; justify-content: flex-end; margin-top: 20px; }
-
-    /* ===== CONFIRM DIALOG ===== */
     .confirm-dialog {
       position: fixed; top: 50%; left: 50%;
       transform: translate(-50%, -50%);
@@ -431,8 +375,6 @@
     .confirm-msg { font-size: 13px; color: var(--text-secondary); text-align: center; line-height: 1.6; margin-bottom: 18px; }
     .confirm-actions { display: flex; gap: 10px; }
     .confirm-actions .btn { flex: 1; justify-content: center; }
-
-    /* ===== TOAST ===== */
     .toast-container { position: fixed; top: 18px; right: 18px; z-index: 300; display: flex; flex-direction: column; gap: 8px; pointer-events: none; }
     .toast {
       background: var(--bg-card);
@@ -453,19 +395,13 @@
     .toast.warning { border-left: 4px solid var(--warning); }
     .toast-close { margin-left: auto; background: none; border: none; color: var(--text-muted); cursor: pointer; font-size: 16px; padding: 2px; border-radius: 4px; }
     .toast-close:hover { color: var(--text-primary); background: var(--bg-hover); }
-
-    /* ===== EMPTY STATE ===== */
     .empty-state { text-align: center; padding: 50px 20px; color: var(--text-secondary); }
     .empty-state .empty-icon { font-size: 52px; margin-bottom: 14px; opacity: 0.6; }
     .empty-state h3 { font-size: 16px; font-weight: 600; margin-bottom: 6px; color: var(--text-primary); }
     .empty-state p { font-size: 13px; line-height: 1.6; }
-
-    /* ===== SKELETON ===== */
     .skeleton { background: linear-gradient(90deg, var(--bg-input) 25%, var(--bg-hover) 50%, var(--bg-input) 75%); background-size: 200% 100%; animation: shimmer 1.4s infinite; border-radius: 6px; }
     @keyframes shimmer { 0% { background-position: 200% 0; } 100% { background-position: -200% 0; } }
     .skeleton-item { height: 76px; border-radius: var(--radius-lg); margin-bottom: 10px; }
-
-    /* ===== CALENDAR ===== */
     .calendar-container { background: var(--bg-card); border: 1px solid var(--border); border-radius: var(--radius-lg); padding: 20px; box-shadow: var(--shadow-sm); }
     .calendar-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 16px; }
     .calendar-month { font-weight: 700; font-size: 16px; }
@@ -484,12 +420,7 @@
     .calendar-cell.selected { border-color: var(--accent); box-shadow: 0 0 0 2px var(--accent-glow-strong); }
     .calendar-date { font-weight: 700; font-size: 13px; margin-bottom: 3px; color: var(--text-primary); }
     .calendar-cell.today .calendar-date { color: var(--accent); }
-    .calendar-event-pill {
-      font-size: 10px; font-weight: 600;
-      white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
-      padding: 1px 5px; border-radius: 4px; margin-top: 2px;
-      text-align: left;
-    }
+    .calendar-event-pill { font-size: 10px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; padding: 1px 5px; border-radius: 4px; margin-top: 2px; text-align: left; }
     .calendar-event-pill.upcoming { background: var(--accent-glow); color: var(--accent); }
     .calendar-event-pill.sent { background: var(--success-glow); color: var(--success); }
     .calendar-event-pill.failed { background: var(--danger-glow); color: var(--danger); }
@@ -497,11 +428,7 @@
     .calendar-more { font-size: 10px; color: var(--text-muted); font-weight: 600; text-align: center; margin-top: 2px; }
     .day-detail-panel { background: var(--bg-card); border: 1px solid var(--border); border-radius: var(--radius-lg); padding: 18px; margin-top: 14px; }
     .day-detail-header { font-weight: 700; font-size: 15px; margin-bottom: 14px; display: flex; justify-content: space-between; align-items: center; }
-
-    /* ===== ERROR BOUNDARY ===== */
     .error-boundary { display: flex; flex-direction: column; align-items: center; justify-content: center; height: 100%; color: var(--danger); gap: 14px; padding: 20px; text-align: center; }
-
-    /* ===== DIVIDER ===== */
     .divider { height: 1px; background: var(--border); border: none; }
     .section-header { display: flex; align-items: center; justify-content: space-between; }
     .section-title { font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.8px; color: var(--text-muted); }
@@ -511,7 +438,6 @@
 <body>
   <div id="root"></div>
   <script>
-   {% raw %}
     const API_URL = "";
     const html = htm.bind(React.createElement);
 
@@ -545,7 +471,7 @@
       if (!iso) return '—';
       try {
         const d = new Date(iso);
-        return d.toLocaleDateString('vi-VN', { weekday:'short', day:'2-digit', month:'2-digit', year:'numeric' });
+        return d.toLocaleDateString('vi-VN', { day:'2-digit', month:'2-digit', year:'numeric' });
       } catch { return '—'; }
     }
     function getTimeRemaining(iso) {
@@ -558,11 +484,10 @@
         const veryUrgent = h < 1;
         const urgent = h < 6;
         let text;
-        if (h >= 24) { const d = Math.floor(h/24); text = `${d}d ${h%24}h`; }
-        else if (h > 0) text = `${h}h ${m}m`;
-        else if (m > 0) text = `${m}m ${s}s`;
+        if (h >= 24) { const d = Math.floor(h/24); text = d + 'd ' + (h%24) + 'h'; }
+        else if (h > 0) text = h + 'h ' + m + 'm';
+        else if (m > 0) text = m + 'm ' + s + 's';
         else text = 'Sắp diễn ra';
-        // pct: % of a 7-day window consumed
         const maxMs = 7 * 24 * 3600000;
         const pct = Math.max(0, Math.min(100, 100 - (diff / maxMs * 100)));
         return { text, negative: false, urgent, veryUrgent, pct };
@@ -604,7 +529,7 @@
       return html`
         <div className="toast-container">
           ${toasts.map(t => html`
-            <div key=${t.id} className=${`toast ${t.type}`}>
+            <div key=${t.id} className=${'toast ' + t.type}>
               <span>${icons[t.type] || 'ℹ️'}</span>
               <span style=${{ flex: 1 }}>${t.message}</span>
               <button className="toast-close" onClick=${() => removeToast(t.id)}>✕</button>
@@ -612,7 +537,7 @@
         </div>`;
     };
 
-    // ===== SKELETON LOADING =====
+    // ===== SKELETON =====
     const SkeletonList = () => html`
       <div>
         ${[1,2,3].map(i => html`<div key=${i} className="skeleton skeleton-item"></div>`)}
@@ -694,7 +619,7 @@
           if (defaultDate) {
             const d = new Date(defaultDate);
             const y = d.getFullYear(), mo = String(d.getMonth()+1).padStart(2,'0'), da = String(d.getDate()).padStart(2,'0'), h = String(d.getHours()).padStart(2,'0'), mi = String(d.getMinutes()).padStart(2,'0');
-            dt = `${y}-${mo}-${da}T${h}:${mi}`;
+            dt = y + '-' + mo + '-' + da + 'T' + h + ':' + mi;
           }
           setForm({ title:'', description:'', notes:'', scheduled_time: dt, email_to:'', notify_before:[1,12,24] });
         }
@@ -731,14 +656,14 @@
             <div className="modal-header-icon">${editData ? '✏️' : '📅'}</div>
             <div>
               <div className="modal-title">${editData ? 'Chỉnh sửa lịch' : 'Tạo lịch nhắc hẹn mới'}</div>
-              <div className="modal-sub">${editData ? `ID: ${editData.id}` : 'Điền thông tin và chọn mốc nhắc'}</div>
+              <div className="modal-sub">${editData ? 'ID: ' + editData.id : 'Điền thông tin và chọn mốc nhắc'}</div>
             </div>
           </div>
           <form onSubmit=${handleSubmit}>
             <div className="form-grid">
               <div className="form-group full-width">
                 <label className="form-label">Tiêu đề <span className="req">*</span></label>
-                <input className=${`form-input ${errors.title ? 'error' : ''}`} type="text" placeholder="VD: Họp dự án Aura Factory..." value=${form.title} onChange=${e => set('title', e.target.value)} />
+                <input className=${'form-input ' + (errors.title ? 'error' : '')} type="text" placeholder="VD: Họp dự án Aura Factory..." value=${form.title} onChange=${e => set('title', e.target.value)} />
                 ${errors.title && html`<span className="form-error">⚠ ${errors.title}</span>`}
               </div>
               <div className="form-group full-width">
@@ -747,12 +672,12 @@
               </div>
               <div className="form-group">
                 <label className="form-label">Thời gian <span className="req">*</span></label>
-                <input className=${`form-input ${errors.scheduled_time ? 'error' : ''}`} type="datetime-local" value=${form.scheduled_time} onChange=${e => set('scheduled_time', e.target.value)} />
+                <input className=${'form-input ' + (errors.scheduled_time ? 'error' : '')} type="datetime-local" value=${form.scheduled_time} onChange=${e => set('scheduled_time', e.target.value)} />
                 ${errors.scheduled_time && html`<span className="form-error">⚠ ${errors.scheduled_time}</span>`}
               </div>
               <div className="form-group">
                 <label className="form-label">Email nhận <span className="req">*</span></label>
-                <input className=${`form-input ${errors.email_to ? 'error' : ''}`} type="email" placeholder="your@email.com" value=${form.email_to} onChange=${e => set('email_to', e.target.value)} />
+                <input className=${'form-input ' + (errors.email_to ? 'error' : '')} type="email" placeholder="your@email.com" value=${form.email_to} onChange=${e => set('email_to', e.target.value)} />
                 ${errors.email_to && html`<span className="form-error">⚠ ${errors.email_to}</span>`}
               </div>
               <div className="form-group full-width">
@@ -763,7 +688,7 @@
                 <label className="form-label">Nhắc trước <span className="req">*</span></label>
                 <div className="checkbox-group">
                   ${notifyOptions.map(o => html`
-                    <label key=${o.hour} className=${`checkbox-label ${form.notify_before.includes(o.hour) ? 'checked' : ''}`} onClick=${e => { e.preventDefault(); toggleNotify(o.hour); }}>
+                    <label key=${o.hour} className=${'checkbox-label ' + (form.notify_before.includes(o.hour) ? 'checked' : '')} onClick=${e => { e.preventDefault(); toggleNotify(o.hour); }}>
                       <input type="checkbox" readOnly checked=${form.notify_before.includes(o.hour)} />
                       ⏰ ${o.label}
                     </label>`)}
@@ -779,348 +704,3 @@
           </form>
         </div>`;
     };
-
-    // ===== SCHEDULE ITEM =====
-    const ScheduleItem = ({ schedule, onEdit, onDelete, onTestNotify }) => {
-      const status = getStatus(schedule);
-      const isPast = new Date(schedule.scheduled_time) < Date.now();
-      const remaining = getTimeRemaining(schedule.scheduled_time);
-      const iconCls = schedule.notification_sent ? 'sent' : schedule.notification_failed ? 'failed' : 'upcoming';
-      const icon = schedule.notification_sent ? '✅' : schedule.notification_failed ? '⚠️' : '🔔';
-      let itemCls = 'schedule-item';
-      if (isPast) itemCls += ' past';
-      if (schedule.notification_sent) itemCls += ' sent';
-      if (schedule.notification_failed) itemCls += ' failed-item';
-
-      return html`
-        <div className=${itemCls} onClick=${() => onEdit(schedule)}>
-          <div className=${`schedule-icon ${iconCls}`}>${icon}</div>
-          <div className="schedule-info">
-            <div className="schedule-title">${schedule.title}</div>
-            ${schedule.description && html`<div className="schedule-desc">${schedule.description}</div>`}
-            ${schedule.notes && html`<div className="schedule-desc" style=${{ fontStyle:'italic', color:'var(--text-muted)' }}>📝 ${schedule.notes}</div>`}
-            <div className="schedule-meta">
-              <span>🕐 ${formatDateTime(schedule.scheduled_time)}</span>
-              <span>📧 ${schedule.email_to}</span>
-              <span>🔔 ${Array.isArray(schedule.notify_before) ? schedule.notify_before.map(h => h+'h').join(', ') : '—'}</span>
-            </div>
-          </div>
-          <div className="schedule-right">
-            <span className=${`badge ${status.cls}`}>${status.label}</span>
-            ${!isPast && !schedule.notification_sent && html`
-              <div className="countdown-wrap">
-                <span className=${`countdown-text ${remaining.veryUrgent ? 'very-urgent' : remaining.urgent ? 'urgent' : ''}`}>${remaining.text}</span>
-                <div className="progress-bar-wrap">
-                  <div className=${`progress-bar-fill ${remaining.veryUrgent ? 'very-urgent' : remaining.urgent ? 'urgent' : ''}`} style=${{ width: remaining.pct + '%' }}></div>
-                </div>
-              </div>`}
-            <div className="schedule-actions">
-              <button className="btn-icon" title="Gửi test email" onClick=${e => { e.stopPropagation(); onTestNotify(schedule); }}>📧</button>
-              <button className="btn-icon" title="Chỉnh sửa" onClick=${e => { e.stopPropagation(); onEdit(schedule); }}>✏️</button>
-              <button className="btn-icon danger" title="Xóa" onClick=${e => { e.stopPropagation(); onDelete(schedule.id); }}>🗑️</button>
-            </div>
-          </div>
-        </div>`;
-    };
-
-    // ===== CALENDAR VIEW =====
-    const CalendarView = ({ schedules, onEdit, onDelete, onTestNotify, onCreateAtDate }) => {
-      const today = new Date();
-      const [month, setMonth] = React.useState(today.getMonth());
-      const [year, setYear] = React.useState(today.getFullYear());
-      const [selectedDay, setSelectedDay] = React.useState(null);
-      const daysInMonth = new Date(year, month+1, 0).getDate();
-      const firstDay = new Date(year, month, 1).getDay();
-      const MONTHS = ['Tháng 1','Tháng 2','Tháng 3','Tháng 4','Tháng 5','Tháng 6','Tháng 7','Tháng 8','Tháng 9','Tháng 10','Tháng 11','Tháng 12'];
-      const DAYS = ['CN','T2','T3','T4','T5','T6','T7'];
-      const prevM = () => { if (month===0){setMonth(11);setYear(y=>y-1);}else setMonth(m=>m-1); setSelectedDay(null); };
-      const nextM = () => { if (month===11){setMonth(0);setYear(y=>y+1);}else setMonth(m=>m+1); setSelectedDay(null); };
-      const goToday = () => { setMonth(today.getMonth()); setYear(today.getFullYear()); setSelectedDay(null); };
-      const eventsFor = (y,m,d) => schedules.filter(s => { const dt = new Date(s.scheduled_time); return dt.getFullYear()===y&&dt.getMonth()===m&&dt.getDate()===d; });
-
-      const cells = [];
-      for (let i = 0; i < 42; i++) {
-        const dn = i - firstDay + 1;
-        const isCurr = dn >= 1 && dn <= daysInMonth;
-        const isToday = isCurr && new Date(year,month,dn).toDateString()===today.toDateString();
-        const isSel = selectedDay && isCurr && selectedDay.y===year && selectedDay.m===month && selectedDay.d===dn;
-        const events = isCurr ? eventsFor(year,month,dn) : [];
-        let cls = 'calendar-cell';
-        if (!isCurr) cls += ' other-month';
-        if (isToday) cls += ' today';
-        if (isSel) cls += ' selected';
-        if (events.length) cls += ' has-events';
-        cells.push(html`
-          <div key=${i} className=${cls} onClick=${() => isCurr && setSelectedDay({y:year,m:month,d:dn})}>
-            <div className="calendar-date">${isCurr ? dn : ''}</div>
-            ${events.slice(0,2).map((ev,idx) => {
-              const st = getStatus(ev);
-              const pillCls = ev.notification_sent ? 'sent' : ev.notification_failed ? 'failed' : new Date(ev.scheduled_time)<Date.now() ? 'past' : 'upcoming';
-              return html`<div key=${idx} className=${`calendar-event-pill ${pillCls}`}>${ev.title}</div>`;
-            })}
-            ${events.length > 2 && html`<div className="calendar-more">+${events.length-2}</div>`}
-          </div>`);
-      }
-      const selEvents = selectedDay ? eventsFor(selectedDay.y, selectedDay.m, selectedDay.d) : [];
-      return html`
-        <div>
-          <div className="calendar-container">
-            <div className="calendar-header">
-              <div className="calendar-month">${MONTHS[month]} ${year}</div>
-              <div style=${{ display:'flex', gap:8, alignItems:'center' }}>
-                <button className="calendar-today-btn" onClick=${goToday}>Hôm nay</button>
-                <div className="calendar-nav-group">
-                  <button className="calendar-nav" onClick=${prevM}>‹</button>
-                  <button className="calendar-nav" onClick=${nextM}>›</button>
-                </div>
-              </div>
-            </div>
-            <div className="calendar-grid">
-              ${DAYS.map(d => html`<div key=${d} className="calendar-day-name">${d}</div>`)}
-              ${cells}
-            </div>
-          </div>
-          ${selectedDay && html`
-            <div className="day-detail-panel">
-              <div className="day-detail-header">
-                <span>📅 ${selectedDay.d}/${selectedDay.m+1}/${selectedDay.y}</span>
-                <button className="btn btn-primary btn-sm" onClick=${() => { const d=new Date(selectedDay.y,selectedDay.m,selectedDay.d,new Date().getHours(),new Date().getMinutes()); onCreateAtDate(d.toISOString()); }}>＋ Tạo lịch</button>
-              </div>
-              ${selEvents.length ? html`
-                <div className="schedule-list">
-                  ${selEvents.map(s => html`<${ScheduleItem} key=${s.id} schedule=${s} onEdit=${onEdit} onDelete=${onDelete} onTestNotify=${onTestNotify} />`)}
-                </div>` : html`
-                <div style=${{ color:'var(--text-muted)', textAlign:'center', padding:'16px', fontSize:13 }}>Không có lịch nào trong ngày này.</div>`}
-            </div>`}
-        </div>`;
-    };
-
-    // ===== MAIN APP =====
-    function App() {
-      const [theme, setTheme] = React.useState(() => localStorage.getItem('aura-theme') || 'dark');
-      const [sidebarOpen, setSidebarOpen] = React.useState(false);
-      const [schedules, setSchedules] = React.useState([]);
-      const [loading, setLoading] = React.useState(true);
-      const [modalOpen, setModalOpen] = React.useState(false);
-      const [editingSchedule, setEditingSchedule] = React.useState(null);
-      const [toasts, setToasts] = React.useState([]);
-      const [viewMode, setViewMode] = React.useState('list');
-      const [defaultDate, setDefaultDate] = React.useState(null);
-      const [search, setSearch] = React.useState('');
-      const [filterStatus, setFilterStatus] = React.useState('all');
-      const [confirmState, setConfirmState] = React.useState({ open: false, id: null });
-      const toastRef = React.useRef(0);
-
-      const addToast = (message, type='info') => {
-        const id = ++toastRef.current;
-        setToasts(p => [...p, { id, message, type }]);
-        setTimeout(() => setToasts(p => p.filter(t => t.id !== id)), 4500);
-      };
-      const removeToast = (id) => setToasts(p => p.filter(t => t.id !== id));
-
-      const MOCK = [
-        { id:'m1', title:'Họp sprint lần 5', description:'Review tiến độ và lên kế hoạch sprint mới', scheduled_time: new Date(Date.now()+2*3600000).toISOString(), email_to:'dev@aura.com', notify_before:[1], notification_sent:false, notification_failed:false, notes:'' },
-        { id:'m2', title:'Workshop AI & Automation', description:'Buổi training về Generative AI cho team', scheduled_time: new Date(Date.now()+14*3600000).toISOString(), email_to:'team@aura.com', notify_before:[1,12], notification_sent:false, notification_failed:false, notes:'Chuẩn bị slides trước 1 tiếng' },
-        { id:'m3', title:'Demo sản phẩm khách hàng', description:'Trình bày prototype v2 cho đối tác chiến lược', scheduled_time: new Date(Date.now()+26*3600000).toISOString(), email_to:'client@example.com', notify_before:[1,12,24], notification_sent:false, notification_failed:false, notes:'' },
-        { id:'m4', title:'Review code PR #42', description:'Kiểm tra và merge pull request tính năng scheduler', scheduled_time: new Date(Date.now()-3*3600000).toISOString(), email_to:'dev@aura.com', notify_before:[1], notification_sent:true, notification_failed:false, notes:'' },
-      ];
-
-      const fetchSchedules = React.useCallback(() => {
-        setLoading(true);
-        fetch(API_URL + '/api/schedules')
-          .then(r => r.json().catch(() => ({})))
-          .then(data => {
-            const list = Array.isArray(data?.schedules) ? data.schedules : Array.isArray(data) ? data : [];
-            setSchedules(list.length ? list : MOCK);
-            setLoading(false);
-          })
-          .catch(() => {
-            addToast('⚠️ Backend chưa kết nối – hiển thị dữ liệu mẫu.', 'warning');
-            setSchedules(MOCK); setLoading(false);
-          });
-      }, []);
-
-      React.useEffect(() => {
-        document.body.className = theme === 'light' ? 'light-theme' : '';
-        localStorage.setItem('aura-theme', theme);
-      }, [theme]);
-
-      React.useEffect(() => { fetchSchedules(); const iv = setInterval(fetchSchedules, 30000); return () => clearInterval(iv); }, [fetchSchedules]);
-
-      // Live countdown tick
-      const [tick, setTick] = React.useState(0);
-      React.useEffect(() => { const iv = setInterval(() => setTick(t => t+1), 30000); return () => clearInterval(iv); }, []);
-
-      const handleCreate = (payload) => {
-        fetch(API_URL+'/api/schedules', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(payload) })
-          .then(r => r.json().catch(()=>({})))
-          .then(() => { addToast('✅ Lịch đã được tạo!', 'success'); setModalOpen(false); setDefaultDate(null); fetchSchedules(); })
-          .catch(() => { setSchedules(p => [{ id:'local-'+Date.now(), ...payload, notification_sent:false, notification_failed:false, created_at:new Date().toISOString() }, ...p]); setModalOpen(false); setDefaultDate(null); addToast('✅ Đã tạo (local)', 'info'); });
-      };
-      const handleUpdate = (payload) => {
-        const id = editingSchedule.id;
-        fetch(API_URL+'/api/schedules/'+id, { method:'PUT', headers:{'Content-Type':'application/json'}, body: JSON.stringify(payload) })
-          .then(r => r.json().catch(()=>({})))
-          .then(() => { addToast('✅ Lịch đã cập nhật!', 'success'); setModalOpen(false); setEditingSchedule(null); fetchSchedules(); })
-          .catch(() => { setSchedules(p => p.map(s => s.id===id ? {...s,...payload} : s)); setModalOpen(false); setEditingSchedule(null); addToast('✅ Cập nhật local.', 'info'); });
-      };
-      const handleDelete = (id) => { setConfirmState({ open: true, id }); };
-      const doDelete = () => {
-        const id = confirmState.id;
-        setConfirmState({ open: false, id: null });
-        fetch(API_URL+'/api/schedules/'+id, { method:'DELETE' })
-          .then(() => { addToast('🗑️ Đã xóa lịch.', 'info'); fetchSchedules(); })
-          .catch(() => { setSchedules(p => p.filter(s => s.id !== id)); addToast('🗑️ Đã xóa.', 'info'); });
-      };
-      const handleTestNotify = (s) => {
-        fetch(API_URL+'/api/schedules/'+s.id+'/test-notify', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ email_to: s.email_to }) })
-          .then(() => addToast('📧 Email test đã gửi tới '+s.email_to, 'success'))
-          .catch(() => addToast('❌ Gửi test thất bại.', 'error'));
-      };
-      const openCreate = (date=null) => { setEditingSchedule(null); setDefaultDate(date); setModalOpen(true); };
-      const openEdit = (s) => { setEditingSchedule(s); setDefaultDate(null); setModalOpen(true); };
-
-      const safe = Array.isArray(schedules) ? schedules : [];
-      const filtered = safe
-        .filter(s => {
-          if (search) { const q = search.toLowerCase(); if (!s.title?.toLowerCase().includes(q) && !s.email_to?.toLowerCase().includes(q) && !s.description?.toLowerCase().includes(q)) return false; }
-          if (filterStatus === 'sent') return s.notification_sent;
-          if (filterStatus === 'failed') return s.notification_failed;
-          if (filterStatus === 'pending') return !s.notification_sent && !s.notification_failed && new Date(s.scheduled_time) >= Date.now();
-          return true;
-        })
-        .sort((a,b) => {
-          const ta = new Date(a.scheduled_time).getTime()||0, tb = new Date(b.scheduled_time).getTime()||0;
-          const now = Date.now();
-          if ((ta<now) !== (tb<now)) return ta<now ? 1 : -1;
-          return ta - tb;
-        });
-
-      const upcomingCount = safe.filter(s => new Date(s.scheduled_time) >= Date.now() && !s.notification_sent).length;
-
-      return html`
-        <div style=${{ display:'flex', height:'100%', width:'100%' }}>
-          <${ToastContainer} toasts=${toasts} removeToast=${removeToast} />
-          <${ConfirmDialog} isOpen=${confirmState.open} title="Xóa lịch này?" message="Thao tác này không thể hoàn tác. Lịch sẽ bị xóa vĩnh viễn." onConfirm=${doDelete} onCancel=${() => setConfirmState({open:false,id:null})} />
-
-          <div className=${`sidebar-overlay ${sidebarOpen ? 'active' : ''}`} onClick=${() => setSidebarOpen(false)}></div>
-          <aside className=${`sidebar ${sidebarOpen ? 'open' : ''}`}>
-            <div className="sidebar-header">
-              <div className="sidebar-logo-icon">✦</div>
-              <div>
-                <div className="sidebar-logo-text">AURA</div>
-                <div className="sidebar-logo-sub">Scheduling</div>
-              </div>
-            </div>
-            <nav className="sidebar-nav">
-              <div className="nav-section-title">Menu</div>
-              <div className="nav-item" onClick=${() => addToast('Chức năng Chat sẽ ra mắt sớm!', 'info')}>
-                <span className="nav-icon">💬</span> Chat
-              </div>
-              <div className="nav-item active">
-                <span className="nav-icon">📅</span> Lịch & Nhắc hẹn
-                ${upcomingCount > 0 && html`<span className="nav-badge">${upcomingCount}</span>`}
-              </div>
-              <div className="nav-item" onClick=${() => addToast('Analytics sẽ ra mắt sớm!', 'info')}>
-                <span className="nav-icon">📊</span> Thống kê
-              </div>
-            </nav>
-            <div className="sidebar-stats">
-              <div className="nav-section-title" style=${{ padding:'0 0 6px' }}>Nhanh</div>
-              <div className="sidebar-stat-item">
-                <span className="sidebar-stat-label">📅 Hôm nay</span>
-                <span className="sidebar-stat-val" style=${{ color:'var(--warning)' }}>${safe.filter(s => { const d=new Date(s.scheduled_time); const t=new Date(); return d.toDateString()===t.toDateString(); }).length}</span>
-              </div>
-              <div className="sidebar-stat-item">
-                <span className="sidebar-stat-label">✅ Đã gửi</span>
-                <span className="sidebar-stat-val" style=${{ color:'var(--success)' }}>${safe.filter(s=>s.notification_sent).length}</span>
-              </div>
-              <div className="sidebar-stat-item">
-                <span className="sidebar-stat-label">⚠️ Lỗi</span>
-                <span className="sidebar-stat-val" style=${{ color:'var(--danger)' }}>${safe.filter(s=>s.notification_failed).length}</span>
-              </div>
-            </div>
-            <div className="sidebar-footer">
-              <div className="sidebar-footer-item" onClick=${() => setTheme(t => t==='dark'?'light':'dark')}>
-                <span>${theme==='dark'?'☀️':'🌙'}</span> Chế độ ${theme==='dark'?'Sáng':'Tối'}
-              </div>
-              <div className="sidebar-footer-item" onClick=${fetchSchedules}>
-                <span>🔄</span> Làm mới dữ liệu
-              </div>
-            </div>
-          </aside>
-
-          <div className="main-content">
-            <header className="header">
-              <div className="header-left">
-                <button className="hamburger" onClick=${() => setSidebarOpen(v => !v)}>☰</button>
-                <div>
-                  <div className="header-title">📅 Quản lý Lịch & Nhắc hẹn</div>
-                  <div className="header-subtitle">${safe.length} lịch · ${upcomingCount} sắp tới</div>
-                </div>
-              </div>
-              <div className="header-actions">
-                <button className="btn btn-outline btn-sm" onClick=${() => setViewMode(v => v==='list'?'calendar':'list')}>
-                  ${viewMode==='list' ? '📅 Lịch tháng' : '📋 Danh sách'}
-                </button>
-                <button className="btn btn-primary" onClick=${() => openCreate()}>＋ Tạo lịch mới</button>
-              </div>
-            </header>
-
-            <div className="content-area">
-              ${loading ? html`<${SkeletonList} />` : html`
-                <${StatsGrid} schedules=${safe} />
-
-                <div className="toolbar">
-                  <div className="search-box">
-                    <span className="search-icon">🔍</span>
-                    <input className="search-input" placeholder="Tìm kiếm theo tiêu đề, email, mô tả..." value=${search} onInput=${e => setSearch(e.target.value)} />
-                  </div>
-                  <div className="filter-chips">
-                    ${[
-                      {key:'all',label:'Tất cả'},
-                      {key:'pending',label:'⏰ Sắp tới'},
-                      {key:'sent',label:'✅ Đã gửi'},
-                      {key:'failed',label:'⚠️ Lỗi'},
-                    ].map(f => html`
-                      <div key=${f.key} className=${`filter-chip ${f.key} ${filterStatus===f.key?'active':''}`} onClick=${() => setFilterStatus(f.key)}>${f.label}</div>`)}
-                  </div>
-                </div>
-
-                ${viewMode === 'calendar' ? html`
-                  <${CalendarView} schedules=${safe} onEdit=${openEdit} onDelete=${handleDelete} onTestNotify=${handleTestNotify} onCreateAtDate=${(iso) => openCreate(iso)} />
-                ` : filtered.length === 0 ? html`
-                  <div className="empty-state">
-                    <div className="empty-icon">📭</div>
-                    <h3>${search || filterStatus!=='all' ? 'Không tìm thấy kết quả' : 'Chưa có lịch nào'}</h3>
-                    <p>${search || filterStatus!=='all' ? 'Thử thay đổi từ khóa hoặc bộ lọc.' : 'Nhấn "+ Tạo lịch mới" để bắt đầu.'}</p>
-                  </div>` : html`
-                  <div>
-                    <div class="section-header" style=${{ marginBottom: 10 }}>
-                      <span className="section-title">Danh sách lịch</span>
-                      <span className="section-count">${filtered.length} kết quả</span>
-                    </div>
-                    <div className="schedule-list">
-                      ${filtered.map(s => html`<${ScheduleItem} key=${s.id} schedule=${s} onEdit=${openEdit} onDelete=${handleDelete} onTestNotify=${handleTestNotify} />`)}
-                    </div>
-                  </div>`}
-              `}
-            </div>
-          </div>
-
-          <${ScheduleModal}
-            isOpen=${modalOpen}
-            onClose=${() => { setModalOpen(false); setEditingSchedule(null); setDefaultDate(null); }}
-            onSave=${editingSchedule ? handleUpdate : handleCreate}
-            editData=${editingSchedule}
-            defaultDate=${defaultDate}
-          />
-        </div>`;
-    }
-
-    const root = ReactDOM.createRoot(document.getElementById('root'));
-    root.render(html`<${ErrorBoundary}><${App} /><//>`);
-   {% endraw %}
-  </script>
-</body>
-</html>

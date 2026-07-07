@@ -103,5 +103,22 @@ class Settings:
     def trace_log_dir(self) -> str:
         return os.getenv("TRACE_LOG_DIR", "logs/traces")
 
+    # === Email / SMTP ===
+    @property
+    def mail_server(self) -> str:
+        return os.getenv("MAIL_SERVER", "smtp.gmail.com")
+
+    @property
+    def mail_port(self) -> int:
+        return int(os.getenv("MAIL_PORT", "587"))
+
+    @property
+    def mail_username(self) -> str:
+        return os.getenv("MAIL_USERNAME", "")
+
+    @property
+    def mail_password(self) -> str:
+        return os.getenv("MAIL_PASSWORD", "")
+
 
 settings = Settings()
