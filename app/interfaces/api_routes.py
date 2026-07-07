@@ -115,19 +115,25 @@ def create_api_router(services: dict) -> APIRouter:
             return {"ok": True, "type": "clarify", "content": msg, "request_id": request_id}
 
         # Action intents → plan
-        plan_result = await planner_service.create_plan(request_id, req.message, req.guild_id, intent)
+        plan_result = await planner_service.generate_plan(
+            request_id=request_id,
+            guild_id=req.guild_id,
+            user_id=req.user_id,
+            message=req.message,
+            intent=intent,
+        )
         if not plan_result.get("ok"):
             return {"ok": False, "error": plan_result.get("error", "Planning failed")}
 
-        plan = plan_result["plan"]
-        plan_id = plan["id"]
+        plan_id = plan_result["plan_id"]
 
-        if plan["risk_level"] in ("HIGH", "CRITICAL"):
+        if plan_result["risk_level"] in ("HIGH", "CRITICAL"):
             # Needs approval
             return {
                 "ok": True,
                 "type": "approval_needed",
-                "plan": plan,
+                "plan_id": plan_id,
+                "plan": plan_result,
                 "request_id": request_id,
             }
         else:

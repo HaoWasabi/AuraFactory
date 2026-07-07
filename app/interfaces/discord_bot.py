@@ -111,22 +111,27 @@ class DiscordBot(commands.Bot):
             return
 
         # Step 4: Generate plan (action intents)
-        plan_result = await self.planner_service.create_plan(request_id, content, guild_id, intent)
+        plan_result = await self.planner_service.generate_plan(
+            request_id=request_id,
+            guild_id=guild_id,
+            user_id=user_id,
+            message=content,
+            intent=intent,
+        )
         if not plan_result.get("ok"):
             await message.reply(f"❌ Không tạo được kế hoạch: {plan_result.get('error', 'Unknown error')}")
             await self.request_service.update_status(request_id, "failed", error_message=plan_result.get("error"))
             return
 
-        plan = plan_result["plan"]
-        plan_id = plan["id"]
+        plan_id = plan_result["plan_id"]
 
         # Step 5: Show plan to user
-        plan_text = self._format_plan(plan)
+        plan_text = self._format_plan(plan_result)
 
-        if plan["risk_level"] in ("HIGH", "CRITICAL"):
+        if plan_result["risk_level"] in ("HIGH", "CRITICAL"):
             # Need approval — send with buttons
             view = ApprovalView(self, plan_id, user_id)
-            await message.reply(f"📋 **Kế hoạch** (risk: {plan['risk_level']})\n{plan_text}\n\n⚠️ Cần bạn duyệt trước khi thực thi:", view=view)
+            await message.reply(f"📋 **Kế hoạch** (risk: {plan_result['risk_level']})\n{plan_text}\n\n⚠️ Cần bạn duyệt trước khi thực thi:", view=view)
         else:
             # Auto-approved — execute immediately
             await message.reply(f"📋 **Kế hoạch** (auto-approved)\n{plan_text}\n\n⏳ Đang thực thi...")
@@ -138,9 +143,9 @@ class DiscordBot(commands.Bot):
     def _format_plan(self, plan: dict) -> str:
         """Format plan steps for Discord display."""
         lines = [f"> {plan.get('description', '')}"]
-        for step in plan.get("steps", []):
+        for i, step in enumerate(plan.get("steps", []), 1):
             risk_emoji = {"LOW": "🟢", "MEDIUM": "🟡", "HIGH": "🟠", "CRITICAL": "🔴"}.get(step.get("risk_level", "MEDIUM"), "⚪")
-            lines.append(f"{risk_emoji} Step {step['step_number']}: {step.get('description', step['tool_name'])}")
+            lines.append(f"{risk_emoji} Step {i}: {step.get('description', step.get('tool_name', ''))}")
         return "\n".join(lines)
 
     def _format_execution_result(self, result: dict) -> str:
@@ -148,9 +153,11 @@ class DiscordBot(commands.Bot):
         if result.get("status") == "completed":
             return f"✅ **Hoàn thành!** {result.get('completed_steps', 0)}/{result.get('total_steps', 0)} bước thành công."
         else:
-            failed = result.get("failed_step")
-            msg = f"⚠️ **Thực thi dừng** tại bước {failed.get('step_number', '?')}: {failed.get('error', 'Unknown')}" if failed else "⚠️ Có lỗi xảy ra."
-            return msg
+            failed_step = result.get("failed_step")
+            error_msg = result.get("error", "Unknown error")
+            if failed_step:
+                return f"⚠️ **Thực thi dừng** tại bước {failed_step}/{result.get('total_steps', '?')}: {error_msg}"
+            return f"⚠️ **Lỗi:** {error_msg} ({result.get('completed_steps', 0)}/{result.get('total_steps', 0)} bước hoàn thành)"
 
 
 class ApprovalView(nextcord.ui.View):

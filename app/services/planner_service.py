@@ -83,7 +83,7 @@ class PlannerService:
             history: Optional conversation history.
 
         Returns:
-            Plan dict with id, description, steps, risk_level, status.
+            Plan dict with plan_id, description, steps, risk_level, status, auto_approved.
             On failure: {"ok": False, "error": ...}
         """
         try:
@@ -140,25 +140,26 @@ class PlannerService:
             # 8. Insert plan + steps into DB
             plan_id = uuid.uuid4()
             now = datetime.now(timezone.utc)
+            steps = plan_data.get("steps", [])
 
             await self.db.execute(
-                """INSERT INTO plans (id, request_id, guild_id, user_id, description, risk_level, status, created_at)
-                   VALUES ($1, $2, $3, $4, $5, $6, $7, $8)""",
+                """INSERT INTO plans (id, request_id, guild_id, user_id, description, total_steps, risk_level, status, created_at)
+                   VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)""",
                 plan_id,
                 uuid.UUID(request_id),
                 guild_id,
                 user_id,
                 plan_data.get("description", ""),
+                len(steps),
                 overall_risk,
                 plan_status,
                 now,
             )
 
-            steps = plan_data.get("steps", [])
             for idx, step in enumerate(steps):
                 step_id = uuid.uuid4()
                 await self.db.execute(
-                    """INSERT INTO plan_steps (id, plan_id, step_order, tool_name, tool_params, description, risk_level, status)
+                    """INSERT INTO plan_steps (id, plan_id, step_number, tool_name, tool_params, description, risk_level, status)
                        VALUES ($1, $2, $3, $4, $5::jsonb, $6, $7, 'pending')""",
                     step_id,
                     plan_id,
@@ -263,30 +264,22 @@ Server Info: {server_context.get('server_info', '{}')}
         return data
 
     def _calculate_risk(self, steps: List[dict]) -> str:
-        """Calculate overall plan risk = max risk across all steps."""
+        """Calculate overall risk as the highest risk among all steps."""
         if not steps:
             return "LOW"
-
-        max_risk_value = 0
-        for step in steps:
-            risk = step.get("risk_level", "MEDIUM").upper()
-            risk_value = RISK_ORDER.get(risk, 2)
-            if risk_value > max_risk_value:
-                max_risk_value = risk_value
-
-        # Reverse lookup
-        for name, value in RISK_ORDER.items():
-            if value == max_risk_value:
-                return name
+        max_risk = max(RISK_ORDER.get(s.get("risk_level", "MEDIUM").upper(), 2) for s in steps)
+        for risk_name, risk_val in RISK_ORDER.items():
+            if risk_val == max_risk:
+                return risk_name
         return "MEDIUM"
 
-    async def _fail_request(self, request_id: str, reason: str) -> None:
-        """Mark a request as failed."""
+    async def _fail_request(self, request_id: str, error: str) -> None:
+        """Mark request as failed."""
         try:
             await self.db.execute(
-                "UPDATE requests SET status = 'failed', completed_at = $2 WHERE id = $1",
+                "UPDATE requests SET status = 'failed', error_message = $2 WHERE id = $1",
                 uuid.UUID(request_id),
-                datetime.now(timezone.utc),
+                error[:500],
             )
         except Exception as e:
-            logger.error("Failed to mark request %s as failed: %s", request_id, e)
+            logger.error("Failed to update request status: %s", e)

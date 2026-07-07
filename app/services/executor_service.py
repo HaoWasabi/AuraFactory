@@ -71,15 +71,21 @@ class ExecutorService:
                 - error: optional error message on failure
         """
         # Fetch plan and its steps
+        import uuid as uuid_mod
+        if isinstance(plan_id, str):
+            plan_uuid = uuid_mod.UUID(plan_id)
+        else:
+            plan_uuid = plan_id
+
         plan = await self._db.fetchrow(
-            "SELECT * FROM plans WHERE id = $1", plan_id
+            "SELECT * FROM plans WHERE id = $1", plan_uuid
         )
         if not plan:
             return {"status": "failed", "error": f"Plan {plan_id} not found"}
 
         request_id: str = plan["request_id"]
         guild_id: int = plan["guild_id"]
-        user_id: int = plan["user_id"]
+        user_id: int = plan.get("user_id", 0)
         plan_risk: str = plan.get("risk_level", "low")
 
         # §5.6 step 17: Permission verification for HIGH/CRITICAL plans
@@ -91,7 +97,7 @@ class ExecutorService:
                 # Cancel plan, report error
                 await self._db.execute(
                     "UPDATE plans SET status = 'cancelled' WHERE id = $1",
-                    plan_id,
+                    plan_uuid,
                 )
                 return {
                     "status": "failed",
@@ -106,8 +112,7 @@ class ExecutorService:
 
         # Fetch plan steps ordered by step_order
         steps = await self._db.fetch(
-            "SELECT * FROM plan_steps WHERE plan_id = $1 ORDER BY step_order ASC",
-            plan_id,
+            "SELECT * FROM plan_steps WHERE plan_id = $1 ORDER BY step_number ASC", plan_uuid,
         )
         if not steps:
             return {"status": "failed", "error": "Plan has no steps"}
@@ -118,10 +123,11 @@ class ExecutorService:
 
         # Update plan status to executing
         await self._db.execute(
-            "UPDATE plans SET status = 'executing' WHERE id = $1", plan_id
+            "UPDATE plans SET status = 'executing' WHERE id = $1", plan_uuid
         )
         await self._db.execute(
-            "UPDATE requests SET status = 'executing' WHERE id = $1", request_id
+            "UPDATE requests SET status = 'executing' WHERE id = $1",
+            uuid_mod.UUID(str(request_id)) if not isinstance(request_id, uuid_mod.UUID) else request_id,
         )
 
         # §5.6 step 18: Sequential execution
@@ -130,9 +136,9 @@ class ExecutorService:
 
             # Update current_step pointer
             await self._db.execute(
-                "UPDATE plans SET current_step = $1 WHERE id = $2",
+                "UPDATE plans SET current_step = $1 WHERE id = $2", 
                 i + 1,
-                plan_id,
+                plan_uuid,
             )
 
             # Execute the step
@@ -158,8 +164,7 @@ class ExecutorService:
                 )
                 # Plan fails, request stays 'executing' for user decision
                 await self._db.execute(
-                    "UPDATE plans SET status = 'failed' WHERE id = $1",
-                    plan_id,
+                    "UPDATE plans SET status = 'failed' WHERE id = $1", plan_uuid,
                 )
                 return {
                     "status": "partial",
@@ -172,10 +177,11 @@ class ExecutorService:
 
         # All steps completed successfully
         await self._db.execute(
-            "UPDATE plans SET status = 'completed' WHERE id = $1", plan_id
+            "UPDATE plans SET status = 'completed' WHERE id = $1", plan_uuid
         )
         await self._db.execute(
-            "UPDATE requests SET status = 'completed' WHERE id = $1", request_id
+            "UPDATE requests SET status = 'completed' WHERE id = $1",
+            uuid_mod.UUID(str(request_id)) if not isinstance(request_id, uuid_mod.UUID) else request_id,
         )
 
         # Invalidate context cache after successful mutations
@@ -283,6 +289,7 @@ class ExecutorService:
             tool_name=tool_name,
             tool_params=tool_params,
             success=response.success,
+            risk_level=risk_level,
             result=response.result if response.success else None,
             error=response.error,
             duration_ms=duration_ms,
@@ -337,6 +344,7 @@ class ExecutorService:
             tool_name=tool_name,
             tool_params=react_result.get("adjusted_params", tool_params),
             success=react_result.get("success", False),
+            risk_level=risk_level,
             result=react_result.get("result"),
             error=react_result.get("error"),
             duration_ms=react_duration_ms,
@@ -390,6 +398,7 @@ class ExecutorService:
         tool_name: str,
         tool_params: dict,
         success: bool,
+        risk_level: str = "MEDIUM",
         result: Any = None,
         error: Optional[str] = None,
         duration_ms: int = 0,
@@ -406,6 +415,7 @@ class ExecutorService:
             tool_name: The MCP tool that was called.
             tool_params: Parameters passed to the tool.
             success: Whether the call succeeded.
+            risk_level: Risk level of the step.
             result: The tool result (on success).
             error: Error message (on failure).
             duration_ms: Execution time in milliseconds.
@@ -419,23 +429,24 @@ class ExecutorService:
         try:
             await self._db.execute(
                 """
-                INSERT INTO audit_log (
-                    id, request_id, step_id, guild_id, user_id,
-                    tool_name, tool_params, success, result, error,
-                    duration_ms, react_adjusted, react_reason, created_at
+                INSERT INTO audit_log  (
+                    id, request_id, plan_step_id, guild_id, user_id,
+                    tool_name, tool_params, risk_level, success, result_data,
+                    error_message, duration_ms, react_adjusted, react_reason, executed_at
                 ) VALUES (
-                    $1, $2, $3, $4, $5,
+                    $1, $2, $3, $4, $5, 
                     $6, $7, $8, $9, $10,
-                    $11, $12, $13, NOW()
+                    $11, $12, $13, $14, NOW()
                 )
                 """,
                 audit_id,
-                request_id,
-                step_id,
+                uuid.UUID(request_id) if isinstance(request_id, str) else request_id,
+                uuid.UUID(step_id) if isinstance(step_id, str) else step_id,
                 guild_id,
                 user_id,
                 tool_name,
                 json.dumps(tool_params),
+                risk_level,
                 success,
                 json.dumps(result) if result is not None else None,
                 error,
