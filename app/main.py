@@ -177,6 +177,7 @@ async def lifespan(app: FastAPI):
             allowed_guild_ids=settings.allowed_guild_ids,
             allow_all=settings.allow_all_guilds,
         )
+        app.state.bot = container.discord_adapter._bot
         container.discord_adapter.set_handler(_handle_message)
         container.discord_adapter.set_guild_join_handler(_handle_guild_join)
         container.discord_adapter.set_member_join_handler(_handle_member_join)

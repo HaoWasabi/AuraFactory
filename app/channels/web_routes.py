@@ -114,13 +114,25 @@ async def auth_me(request: Request):
         request.session.clear()
         return JSONResponse(content={"error": "Token expired"}, status_code=401)
 
-    guilds = await discord_fetch(token, "/users/@me/guilds") or []
+    # 1. Lấy tất cả guilds người dùng tham gia từ Discord API
+    all_user_guilds = await discord_fetch(token, "/users/@me/guilds") or []
+
+    # 2. Lấy danh sách ID các server mà bot đang tham gia
+    # Truy cập bot từ app.state (đảm bảo bạn đã gán 'app.state.bot = bot' tại main.py)
+    bot = request.app.state.bot
+    bot_guild_ids = {str(guild.id) for guild in bot.guilds}
+
+    # 3. Lọc danh sách: Chỉ giữ lại các guild mà bot có mặt
+    # Thêm điều kiện kiểm tra quyền quản trị viên (0x8) nếu cần
+    filtered_guilds = [
+        guild for guild in all_user_guilds 
+        if str(guild['id']) in bot_guild_ids
+    ]
 
     return JSONResponse(content={
         "user": user,
-        "guilds": guilds,
+        "guilds": filtered_guilds,
     })
-
 
 @router.get("/auth/logout")
 async def auth_logout(request: Request):
