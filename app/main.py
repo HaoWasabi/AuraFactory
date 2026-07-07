@@ -83,6 +83,7 @@ async def lifespan(app: FastAPI):
     logger.info("✅ MCP client ready (discord server registered, awaiting bot)")
 
     # === L6: Services ===
+    from app.services.rate_limit_service import RateLimitService
     from app.services.request_service import RequestService
     from app.services.classifier_service import ClassifierService
     from app.services.context_service import ContextService
@@ -93,7 +94,8 @@ async def lifespan(app: FastAPI):
     from app.services.auth_service import AuthService
     from app.services.guild_sync_service import GuildSyncService
 
-    request_service = RequestService(db)
+    rate_limit_service = RateLimitService(db)
+    request_service = RequestService(db, rate_limit_service=rate_limit_service)
     classifier_service = ClassifierService(llm)
     context_service = ContextService(db, mcp_client)
     planner_service = PlannerService(db, llm, mcp_client, context_service)
@@ -104,6 +106,7 @@ async def lifespan(app: FastAPI):
     guild_sync_service = GuildSyncService(db)
 
     services = {
+        "rate_limit_service": rate_limit_service,
         "request_service": request_service,
         "classifier_service": classifier_service,
         "context_service": context_service,
@@ -177,7 +180,7 @@ app = FastAPI(
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # Restrict in production
+    allow_origins=settings.ALLOWED_ORIGINS,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],

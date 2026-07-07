@@ -41,6 +41,8 @@ data/*.db
 postgres_data/
 
 # Testing
+.hypothesis/
+.kiro/
 .pytest_cache/
 htmlcov/
 .coverage

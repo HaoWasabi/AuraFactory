@@ -1,4 +1,5 @@
 """Discord Bot Interface — I/O layer only, delegates all logic to services."""
+import asyncio
 import logging
 import nextcord
 from nextcord.ext import commands
@@ -35,6 +36,8 @@ class DiscordBot(commands.Bot):
         self.guild_sync_service = services["guild_sync_service"]
         self.mcp_discord_server = mcp_discord_server
         self._mcp_client = services.get("_mcp_client")
+        # DB reference for token tracking
+        self._db = getattr(services.get("approval_service"), "db", None)
 
     async def on_ready(self):
         logger.info("🤖 AuraFactory bot ready: %s (ID: %d)", self.user.name, self.user.id)
@@ -101,7 +104,9 @@ class DiscordBot(commands.Bot):
         request_id = req_result["request_id"]
 
         # Step 2: Classify intent + detect language
-        classification = await self.classifier_service.classify(content)
+        classification = await self.classifier_service.classify(
+            content, db=self._db, request_id=request_id
+        )
         intent = classification["intent"]
         tool_mode = classification["tool_mode"]
         lang = classification.get("lang", "vi")
@@ -110,7 +115,9 @@ class DiscordBot(commands.Bot):
 
         # Step 3: Route by intent
         if intent == "query":
-            answer = await self.query_service.answer(content, guild_id)
+            answer = await self.query_service.answer(
+                content, guild_id, db=self._db, request_id=request_id
+            )
             await message.reply(answer)
             await self.request_service.update_status(request_id, "completed", response=answer)
             return
@@ -137,29 +144,64 @@ class DiscordBot(commands.Bot):
         plan_id = plan_result["plan_id"]
 
         # Step 5: Show plan to user
-        plan_text = self._format_plan(plan_result)
+        plan_text = self._format_plan(plan_result, lang=lang)
 
         if plan_result["risk_level"] in ("HIGH", "CRITICAL"):
             # Need approval — send with buttons
             view = ApprovalView(self, plan_id, user_id, lang=lang)
-            await message.reply(
+            sent_msg = await message.reply(
                 msg("plan_header_approval", lang=lang, risk=plan_result["risk_level"], plan_text=plan_text),
                 view=view,
             )
+            view.message = sent_msg
         else:
-            # Auto-approved — execute immediately
+            # Auto-approved — execute in background, reply when done
             await message.reply(msg("plan_header_auto", lang=lang, plan_text=plan_text))
-            exec_result = await self.executor_service.execute_plan(plan_id)
-            summary = self._format_execution_result(exec_result, lang=lang)
-            await message.reply(summary)
-            await self.request_service.update_status(request_id, "completed", response=summary)
 
-    def _format_plan(self, plan: dict) -> str:
-        """Format plan steps for Discord display."""
+            async def _execute_and_reply():
+                try:
+                    exec_result = await self.executor_service.execute_plan(plan_id)
+                    summary = self._format_execution_result(exec_result, lang=lang)
+                    await message.reply(summary)
+                    await self.request_service.update_status(request_id, "completed", response=summary)
+                except Exception as e:
+                    logger.error("Background execution error for plan %s: %s", plan_id, e)
+                    try:
+                        await message.reply(msg("exec_error", lang=lang, error=str(e)[:200], done=0, total="?"))
+                    except Exception:
+                        pass
+
+            asyncio.create_task(_execute_and_reply())
+
+    MAX_PLAN_CHARS = 1800
+
+    def _format_plan(self, plan: dict, lang: str = "vi") -> str:
+        """Format plan steps for Discord display (max 1800 chars)."""
         lines = [f"> {plan.get('description', '')}"]
-        for i, step in enumerate(plan.get("steps", []), 1):
-            risk_emoji = {"LOW": "🟢", "MEDIUM": "🟡", "HIGH": "🟠", "CRITICAL": "🔴"}.get(step.get("risk_level", "MEDIUM"), "⚪")
-            lines.append(f"{risk_emoji} Step {i}: {step.get('description', step.get('tool_name', ''))}")
+        steps = plan.get("steps", [])
+        risk_emoji = {"LOW": "🟢", "MEDIUM": "🟡", "HIGH": "🟠", "CRITICAL": "🔴"}
+
+        for i, step in enumerate(steps, 1):
+            emoji = risk_emoji.get(step.get("risk_level", "MEDIUM"), "⚪")
+            line = f"{emoji} Step {i}: {step.get('description', step.get('tool_name', ''))}"
+            remaining = len(steps) - (i - 1)
+            suffix = f"... và {remaining} bước khác" if lang == "vi" else f"... and {remaining} more steps"
+
+            candidate_with_step = "\n".join(lines + [line])
+
+            if len(candidate_with_step) > self.MAX_PLAN_CHARS:
+                # This step doesn't fit — try to append suffix to current lines
+                candidate_with_suffix = "\n".join(lines + [suffix])
+                if len(candidate_with_suffix) <= self.MAX_PLAN_CHARS:
+                    lines.append(suffix)
+                else:
+                    # suffix doesn't fit with current lines — pop the last step to make room
+                    while lines and len("\n".join(lines + [suffix])) > self.MAX_PLAN_CHARS:
+                        lines.pop()
+                    lines.append(suffix)
+                break
+            lines.append(line)
+
         return "\n".join(lines)
 
     def _format_execution_result(self, result: dict, lang: str = "vi") -> str:
@@ -183,6 +225,20 @@ class ApprovalView(nextcord.ui.View):
         self.plan_id = plan_id
         self.user_id = user_id
         self.lang = lang
+
+    async def on_timeout(self) -> None:
+        """Disable all buttons when view times out (30 min)."""
+        for item in self.children:
+            if hasattr(item, "disabled"):
+                item.disabled = True
+        if hasattr(self, "message") and self.message:
+            try:
+                await self.message.edit(
+                    content=getattr(self.message, "content", "") + "\n*(Expired — request timed out)*",
+                    view=self,
+                )
+            except Exception as e:
+                logger.warning("Failed to edit message on ApprovalView timeout: %s", e)
 
     @nextcord.ui.button(label="✅ Approve", style=nextcord.ButtonStyle.green)
     async def approve_button(self, button: nextcord.ui.Button, interaction: nextcord.Interaction):

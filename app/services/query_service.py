@@ -15,6 +15,7 @@ from typing import Dict, List, Optional
 from app.llm.base import BaseLLM, LLMResponse
 from app.mcp.client import MCPClient
 from app.services.context_service import ContextService
+from app.services._token_tracker import record_token_usage
 from app.messages import msg
 
 logger = logging.getLogger(__name__)
@@ -57,6 +58,8 @@ class QueryService:
         message: str,
         guild_id: int,
         history: Optional[List[Dict[str, str]]] = None,
+        db=None,
+        request_id: str = None,
     ) -> str:
         """Answer a read-only question about the server.
 
@@ -67,6 +70,8 @@ class QueryService:
             message: The user's question/query text.
             guild_id: Discord guild (server) ID for context lookup.
             history: Optional conversation history [{role, content}, ...].
+            db: Optional database instance for token tracking.
+            request_id: Optional request UUID string for token tracking.
 
         Returns:
             Natural language answer string.
@@ -100,7 +105,11 @@ class QueryService:
                 "Vui lòng thử lại sau."
             )
 
-        # 4. Return answer text
+        # 4. Record token usage
+        if db and request_id:
+            await record_token_usage(db, request_id, response.usage, getattr(self._llm, 'provider_name', 'unknown'))
+
+        # 5. Return answer text
         if not response.content:
             return (
                 "Tôi không tìm thấy thông tin phù hợp để trả lời câu hỏi của bạn. "

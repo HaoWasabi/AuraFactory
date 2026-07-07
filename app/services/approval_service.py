@@ -5,6 +5,7 @@ from datetime import datetime, timezone
 from typing import Optional
 
 from app.database import Database
+from app.messages import msg
 
 logger = logging.getLogger(__name__)
 
@@ -15,7 +16,7 @@ class ApprovalService:
     def __init__(self, db: Database):
         self.db = db
 
-    async def approve_plan(self, plan_id: str, approved_by_user_id: int) -> dict:
+    async def approve_plan(self, plan_id: str, approved_by_user_id: int, lang: str = "vi") -> dict:
         """Approve a plan for execution.
 
         Requirements:
@@ -41,7 +42,7 @@ class ApprovalService:
             )
 
             if not plan:
-                return {"ok": False, "error": "Plan không tồn tại."}
+                return {"ok": False, "error": msg("plan_not_found", lang=lang)}
 
             # Idempotent: already approved → return ok
             if plan["status"] == "approved":
@@ -52,7 +53,7 @@ class ApprovalService:
             if plan["status"] != "awaiting_approval":
                 return {
                     "ok": False,
-                    "error": f"Plan không ở trạng thái chờ duyệt (hiện tại: {plan['status']}).",
+                    "error": msg("plan_not_pending", lang=lang, status=plan['status']),
                 }
 
             # Verify ownership: only the request creator can approve
@@ -63,7 +64,7 @@ class ApprovalService:
                 )
                 return {
                     "ok": False,
-                    "error": "Chỉ người tạo yêu cầu mới được phê duyệt.",
+                    "error": msg("only_creator_can_approve", lang=lang),
                 }
 
             now = datetime.now(timezone.utc)
@@ -88,7 +89,7 @@ class ApprovalService:
         return {"ok": True, "plan_id": plan_id}
 
     async def reject_plan(
-        self, plan_id: str, rejected_by_user_id: int, reason: Optional[str] = None
+        self, plan_id: str, rejected_by_user_id: int, reason: Optional[str] = None, lang: str = "vi"
     ) -> dict:
         """Reject/cancel a plan.
 
@@ -116,7 +117,7 @@ class ApprovalService:
             )
 
             if not plan:
-                return {"ok": False, "error": "Plan không tồn tại."}
+                return {"ok": False, "error": msg("plan_not_found", lang=lang)}
 
             # Idempotent: already cancelled → return ok
             if plan["status"] == "cancelled":
@@ -127,7 +128,7 @@ class ApprovalService:
             if plan["status"] != "awaiting_approval":
                 return {
                     "ok": False,
-                    "error": f"Plan không ở trạng thái chờ duyệt (hiện tại: {plan['status']}).",
+                    "error": msg("plan_not_pending", lang=lang, status=plan['status']),
                 }
 
             # Verify ownership
@@ -138,7 +139,7 @@ class ApprovalService:
                 )
                 return {
                     "ok": False,
-                    "error": "Chỉ người tạo yêu cầu mới được từ chối.",
+                    "error": msg("only_creator_can_reject", lang=lang),
                 }
 
             now = datetime.now(timezone.utc)

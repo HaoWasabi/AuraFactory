@@ -94,14 +94,21 @@ class AuthService:
             }
 
     async def get_user_token(self, user_id: int) -> Optional[str]:
-        """Get stored access token for a user (for API calls on their behalf)."""
+        """Get stored access token for a user. Returns None if not found or expired."""
         row = await self.db.fetchrow(
             "SELECT access_token_enc, token_expires_at FROM users WHERE discord_user_id = $1",
             user_id,
         )
         if not row:
             return None
-        # TODO: check expiry and refresh if needed
+        expires_at = row["token_expires_at"]
+        if expires_at and expires_at <= datetime.now(timezone.utc):
+            logger.warning(
+                "Access token for user %d has expired (expired at %s)",
+                user_id,
+                expires_at,
+            )
+            return None
         return row["access_token_enc"]
 
     async def refresh_user_permissions(self, user_id: int, guild_id: int) -> bool:

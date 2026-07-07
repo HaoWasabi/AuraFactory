@@ -69,6 +69,22 @@ MESSAGES = {
         "vi": "⚠️ Server này chưa kích hoạt AuraFactory. Vui lòng mời bot vào server trước khi sử dụng.",
         "en": "⚠️ This server hasn't activated AuraFactory yet. Please add the bot to your server first.",
     },
+    "plan_not_found": {
+        "vi": "Plan không tồn tại.",
+        "en": "Plan not found.",
+    },
+    "plan_not_pending": {
+        "vi": "Plan không ở trạng thái chờ duyệt (hiện tại: {status}).",
+        "en": "Plan is not in pending state (current: {status}).",
+    },
+    "only_creator_can_approve": {
+        "vi": "Chỉ người tạo yêu cầu mới được phê duyệt.",
+        "en": "Only the request creator can approve.",
+    },
+    "only_creator_can_reject": {
+        "vi": "Chỉ người tạo yêu cầu mới được từ chối.",
+        "en": "Only the request creator can reject.",
+    },
 }
 
 

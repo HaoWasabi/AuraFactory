@@ -317,6 +317,11 @@
                         showPlan(data.plan, true);
                         break;
 
+                    case 'executing':
+                        appendMessage('bot', '⏳ Kế hoạch đang được thực thi...');
+                        pollExecutionStatus(data.plan_id);
+                        break;
+
                     case 'executed':
                         if (data.result && data.result.plan) {
                             showPlan(data.result.plan, false);
@@ -374,17 +379,41 @@
                 });
                 if (data && data.ok) {
                     appendMessage('bot', '✅ Đã duyệt! Đang thực thi...');
-                    if (data.execution) {
-                        const r = data.execution;
-                        const emoji = r.status === 'completed' ? '✅' : '⚠️';
-                        appendMessage('bot', `${emoji} ${r.completed_steps || 0}/${r.total_steps || 0} bước hoàn thành.`);
-                    }
+                    // Poll for result since execution now runs in background
+                    await pollExecutionStatus(data.plan_id);
                 } else {
                     appendMessage('bot', `❌ ${data?.error || 'Không thể duyệt'}`);
                 }
             } catch (e) {
                 appendMessage('bot', `❌ Lỗi: ${e.message}`);
             }
+        }
+
+        async function pollExecutionStatus(planId, maxAttempts = 60, intervalMs = 2000) {
+            if (!planId) return;
+            for (let i = 0; i < maxAttempts; i++) {
+                await new Promise(r => setTimeout(r, intervalMs));
+                try {
+                    const status = await api('GET', `/api/execution/${planId}/status`);
+                    if (!status) return;
+                    if (status.status === 'completed') {
+                        const done = status.completed_steps || 0;
+                        const total = status.total_steps || 0;
+                        appendMessage('bot', `✅ Hoàn thành! ${done}/${total} bước thành công.`);
+                        return;
+                    }
+                    if (status.status === 'failed' || status.status === 'partial') {
+                        const done = status.completed_steps || 0;
+                        const total = status.total_steps || 0;
+                        appendMessage('bot', `⚠️ Thực thi dừng tại bước ${done}/${total}: ${status.error || 'Lỗi không xác định'}`);
+                        return;
+                    }
+                    // Still executing — continue polling
+                } catch (e) {
+                    console.warn('Poll error:', e);
+                }
+            }
+            appendMessage('bot', '⏱️ Thực thi đang chạy nền. Kiểm tra lại sau.');
         }
 
         async function rejectPlan(planId) {

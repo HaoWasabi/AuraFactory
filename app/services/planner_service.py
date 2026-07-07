@@ -8,6 +8,7 @@ from typing import Any, Dict, List, Optional
 from app.database import Database
 from app.llm.base import BaseLLM
 from app.mcp import MCPClient
+from app.services._token_tracker import record_token_usage
 from app.services.context_service import ContextService
 
 logger = logging.getLogger(__name__)
@@ -118,6 +119,14 @@ class PlannerService:
                 system_prompt=PLANNER_SYSTEM_PROMPT,
                 temperature=0.2,
                 max_tokens=8192,
+            )
+
+            # Record token usage
+            await record_token_usage(
+                self.db,
+                request_id,
+                response.usage,
+                getattr(self.llm, 'provider_name', 'unknown'),
             )
 
             # 5. Parse LLM response into plan

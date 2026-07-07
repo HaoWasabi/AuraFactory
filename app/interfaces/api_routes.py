@@ -1,4 +1,5 @@
 """FastAPI REST API routes for AuraFactory web dashboard."""
+import asyncio
 import logging
 import secrets
 from typing import Optional
@@ -22,6 +23,14 @@ class ApprovalRequest(BaseModel):
     action: str  # "approve" or "reject"
     user_id: str  # String to preserve Discord snowflake precision
     reason: Optional[str] = None
+
+
+async def _run_execution_background(executor_service, plan_id: str) -> None:
+    """Run plan execution as background task — never raises."""
+    try:
+        await executor_service.execute_plan(plan_id)
+    except Exception as e:
+        logger.error("Background execution error for plan %s: %s", plan_id, e)
 
 
 def create_api_router(services: dict) -> APIRouter:
@@ -194,14 +203,13 @@ def create_api_router(services: dict) -> APIRouter:
                 "request_id": request_id,
             }
         else:
-            # Auto-approved → execute
-            exec_result = await executor_service.execute_plan(plan_id)
-            status = "completed" if exec_result.get("status") == "completed" else "partial"
+            # Auto-approved → execute in background
+            asyncio.create_task(_run_execution_background(executor_service, plan_id))
             return {
                 "ok": True,
-                "type": "executed",
-                "status": status,
-                "result": exec_result,
+                "type": "executing",
+                "status": "executing",
+                "plan_id": plan_id,
                 "request_id": request_id,
             }
 
@@ -213,9 +221,8 @@ def create_api_router(services: dict) -> APIRouter:
         if req.action == "approve":
             result = await approval_service.approve_plan(req.plan_id, int(req.user_id))
             if result["ok"]:
-                # Execute after approval
-                exec_result = await executor_service.execute_plan(req.plan_id)
-                return {"ok": True, "execution": exec_result}
+                asyncio.create_task(_run_execution_background(executor_service, req.plan_id))
+                return {"ok": True, "status": "executing", "plan_id": req.plan_id}
             return result
         elif req.action == "reject":
             return await approval_service.reject_plan(req.plan_id, int(req.user_id), req.reason or "Rejected via web")
@@ -293,5 +300,34 @@ def create_api_router(services: dict) -> APIRouter:
     @router.get("/health")
     async def health():
         return {"status": "ok", "service": "AuraFactory"}
+
+    import uuid as _uuid_mod
+
+    @router.get("/execution/{plan_id}/status")
+    async def get_execution_status(plan_id: str):
+        """Poll execution status for a background-running plan."""
+        try:
+            plan_uuid = _uuid_mod.UUID(plan_id)
+        except ValueError:
+            raise HTTPException(status_code=400, detail="Invalid plan_id format")
+
+        plan = await approval_service.db.fetchrow(
+            "SELECT status, current_step, total_steps FROM plans WHERE id = $1",
+            plan_uuid,
+        )
+        if not plan:
+            raise HTTPException(status_code=404, detail="Plan not found")
+
+        steps = await approval_service.db.fetch(
+            "SELECT step_number, status, result FROM plan_steps WHERE plan_id = $1 ORDER BY step_number",
+            plan_uuid,
+        )
+        return {
+            "status": plan["status"],
+            "completed_steps": plan["current_step"] or 0,
+            "total_steps": plan["total_steps"],
+            "results": [dict(s) for s in steps],
+            "error": "Execution failed" if plan["status"] in ("failed", "partial") else None,
+        }
 
     return router

@@ -5,6 +5,7 @@ from datetime import datetime
 from typing import Optional
 
 from app.database import Database
+from app.services.rate_limit_service import RateLimitService
 
 logger = logging.getLogger(__name__)
 
@@ -12,8 +13,9 @@ logger = logging.getLogger(__name__)
 class RequestService:
     """Handles request creation with concurrency lock (§5.3)."""
 
-    def __init__(self, db: Database):
+    def __init__(self, db: Database, rate_limit_service: Optional[RateLimitService] = None):
         self.db = db
+        self.rate_limit_service = rate_limit_service
 
     async def create_request(
         self,
@@ -29,6 +31,12 @@ class RequestService:
         Returns:
             {"ok": True, "request_id": ...} or {"ok": False, "reason": ...}
         """
+        # Check rate limit first
+        if self.rate_limit_service:
+            allowed = await self.rate_limit_service.check_and_increment(user_id, guild_id)
+            if not allowed:
+                return {"ok": False, "reason": "rate_limited"}
+
         # Check if there's already an active request for this guild+user
         active = await self.db.fetchrow(
             """SELECT id, message, status FROM requests

@@ -1,5 +1,6 @@
 """ContextService — manages server_snapshots for providing real-time context."""
 import logging
+import time
 from datetime import datetime, timezone
 from typing import Optional
 
@@ -12,9 +13,13 @@ logger = logging.getLogger(__name__)
 class ContextService:
     """Provides and caches server context (categories, channels, roles) via server_snapshots."""
 
+    TTL_SECONDS = 60
+
     def __init__(self, db: Database, mcp_client: MCPClient):
         self.db = db
         self.mcp_client = mcp_client
+        self._memory_cache: dict[int, tuple[dict, float]] = {}
+        # key=guild_id, value=(data_dict, expire_timestamp using time.monotonic())
 
     async def get_server_context(self, guild_id: int, force_refresh: bool = False) -> dict:
         """Get current server state. Uses cache if fresh (<60s), else refreshes.
@@ -22,8 +27,14 @@ class ContextService:
         Returns dict with keys: categories, channels, roles, server_info
         """
         if not force_refresh:
+            # Check memory cache first
+            entry = self._memory_cache.get(guild_id)
+            if entry and entry[1] > time.monotonic():
+                return entry[0]
+            # Check DB cache
             cached = await self._get_cached(guild_id)
             if cached:
+                self._memory_cache[guild_id] = (cached, time.monotonic() + self.TTL_SECONDS)
                 return cached
 
         # Refresh from Discord via MCP tools
@@ -46,6 +57,7 @@ class ContextService:
             context.get("roles", "[]"),
             context.get("server_info", "{}"),
         )
+        self._memory_cache[guild_id] = (context, time.monotonic() + self.TTL_SECONDS)
         return context
 
     async def _get_cached(self, guild_id: int) -> Optional[dict]:
@@ -110,6 +122,7 @@ class ContextService:
 
     async def invalidate(self, guild_id: int) -> None:
         """Mark a snapshot as stale (force refresh on next access)."""
+        self._memory_cache.pop(guild_id, None)
         await self.db.execute(
             "UPDATE server_snapshots SET stale_after = NOW() WHERE guild_id = $1",
             guild_id,

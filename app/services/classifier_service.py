@@ -4,6 +4,7 @@ import logging
 from typing import Optional
 
 from app.llm.base import BaseLLM
+from app.services._token_tracker import record_token_usage
 
 logger = logging.getLogger(__name__)
 
@@ -43,7 +44,7 @@ class ClassifierService:
     def __init__(self, llm: BaseLLM):
         self.llm = llm
 
-    async def classify(self, message: str, history: list = None) -> dict:
+    async def classify(self, message: str, history: list = None, db=None, request_id: str = None) -> dict:
         """Classify a user message.
 
         Returns:
@@ -68,6 +69,9 @@ class ClassifierService:
                 max_tokens=200,
             )
             result = json.loads(response.content.strip().strip("```json").strip("```"))
+            # Record token usage if db and request_id provided
+            if db and request_id:
+                await record_token_usage(db, request_id, response.usage, getattr(self.llm, 'provider_name', 'unknown'))
             # Validate
             if result.get("intent") not in INTENTS:
                 result["intent"] = "clarify"

@@ -40,6 +40,14 @@ class Config:
         self.DEBUG: bool = os.environ.get('DEBUG', 'False').lower() == 'true'
         self.LOG_LEVEL: str = os.environ.get('LOG_LEVEL', 'INFO')
         
+        # CORS Configuration
+        allowed_origins_str = os.environ.get('ALLOWED_ORIGINS', '')
+        self.ALLOWED_ORIGINS: List[str] = (
+            [o.strip() for o in allowed_origins_str.split(',') if o.strip()]
+            if allowed_origins_str.strip()
+            else ["*"]
+        )
+
         # Database Configuration
         self.DATABASE_URL: str = os.environ.get(
             'DATABASE_URL',

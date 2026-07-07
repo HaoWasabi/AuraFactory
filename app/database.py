@@ -1,4 +1,5 @@
 import asyncpg
+import logging
 import ssl
 import os
 from typing import Any, List, Optional
@@ -6,6 +7,8 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 
 from .config import config
+
+logger = logging.getLogger(__name__)
 
 
 class Database:
@@ -78,21 +81,44 @@ class Database:
                 yield conn
     
     async def run_migrations(self, migrations_dir: str) -> None:
-        """Read and execute all .sql migration files in order."""
+        """Read and execute all .sql migration files in order, tracking applied files."""
         if not self.pool:
             raise RuntimeError('Database not connected')
-        
+
         migrations_path = Path(migrations_dir)
         if not migrations_path.exists():
             return
-        
+
+        # Create tracking table and fetch already-applied migrations
+        async with self.pool.acquire() as conn:
+            await conn.execute("""
+                CREATE TABLE IF NOT EXISTS schema_migrations (
+                    filename TEXT PRIMARY KEY,
+                    applied_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+                )
+            """)
+            applied_rows = await conn.fetch("SELECT filename FROM schema_migrations")
+            applied = {r["filename"] for r in applied_rows}
+
         sql_files = sorted(migrations_path.glob('*.sql'))
-        
+
         async with self.pool.acquire() as conn:
             for sql_file in sql_files:
-                with open(sql_file, 'r') as f:
-                    migration_sql = f.read()
-                await conn.execute(migration_sql)
+                if sql_file.name in applied:
+                    logger.info("Migration already applied, skipping: %s", sql_file.name)
+                    continue
+                sql = sql_file.read_text()
+                try:
+                    async with conn.transaction():
+                        await conn.execute(sql)
+                        await conn.execute(
+                            "INSERT INTO schema_migrations (filename) VALUES ($1)",
+                            sql_file.name
+                        )
+                    logger.info("Migration applied: %s", sql_file.name)
+                except Exception as e:
+                    logger.error("Migration FAILED: %s — %s", sql_file.name, e)
+                    raise  # Stop migration sequence
 
 
 # Global database instance

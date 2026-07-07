@@ -12,6 +12,7 @@ Responsibilities:
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import time
 import uuid
@@ -158,6 +159,9 @@ class ExecutorService:
 
             if step_result["success"]:
                 completed_steps += 1
+                # Avoid Discord API 429 rate limit — delay between steps
+                if i < total_steps - 1:
+                    await asyncio.sleep(0.3)
             else:
                 # §5.6: On failure after ReAct retry → stop execution
                 logger.warning(
