@@ -27,24 +27,37 @@ class GuildSyncService:
             headers = {"Authorization": f"Bearer {access_token}"}
             async with session.get(f"{DISCORD_API}/users/@me/guilds", headers=headers) as resp:
                 if resp.status != 200:
-                    logger.error("Failed to fetch guilds for user %d: %s", user_id, resp.status)
+                    body = await resp.text()
+                    logger.error("Failed to fetch guilds for user %d: status=%s body=%s", user_id, resp.status, body[:200])
                     return []
                 all_guilds = await resp.json()
+
+        logger.info("Discord returned %d guilds for user %d", len(all_guilds), user_id)
 
         # Filter guilds where user has Administrator or Manage Server
         admin_guilds = []
         for guild in all_guilds:
-            perms = int(guild.get("permissions", 0))
-            is_admin = bool(perms & 0x8) or bool(perms & 0x20)
+            # Discord may return permissions as string or int
+            raw_perms = guild.get("permissions", guild.get("permissions_new", "0"))
+            try:
+                perms = int(raw_perms) if raw_perms else 0
+            except (ValueError, TypeError):
+                perms = 0
+            is_admin = bool(perms & 0x8) or bool(perms & 0x20)  # ADMINISTRATOR | MANAGE_GUILD
             is_owner = guild.get("owner", False)
-            if is_admin or is_owner:
+            # Also check if owner_id field matches (some API versions include this)
+            owner_id_match = (int(guild.get("owner_id", 0)) == user_id) if guild.get("owner_id") else False
+            if is_admin or is_owner or owner_id_match:
                 admin_guilds.append({
                     "guild_id": int(guild["id"]),
                     "guild_name": guild.get("name", ""),
-                    "is_owner": is_owner,
+                    "is_owner": is_owner or owner_id_match,
                     "permissions_bitfield": perms,
                     "icon": guild.get("icon", ""),
                 })
+
+        logger.info("Filtered %d admin/owner guilds for user %d (total fetched: %d)",
+                    len(admin_guilds), user_id, len(all_guilds))
 
         # Upsert into guild_admin_cache
         for g in admin_guilds:
