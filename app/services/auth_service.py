@@ -68,6 +68,11 @@ class AuthService:
             avatar = user_info.get("avatar", "")
             expires_at = datetime.now(timezone.utc) + timedelta(seconds=expires_in)
 
+            # If DB not available, return user info without persisting
+            if self.db is None:
+                logger.warning("DB unavailable — returning user info without persisting")
+                return {"discord_user_id": discord_user_id, "username": username, "avatar": avatar, "access_token": access_token}
+
             await self.db.execute(
                 """INSERT INTO users (discord_user_id, username, avatar_hash, access_token_enc, refresh_token_enc, token_expires_at, last_login_at)
                    VALUES ($1, $2, $3, $4, $5, $6, NOW())

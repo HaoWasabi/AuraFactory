@@ -33,15 +33,22 @@ async def lifespan(app: FastAPI):
     # === L2: Infrastructure ===
     from app.database import Database
     db = Database()
-    try:
-        await db.connect()
-        await db.run_migrations("migrations")
-        logger.info("✅ Database connected + migrations applied")
-    except Exception as e:
-        logger.warning("⚠️ Database unavailable: %s", e)
-        logger.warning("   App will start but DB-dependent features won't work.")
-        logger.warning("   Run 'docker-compose up -d' to start PostgreSQL.")
-        db = None
+    db_connected = False
+    for attempt in range(5):
+        try:
+            await db.connect()
+            await db.run_migrations("migrations")
+            logger.info("✅ Database connected + migrations applied")
+            db_connected = True
+            break
+        except Exception as e:
+            if attempt < 4:
+                wait = 2 ** attempt  # 1, 2, 4, 8 seconds
+                logger.warning("⚠️ DB connection attempt %d failed: %s — retrying in %ds...", attempt + 1, e, wait)
+                await asyncio.sleep(wait)
+            else:
+                logger.error("❌ Database connection failed after 5 attempts: %s", e)
+                raise RuntimeError(f"Cannot start without database: {e}")
 
     from app.llm import get_llm
     llm = None
