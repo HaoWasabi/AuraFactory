@@ -5,7 +5,6 @@
 ### create
 - description: Create a new webhook for a channel
 - risk: medium
-- agent: assistant
 - parameters:
   - guild_id (int, required): Target guild ID
   - channel_id (int, required): Channel to create webhook in
@@ -16,7 +15,6 @@
 ### delete
 - description: Delete an existing webhook
 - risk: high
-- agent: admin
 - parameters:
   - guild_id (int, required): Target guild ID
   - webhook_id (int, required): Webhook ID to delete
@@ -25,7 +23,6 @@
 ### list
 - description: List all webhooks in the guild or a specific channel
 - risk: low
-- agent: fast_track
 - parameters:
   - guild_id (int, required): Target guild ID
   - channel_id (int, optional): Filter by channel ID

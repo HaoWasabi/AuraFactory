@@ -1,16 +1,49 @@
-"""Data models for AuraFactory."""
+"""AuraFactory models package - Pydantic schemas for database and API."""
 
-from .messages import IncomingMessage, OutgoingMessage
-from .sessions import Session
-from .tasks import TaskAssignment, TaskResult
-from .memory import ProceduralRule, KnowledgeSnapshot
+from .schemas import (
+    # Identity
+    UserRecord,
+    GuildAdminEntry,
+    BotInstall,
+    # Session & Messages
+    Session,
+    Message,
+    # Request Pipeline
+    Request,
+    Plan,
+    PlanStep,
+    AuditEntry,
+    # Server Context
+    ServerSnapshot,
+    # Constants
+    VALID_REQUEST_STATUSES,
+    VALID_PLAN_STATUSES,
+    VALID_STEP_STATUSES,
+    RISK_LEVELS,
+    PERMISSIONS,
+    RISK_REQUIRED_ROLE,
+)
 
 __all__ = [
-    "IncomingMessage",
-    "OutgoingMessage",
+    # Identity
+    "UserRecord",
+    "GuildAdminEntry",
+    "BotInstall",
+    # Session & Messages
     "Session",
-    "TaskAssignment",
-    "TaskResult",
-    "ProceduralRule",
-    "KnowledgeSnapshot",
+    "Message",
+    # Request Pipeline
+    "Request",
+    "Plan",
+    "PlanStep",
+    "AuditEntry",
+    # Server Context
+    "ServerSnapshot",
+    # Constants
+    "VALID_REQUEST_STATUSES",
+    "VALID_PLAN_STATUSES",
+    "VALID_STEP_STATUSES",
+    "RISK_LEVELS",
+    "PERMISSIONS",
+    "RISK_REQUIRED_ROLE",
 ]

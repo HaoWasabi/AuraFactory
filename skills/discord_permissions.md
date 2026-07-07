@@ -5,7 +5,6 @@
 ### set_channel_perms
 - description: Set permission overwrites for a role or member on a specific channel
 - risk: high
-- agent: admin
 - parameters:
   - guild_id (int, required): Target guild ID
   - channel_id (int, required): Channel to set permissions on
@@ -18,7 +17,6 @@
 ### set_role_perms
 - description: Set the base permission bitfield for a guild role
 - risk: high
-- agent: admin
 - parameters:
   - guild_id (int, required): Target guild ID
   - role_id (int, required): Role ID to modify
@@ -28,7 +26,6 @@
 ### sync
 - description: Sync channel permissions with its parent category
 - risk: medium
-- agent: assistant
 - parameters:
   - guild_id (int, required): Target guild ID
   - channel_id (int, required): Channel to sync permissions for

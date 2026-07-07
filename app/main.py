@@ -1,37 +1,28 @@
-# app/main.py
 """
 AuraFactory — Main Entrypoint.
 FastAPI application with lifespan managing all services.
-DI container pattern via app.state.
-
-Architecture:
-  Channel (Discord/API/Web) → Gateway → Orchestrator → Agent → MCP Tools → Response
+7-layer architecture: Config → Infra → Models → MCP → Connectors → Services → Interfaces
 """
 import asyncio
 import logging
 import time
 from contextlib import asynccontextmanager
-from pathlib import Path
 
-from fastapi import FastAPI, Request
-from fastapi.responses import JSONResponse, PlainTextResponse
-from fastapi.staticfiles import StaticFiles
+from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
+from fastapi.responses import FileResponse
 
-from app.config.settings import settings
+from app.config import settings
 
 # Configure logging
 logging.basicConfig(
-    level=getattr(logging, settings.log_level, logging.INFO),
+    level=getattr(logging, settings.LOG_LEVEL, logging.INFO),
     format="%(asctime)s | %(levelname)-8s | %(name)s | %(message)s",
     datefmt="%Y-%m-%d %H:%M:%S",
 )
 logger = logging.getLogger(__name__)
 
-
-# ================================================================
-# Lifespan — Startup & Shutdown
-# ================================================================
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -39,322 +30,167 @@ async def lifespan(app: FastAPI):
     logger.info("🚀 AuraFactory starting up...")
     start_time = time.time()
 
-    # Store start time
-    app.state.start_time = start_time
-
-    # Session store (in-memory, signed cookies for validation)
-    app.state.session_store = {}
-
-    # Approval store (in-memory HITL queue)
-    app.state.approval_store = {}
-
-    # === Infrastructure Services ===
+    # === L2: Infrastructure ===
+    from app.database import Database
+    db = Database()
     try:
-        # Database
-        from app.infra.database import DatabasePool
-        db = DatabasePool(settings.database_url)
         await db.connect()
-        app.state.db = db
-        logger.info("✅ Database connected")
+        await db.run_migrations("migrations")
+        logger.info("✅ Database connected + migrations applied")
     except Exception as e:
-        logger.warning(f"⚠️ Database unavailable (running without): {e}")
-        app.state.db = None
+        logger.warning("⚠️ Database unavailable: %s", e)
+        logger.warning("   App will start but DB-dependent features won't work.")
+        logger.warning("   Run 'docker-compose up -d' to start PostgreSQL.")
+        db = None
 
-    # LLM Router
-    from app.infra.llm import get_provider, ModelRouter
+    from app.llm import get_llm
+    llm = None
     try:
-        primary_provider = get_provider(settings.llm_provider)
-        llm_router = ModelRouter(primary=primary_provider)
-        app.state.llm_router = llm_router
-        app.state.llm = primary_provider
-        logger.info(f"✅ LLM provider: {settings.llm_provider}")
+        llm = get_llm(
+            provider=settings.LLM_PROVIDER,
+            model=settings.GEMINI_MODEL,
+            api_key=settings.GEMINI_API_KEY,
+        )
+        logger.info("✅ LLM provider: %s (%s)", settings.LLM_PROVIDER, settings.GEMINI_MODEL)
     except Exception as e:
-        logger.error(f"❌ LLM initialization failed: {e}")
-        raise RuntimeError(f"Cannot start without LLM: {e}")
+        logger.warning("⚠️ LLM unavailable: %s", e)
+        logger.warning("   Set GEMINI_API_KEY in .env to enable AI features.")
 
-    # Cache
-    from app.infra.cache import InMemoryCache
-    cache = InMemoryCache()
-    app.state.cache = cache
-    logger.info("✅ Cache initialized (in-memory)")
-
-    # Observability
-    from app.infra.observability import Tracer, metrics
-    tracer = Tracer()
-    app.state.tracer = tracer
-    app.state.metrics = metrics
-    logger.info("✅ Tracer initialized")
-
-    # === Knowledge & Memory ===
-    from app.knowledge import ServerKnowledgeStore, ServerCrawler
-    knowledge_store = ServerKnowledgeStore()
-    app.state.knowledge_store = knowledge_store
-    logger.info("✅ Knowledge store ready")
-
-    from app.memory import MemoryService
-    memory_service = MemoryService(db=app.state.db)
-    app.state.memory = memory_service
-    logger.info("✅ Memory service ready")
-
-    # === Skills & MCP ===
-    from app.skills import SkillRegistry
-    skill_registry = SkillRegistry()
-    await skill_registry.init_skills()
-    app.state.skill_registry = skill_registry
-    logger.info(f"✅ Skills loaded: {skill_registry.count()} skills")
-
+    # === L4: MCP ===
     from app.mcp import MCPClient
+    from app.mcp.servers.discord_server import DiscordMCPServer
+
     mcp_client = MCPClient()
-    app.state.mcp_client = mcp_client
+    discord_mcp_server = DiscordMCPServer()
+    # Note: bot reference set later in on_ready
+    mcp_client.register_server(discord_mcp_server)
+    logger.info("✅ MCP client ready (discord server registered, awaiting bot)")
 
-    # Register MCP servers (Discord tools, etc.)
-    try:
-        from app.mcp.servers import register_all_servers
-        await register_all_servers(mcp_client)
-        logger.info(f"✅ MCP servers registered: {len(mcp_client._servers)} servers")
-    except ImportError:
-        logger.warning("⚠️ MCP servers module not found — running without tool servers")
-    except Exception as e:
-        logger.warning(f"⚠️ MCP server registration partial: {e}")
+    # === L6: Services ===
+    from app.services.request_service import RequestService
+    from app.services.classifier_service import ClassifierService
+    from app.services.context_service import ContextService
+    from app.services.planner_service import PlannerService
+    from app.services.approval_service import ApprovalService
+    from app.services.executor_service import ExecutorService
+    from app.services.query_service import QueryService
+    from app.services.auth_service import AuthService
+    from app.services.guild_sync_service import GuildSyncService
 
-    # === Gateway Pipeline ===
-    from app.gateway import GatewayPipeline
-    from app.gateway.rate_limiter import RateLimiter
-    from app.gateway.session_manager import SessionManager
+    request_service = RequestService(db)
+    classifier_service = ClassifierService(llm)
+    context_service = ContextService(db, mcp_client)
+    planner_service = PlannerService(db, llm, mcp_client, context_service)
+    approval_service = ApprovalService(db)
+    executor_service = ExecutorService(db, mcp_client, llm, context_service)
+    query_service = QueryService(llm, mcp_client, context_service)
+    auth_service = AuthService(db)
+    guild_sync_service = GuildSyncService(db)
 
-    gateway = GatewayPipeline(
-        rate_limiter=RateLimiter(),
-        session_manager=SessionManager(),
-        tracer=tracer,
-    )
-    app.state.gateway = gateway
-    logger.info("✅ Gateway pipeline ready")
+    services = {
+        "request_service": request_service,
+        "classifier_service": classifier_service,
+        "context_service": context_service,
+        "planner_service": planner_service,
+        "approval_service": approval_service,
+        "executor_service": executor_service,
+        "query_service": query_service,
+        "auth_service": auth_service,
+        "guild_sync_service": guild_sync_service,
+    }
+    logger.info("✅ All services initialized")
 
-    # === Agents ===
-    from app.agents import OrchestratorAgent, AdminAgent, AssistantAgent, ArchitectAgent
-    from app.agents.fast_track import FastTrackExecutor
-    from app.agents.contracts import AgentRole, IntentType, TaskAssignment, TaskResult
+    # === L7: Interfaces ===
+    from app.interfaces import DiscordBot, create_api_router
 
-    orchestrator = OrchestratorAgent(
-        llm=primary_provider,
-        mcp_client=mcp_client,
-        knowledge_store=knowledge_store,
-        memory=memory_service,
-    )
+    # API routes
+    api_router = create_api_router(services)
+    app.include_router(api_router)
+    logger.info("✅ API routes registered")
 
-    admin_agent = AdminAgent(
-        llm=primary_provider,
-        mcp_client=mcp_client,
-        knowledge_store=knowledge_store,
-    )
-
-    assistant_agent = AssistantAgent(
-        llm=primary_provider,
-        knowledge_store=knowledge_store,
-        memory=memory_service,
-    )
-
-    architect_agent = ArchitectAgent(
-        llm=primary_provider,
-        mcp_client=mcp_client,
-    )
-
-    fast_track = FastTrackExecutor(
-        llm=primary_provider,
-        mcp_client=mcp_client,
-    )
-
-    # Wire agents
-    orchestrator.set_admin_agent(admin_agent)
-    orchestrator.set_assistant_agent(assistant_agent)
-    orchestrator.set_fast_track(fast_track)
-    admin_agent.set_architect(architect_agent)
-
-    app.state.orchestrator = orchestrator
-    app.state.admin_agent = admin_agent
-    app.state.assistant_agent = assistant_agent
-    app.state.architect_agent = architect_agent
-    app.state.fast_track = fast_track
-    logger.info("✅ All agents initialized and wired")
-
-    # === Process Message Function (DI entry point) ===
-    from app.models.messages import IncomingMessage, OutgoingMessage
-
-    async def process_message(msg: IncomingMessage) -> OutgoingMessage:
-        """Central message processing — Gateway → Orchestrator → Response."""
-        # Run through gateway
-        gateway_result = await gateway.process(msg)
-
-        if not gateway_result.passed:
-            return OutgoingMessage(
-                content=gateway_result.reason,
-                trace_id=msg.trace_id,
-                target_channel_id=msg.channel_id,
-                source=msg.source,
-            )
-
-        # Build TaskAssignment from IncomingMessage + GatewayResult
-        task = TaskAssignment(
-            trace_id=msg.trace_id,
-            intent=IntentType.FAST_TRACK,  # placeholder — orchestrator will re-classify
-            agent_role=AgentRole.ORCHESTRATOR,
-            message=msg,
-            context={"user_role": gateway_result.user_role, "session": gateway_result.session},
-            user_role=gateway_result.user_role,
-            guild_id=msg.guild_id,
-            session_id=gateway_result.session.session_id if gateway_result.session else "",
-        )
-
-        # Route to orchestrator
-        result = await orchestrator.execute(task)
-
-        return OutgoingMessage(
-            content=result.content,
-            trace_id=result.trace_id,
-            target_channel_id=msg.channel_id,
-            source=msg.source,
-            metadata={"tools_called": result.tools_called, "status": result.status},
-        )
-
-    app.state.process_message = process_message
-
-    # === Discord Bot (background task) ===
-    from app.channels.discord_adapter import DiscordAdapter
-
-    crawler = ServerCrawler(knowledge_store=knowledge_store)
-
-    discord_adapter = DiscordAdapter(
-        token=settings.discord_token,
-        process_message_fn=process_message,
-        knowledge_crawler=crawler,
-    )
-    app.state.discord_adapter = discord_adapter
-
-    # Start bot in background (non-blocking)
+    # Discord bot (background task)
+    bot = None
     bot_task = None
-    if settings.discord_token:
-        bot_task = asyncio.create_task(_start_bot(discord_adapter))
+    if settings.DISCORD_TOKEN:
+        bot = DiscordBot(services=services, mcp_discord_server=discord_mcp_server)
+        bot_task = asyncio.create_task(_run_bot(bot))
         logger.info("🤖 Discord bot starting in background...")
     else:
         logger.warning("⚠️ No DISCORD_TOKEN — bot will not connect")
 
-    # === Include Routers ===
-    from app.channels.api_adapter import router as api_router
-    from app.channels.web_routes import router as web_router
+    # Store refs on app.state for access in routes if needed
+    app.state.db = db
+    app.state.services = services
+    app.state.bot = bot
 
-    app.include_router(api_router)
-    app.include_router(web_router)
-
-    # === Startup Complete ===
     elapsed = time.time() - start_time
-    logger.info(f"✅ AuraFactory ready in {elapsed:.2f}s")
+    logger.info("✅ AuraFactory ready in %.2fs", elapsed)
 
-    yield  # Application is running
+    yield  # App is running
 
     # === Shutdown ===
     logger.info("🛑 AuraFactory shutting down...")
-
-    # Stop Discord bot
-    if discord_adapter:
-        await discord_adapter.stop()
-
-    # Cancel bot task
+    if bot:
+        await bot.close()
     if bot_task and not bot_task.done():
         bot_task.cancel()
         try:
             await bot_task
         except asyncio.CancelledError:
             pass
-
-    # Disconnect database
-    if app.state.db:
-        await app.state.db.disconnect()
-
+    await db.disconnect()
     logger.info("👋 AuraFactory stopped.")
 
 
-async def _start_bot(adapter: "DiscordAdapter") -> None:
-    """Start Discord bot — handles reconnection."""
+async def _run_bot(bot):
+    """Run Discord bot with error handling."""
     try:
-        await adapter.start()
+        await bot.start(settings.DISCORD_TOKEN)
     except Exception as e:
-        logger.error(f"Discord bot error: {e}", exc_info=True)
+        logger.error("Discord bot error: %s", e, exc_info=True)
 
 
-# ================================================================
-# FastAPI Application
-# ================================================================
-
+# === FastAPI App ===
 app = FastAPI(
     title="AuraFactory",
-    description="AI-powered Discord server management system",
-    version="1.0.0",
+    description="AI-powered Discord server management",
+    version="5.0",
     lifespan=lifespan,
 )
 
-# CORS middleware
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=["*"],  # Restrict in production
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
-# Mount static files
-static_path = Path("frontend/static")
-if static_path.exists():
-    app.mount("/static", StaticFiles(directory=str(static_path)), name="static")
+
+# === Static files + Page routes ===
+app.mount("/static", StaticFiles(directory="frontend/static"), name="static")
 
 
-# ================================================================
-# Root Health Endpoints (for Render)
-# ================================================================
-
-@app.head("/")
-async def head_root():
-    """HEAD / — Render health check."""
-    return PlainTextResponse("OK")
+@app.get("/")
+async def serve_index():
+    return FileResponse("frontend/index.html")
 
 
-@app.get("/ping")
-async def ping():
-    """Simple ping endpoint."""
-    return {"ping": "pong"}
+@app.get("/login")
+async def serve_login():
+    return FileResponse("frontend/templates/login.html")
 
 
-# ================================================================
-# Global Error Handlers
-# ================================================================
-
-@app.exception_handler(404)
-async def not_found_handler(request: Request, exc):
-    """Custom 404 handler."""
-    if request.url.path.startswith("/api/"):
-        return JSONResponse(
-            status_code=404,
-            content={"error": "Not found", "path": request.url.path},
-        )
-    return JSONResponse(
-        status_code=404,
-        content={"error": "Không tìm thấy trang."},
-    )
+@app.get("/dashboard")
+async def serve_dashboard():
+    return FileResponse("frontend/templates/dashboard.html")
 
 
-@app.exception_handler(500)
-async def internal_error_handler(request: Request, exc):
-    """Custom 500 handler."""
-    logger.error(f"Internal error on {request.url.path}: {exc}", exc_info=True)
-    return JSONResponse(
-        status_code=500,
-        content={"error": "Lỗi hệ thống. Vui lòng thử lại sau."},
-    )
+@app.get("/auth/callback")
+async def serve_callback():
+    return FileResponse("frontend/templates/callback.html")
 
 
-@app.exception_handler(429)
-async def rate_limit_handler(request: Request, exc):
-    """Rate limit exceeded."""
-    return JSONResponse(
-        status_code=429,
-        content={"error": "Bạn đang gửi quá nhanh. Vui lòng đợi."},
-    )
+@app.get("/health")
+async def health():
+    return {"status": "ok", "service": "AuraFactory", "version": "5.0"}

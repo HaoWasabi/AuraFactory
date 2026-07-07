@@ -1,154 +1,64 @@
-"""
-MCP Protocol — Data classes for the Model Context Protocol layer.
-
-Defines the core types used across the MCP system:
-- ToolDefinition: metadata for a registered tool
-- MCPRequest / MCPResponse: request/response envelope
-- RiskLevel: enum for tool risk classification
-"""
-
+"""MCP Protocol data structures."""
 from __future__ import annotations
-
-import uuid
 from dataclasses import dataclass, field
 from enum import IntEnum
-from typing import Any, Optional
+from typing import Any, Dict, List, Optional
+import uuid
 
 
 class RiskLevel(IntEnum):
-    """Risk classification for MCP tools.
-
-    Higher values = more dangerous operations.
-    Agents are filtered to only access tools at or below their clearance.
-    """
-
     LOW = 1
     MEDIUM = 2
     HIGH = 3
     CRITICAL = 4
 
-    @classmethod
-    def from_string(cls, value: str) -> "RiskLevel":
-        """Parse a risk level from string (case-insensitive)."""
-        mapping = {
-            "low": cls.LOW,
-            "medium": cls.MEDIUM,
-            "high": cls.HIGH,
-            "critical": cls.CRITICAL,
-        }
-        normalized = value.strip().lower()
-        if normalized not in mapping:
-            raise ValueError(
-                f"Invalid risk level '{value}'. "
-                f"Must be one of: {list(mapping.keys())}"
-            )
-        return mapping[normalized]
 
-    def __str__(self) -> str:
-        return self.name.lower()
-
-
-@dataclass(frozen=True)
+@dataclass
 class ToolDefinition:
-    """Metadata describing a single MCP tool.
-
-    Attributes:
-        name: Fully-qualified tool name (e.g. 'discord.channels.create').
-        description: Human-readable description for the LLM.
-        parameters: JSON-Schema-style dict describing accepted params.
-        risk_level: Risk classification (low|medium|high|critical).
-    """
-
-    name: str
+    """Definition of a tool available via MCP."""
+    name: str                          # e.g. 'discord.channels.create'
     description: str
-    parameters: dict = field(default_factory=dict)
-    risk_level: str = "low"
+    parameters: Dict[str, Any] = field(default_factory=dict)  # JSON Schema for params
+    risk: RiskLevel = RiskLevel.MEDIUM
+    category: str = ""                 # e.g. 'setup', 'moderation'
+    risk_level: str = ""               # Compat alias: "low"/"medium"/"high"/"critical"
 
-    @property
-    def risk(self) -> RiskLevel:
-        """Return the parsed RiskLevel enum value."""
-        return RiskLevel.from_string(self.risk_level)
+    def __post_init__(self):
+        """Convert risk_level string to RiskLevel enum if provided."""
+        if self.risk_level and not isinstance(self.risk, RiskLevel):
+            self.risk = self._parse_risk(self.risk_level)
+        elif self.risk_level:
+            self.risk = self._parse_risk(self.risk_level)
 
-    def to_dict(self) -> dict:
-        """Serialize to a plain dict (for LLM tool manifests)."""
+    @staticmethod
+    def _parse_risk(level: str) -> RiskLevel:
+        mapping = {"low": RiskLevel.LOW, "medium": RiskLevel.MEDIUM, "high": RiskLevel.HIGH, "critical": RiskLevel.CRITICAL}
+        return mapping.get(level.lower(), RiskLevel.MEDIUM)
+
+    def to_llm_schema(self) -> Dict[str, Any]:
+        """Convert to format suitable for LLM function calling."""
         return {
             "name": self.name,
             "description": self.description,
             "parameters": self.parameters,
-            "risk_level": self.risk_level,
         }
-
-    @classmethod
-    def from_dict(cls, data: dict) -> "ToolDefinition":
-        """Deserialize from a plain dict."""
-        return cls(
-            name=data["name"],
-            description=data["description"],
-            parameters=data.get("parameters", {}),
-            risk_level=data.get("risk_level", "low"),
-        )
 
 
 @dataclass
 class MCPRequest:
-    """Incoming request to an MCP server.
-
-    Attributes:
-        method: The tool name to invoke (e.g. 'discord.channels.create').
-        params: Parameters to pass to the tool handler.
-        request_id: Unique identifier for tracing; auto-generated if omitted.
-    """
-
-    method: str
-    params: dict = field(default_factory=dict)
+    """A request to invoke a tool."""
+    method: str                        # tool name
+    params: Dict[str, Any] = field(default_factory=dict)
     request_id: str = field(default_factory=lambda: str(uuid.uuid4()))
-
-    def to_dict(self) -> dict:
-        return {
-            "method": self.method,
-            "params": self.params,
-            "request_id": self.request_id,
-        }
-
-    @classmethod
-    def from_dict(cls, data: dict) -> "MCPRequest":
-        return cls(
-            method=data["method"],
-            params=data.get("params", {}),
-            request_id=data.get("request_id", str(uuid.uuid4())),
-        )
 
 
 @dataclass
 class MCPResponse:
-    """Response from an MCP server after handling a request.
-
-    Attributes:
-        result: The return value from the tool (None on error).
-        error: Error message if the tool failed; None on success.
-        request_id: Echoed from the corresponding MCPRequest.
-    """
-
-    result: Any = None
+    """Response from a tool invocation."""
+    result: Optional[Dict[str, Any]] = None
     error: Optional[str] = None
     request_id: str = ""
 
     @property
     def success(self) -> bool:
-        """True if no error occurred."""
         return self.error is None
-
-    def to_dict(self) -> dict:
-        return {
-            "result": self.result,
-            "error": self.error,
-            "request_id": self.request_id,
-        }
-
-    @classmethod
-    def from_dict(cls, data: dict) -> "MCPResponse":
-        return cls(
-            result=data.get("result"),
-            error=data.get("error"),
-            request_id=data.get("request_id", ""),
-        )

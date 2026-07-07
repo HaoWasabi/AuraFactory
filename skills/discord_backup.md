@@ -5,7 +5,6 @@
 ### export_structure
 - description: Export the complete guild structure (channels, roles, categories, permissions) as JSON
 - risk: low
-- agent: fast_track
 - parameters:
   - guild_id (int, required): Target guild ID
   - include_permissions (bool, optional): Whether to include channel permission overwrites (default true)
@@ -14,7 +13,6 @@
 ### import_structure
 - description: Import a previously exported guild structure and recreate channels, roles, and categories
 - risk: critical
-- agent: admin
 - parameters:
   - guild_id (int, required): Target guild ID
   - structure (dict, required): Previously exported structure JSON object

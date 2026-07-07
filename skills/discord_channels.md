@@ -5,7 +5,6 @@
 ### create
 - description: Create a new text or voice channel in the guild
 - risk: medium
-- agent: assistant
 - parameters:
   - guild_id (int, required): Target guild ID
   - name (str, required): Channel name (auto-slugified)
@@ -20,7 +19,6 @@
 ### delete
 - description: Delete an existing channel from the guild
 - risk: high
-- agent: admin
 - parameters:
   - guild_id (int, required): Target guild ID
   - channel_id (int, required): Channel ID to delete
@@ -29,7 +27,6 @@
 ### rename
 - description: Rename an existing channel
 - risk: medium
-- agent: assistant
 - parameters:
   - guild_id (int, required): Target guild ID
   - channel_id (int, required): Channel ID to rename
@@ -39,7 +36,6 @@
 ### move
 - description: Move a channel to a different category or position
 - risk: medium
-- agent: assistant
 - parameters:
   - guild_id (int, required): Target guild ID
   - channel_id (int, required): Channel ID to move
@@ -50,7 +46,6 @@
 ### edit
 - description: Edit channel properties (topic, slowmode, nsfw, bitrate, user_limit)
 - risk: medium
-- agent: assistant
 - parameters:
   - guild_id (int, required): Target guild ID
   - channel_id (int, required): Channel ID to edit
@@ -64,7 +59,6 @@
 ### list
 - description: List all channels in the guild or a specific category
 - risk: low
-- agent: fast_track
 - parameters:
   - guild_id (int, required): Target guild ID
   - category_id (int, optional): Filter by parent category ID

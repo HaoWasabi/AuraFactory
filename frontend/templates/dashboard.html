@@ -147,221 +147,237 @@
     <script>
         // ===== State =====
         let currentGuild = null;
-        let approvalPollTimer = null;
+        let currentUser = null;
         let isWaitingResponse = false;
 
         // Configure marked.js
-        marked.setOptions({
-            breaks: true,
-            gfm: true,
+        marked.setOptions({ breaks: true, gfm: true });
+
+        // ===== Init =====
+        document.addEventListener('DOMContentLoaded', async () => {
+            // Check if user is logged in (token in localStorage)
+            currentUser = storageGet('user');
+            if (!currentUser) {
+                window.location.href = '/login';
+                return;
+            }
+            // Show user info
+            document.getElementById('navUsername').textContent = currentUser.username || '';
+            if (currentUser.avatar) {
+                const avatarUrl = `https://cdn.discordapp.com/avatars/${currentUser.id}/${currentUser.avatar}.png?size=32`;
+                document.getElementById('navAvatar').src = avatarUrl;
+            }
+            // Load guilds
+            await loadGuilds();
         });
 
-        // ===== Translations (i18n) =====
-        const TRANSLATIONS = {
-            vi: {
-                server_info: "Thông tin Server",
-                channels: "Kênh",
-                roles: "Vai trò",
-                members: "Thành viên",
-                quick_guide: "Hướng dẫn nhanh",
-                select_server: "Chọn server...",
-                pending_approvals: "Phê duyệt chờ xử lý",
-                no_pending: "Không có yêu cầu chờ duyệt",
-                send_placeholder: "Nhập lệnh hoặc câu hỏi...",
-                approve: "✓ Duyệt",
-                reject: "✕ Từ chối",
-                logout: "Đăng xuất",
-                assistant_mode: "Chế độ Assistant",
-                assistant_desc: "Cho phép thành viên hỏi thông tin server",
-                assistant_on: "Bật",
-                assistant_off: "Tắt",
-            },
-            en: {
-                server_info: "Server Info",
-                channels: "Channels",
-                roles: "Roles",
-                members: "Members",
-                quick_guide: "Quick Guide",
-                select_server: "Select server...",
-                pending_approvals: "Pending Approvals",
-                no_pending: "No pending approvals",
-                send_placeholder: "Type a command or question...",
-                approve: "✓ Approve",
-                reject: "✕ Reject",
-                logout: "Log out",
-                assistant_mode: "Assistant Mode",
-                assistant_desc: "Allow members to ask server info",
-                assistant_on: "On",
-                assistant_off: "Off",
-            }
-        };
-
-        function toggleLanguage() {
-            const current = storageGet('language', 'vi');
-            const next = current === 'vi' ? 'en' : 'vi';
-            storageSet('language', next);
-            applyLanguage(next);
-        }
-
-        function applyLanguage(lang) {
-            const t = TRANSLATIONS[lang];
-            if (!t) return;
-
-            document.getElementById('langBtn').textContent = '🌐 ' + lang.toUpperCase();
-
-            // Update all translatable elements using data-i18n attributes
-            document.querySelectorAll('[data-i18n]').forEach(el => {
-                const key = el.getAttribute('data-i18n');
-                if (t[key]) el.textContent = t[key];
-            });
-
-            // Update placeholders
-            document.querySelectorAll('[data-i18n-placeholder]').forEach(el => {
-                const key = el.getAttribute('data-i18n-placeholder');
-                if (t[key]) el.placeholder = t[key];
-            });
-
-            // Update the first option in guild select
-            const selectFirstOption = document.querySelector('#guildSelect option[value=""]');
-            if (selectFirstOption && t.select_server) {
-                selectFirstOption.textContent = t.select_server;
-            }
-
-            // Update assistant toggle label
-            const assistantToggle = document.getElementById('assistantToggle');
-            const assistantLabel = document.getElementById('assistantLabel');
-            if (assistantToggle && assistantLabel) {
-                assistantLabel.textContent = assistantToggle.checked ? t.assistant_on : t.assistant_off;
-            }
-        }
-
-        // ===== Initialize =====
-        document.addEventListener('DOMContentLoaded', () => {
-            loadUser();
-            startApprovalPolling();
-            // Apply saved language
-            const savedLang = storageGet('language', 'vi');
-            applyLanguage(savedLang);
-        });
-
-        // ===== User & Auth =====
-        async function loadUser() {
+        // ===== Guild Loading (§5.1 steps 2-4) =====
+        async function loadGuilds() {
             try {
-                const user = await api('GET', '/auth/me');
-                if (!user) return;
+                const data = await api('GET', `/api/auth/guilds?user_id=${currentUser.id}`);
+                if (!data || !data.guilds) return;
 
-                // Update navbar
-                const navUsername = document.getElementById('navUsername');
-                const navAvatar = document.getElementById('navAvatar');
+                const select = document.getElementById('guildSelect');
+                select.innerHTML = '<option value="">Chọn server...</option>';
 
-                navUsername.textContent = user.username || user.global_name || 'User';
+                // Split into "ready" and "not installed"
+                const ready = data.guilds.filter(g => g.bot_installed);
+                const notReady = data.guilds.filter(g => !g.bot_installed);
 
-                if (user.avatar && user.id) {
-                    navAvatar.src = `https://cdn.discordapp.com/avatars/${user.id}/${user.avatar}.png?size=64`;
-                    navAvatar.style.display = 'block';
-                }
-
-                // FIX #1: Populate guild selector — guilds have id and name from Discord API
-                if (user.guilds && user.guilds.length > 0) {
-                    const select = document.getElementById('guildSelect');
-                    const lang = storageGet('language', 'vi');
-                    const t = TRANSLATIONS[lang];
-                    select.innerHTML = `<option value="">${t.select_server}</option>`;
-                    user.guilds.forEach(guild => {
-                        const option = document.createElement('option');
-                        option.value = guild.id;
-                        option.textContent = guild.name;
-                        select.appendChild(option);
+                if (ready.length > 0) {
+                    const group1 = document.createElement('optgroup');
+                    group1.label = '✅ Server sẵn sàng';
+                    ready.forEach(g => {
+                        const opt = document.createElement('option');
+                        opt.value = g.guild_id;
+                        opt.textContent = g.guild_name;
+                        group1.appendChild(opt);
                     });
-
-                    // Auto-select first guild or saved guild
-                    const savedGuild = storageGet('selectedGuild');
-                    if (savedGuild && user.guilds.find(g => String(g.id) === String(savedGuild))) {
-                        select.value = savedGuild;
-                        selectGuild(savedGuild);
-                    }
+                    select.appendChild(group1);
                 }
-            } catch (err) {
-                console.error('Failed to load user:', err);
-                showToast('Không thể tải thông tin người dùng', 'error');
-            }
-        }
 
-        function logout() {
-            window.location.href = '/auth/logout';
+                if (notReady.length > 0) {
+                    const group2 = document.createElement('optgroup');
+                    group2.label = '⚠️ Chưa cài bot';
+                    notReady.forEach(g => {
+                        const opt = document.createElement('option');
+                        opt.value = `install_${g.guild_id}`;
+                        opt.textContent = `${g.guild_name} (cài bot →)`;
+                        group2.appendChild(opt);
+                    });
+                    select.appendChild(group2);
+                }
+            } catch (e) {
+                console.error('Failed to load guilds:', e);
+            }
         }
 
         // ===== Guild Selection =====
-        function selectGuild(guildId) {
-            if (!guildId) {
-                currentGuild = null;
+        async function selectGuild(value) {
+            if (!value) return;
+
+            // Handle "install bot" selection
+            if (value.startsWith('install_')) {
+                const guildId = value.replace('install_', '');
+                const data = await api('GET', `/api/auth/bot-invite?guild_id=${guildId}`);
+                if (data && data.url) {
+                    window.open(data.url, '_blank');
+                }
+                document.getElementById('guildSelect').value = '';
                 return;
             }
-            currentGuild = guildId;
-            storageSet('selectedGuild', guildId);
-            loadKnowledge(guildId);
-            loadGuildSettings(guildId);
+
+            currentGuild = parseInt(value);
+            document.getElementById('channelCount').textContent = '...';
+            document.getElementById('roleCount').textContent = '...';
+            document.getElementById('memberCount').textContent = '...';
+            showToast(`Đã chọn server`, 'info');
         }
 
-        async function loadKnowledge(guildId) {
-            try {
-                // FIX #2: Endpoint now returns flat data
-                const data = await api('GET', `/knowledge/${guildId}`);
-                if (data) {
-                    document.getElementById('channelCount').textContent = data.channels_count || 0;
-                    document.getElementById('roleCount').textContent = data.roles_count || 0;
-                    document.getElementById('memberCount').textContent = data.members_count || 0;
-                }
-            } catch (err) {
-                // Knowledge endpoint might not have data yet — show defaults
-                document.getElementById('channelCount').textContent = '—';
-                document.getElementById('roleCount').textContent = '—';
-                document.getElementById('memberCount').textContent = '—';
-            }
-        }
-
-        // ===== Assistant Mode Toggle (FIX #5) =====
-        async function loadGuildSettings(guildId) {
-            try {
-                const data = await api('GET', `/api/v1/settings/${guildId}`);
-                if (data && data.settings) {
-                    const toggle = document.getElementById('assistantToggle');
-                    toggle.checked = data.settings.assistant_enabled !== false;
-                    updateAssistantLabel(toggle.checked);
-                }
-            } catch (err) {
-                // Use localStorage fallback
-                const saved = storageGet(`assistant_${guildId}`, true);
-                document.getElementById('assistantToggle').checked = saved;
-                updateAssistantLabel(saved);
-            }
-        }
-
-        function toggleAssistant(enabled) {
+        // ===== Send Message (§5.3-5.6 Pipeline) =====
+        async function sendMessage() {
+            const input = document.getElementById('chatInput');
+            const message = input.value.trim();
+            if (!message || isWaitingResponse) return;
             if (!currentGuild) {
-                showToast('Chọn server trước', 'warning');
-                document.getElementById('assistantToggle').checked = !enabled;
+                showToast('Chọn server trước!', 'warning');
                 return;
             }
-            storageSet(`assistant_${currentGuild}`, enabled);
-            updateAssistantLabel(enabled);
 
-            // Send to API (fire and forget)
-            api('POST', '/api/v1/settings', {
-                guild_id: String(currentGuild),
-                assistant_enabled: enabled
-            }).catch(err => {
-                console.warn('Settings save failed:', err);
+            input.value = '';
+            appendMessage('user', message);
+            setWaiting(true);
+
+            try {
+                const data = await api('POST', '/api/chat', {
+                    message: message,
+                    guild_id: currentGuild,
+                    user_id: currentUser.id,
+                });
+
+                if (!data) return;
+
+                if (!data.ok) {
+                    appendMessage('bot', `❌ ${data.error || 'Có lỗi xảy ra'}`);
+                    return;
+                }
+
+                switch (data.type) {
+                    case 'answer':
+                    case 'clarify':
+                        appendMessage('bot', data.content);
+                        break;
+
+                    case 'approval_needed':
+                        showPlan(data.plan, true);
+                        break;
+
+                    case 'executed':
+                        if (data.result && data.result.plan) {
+                            showPlan(data.result.plan, false);
+                        }
+                        const status = data.status === 'completed' ? '✅' : '⚠️';
+                        const steps = data.result ? `${data.result.completed_steps || 0}/${data.result.total_steps || 0}` : '';
+                        appendMessage('bot', `${status} Thực thi hoàn tất (${steps} bước thành công)`);
+                        break;
+
+                    default:
+                        appendMessage('bot', JSON.stringify(data));
+                }
+            } catch (e) {
+                appendMessage('bot', `❌ Lỗi: ${e.message}`);
+            } finally {
+                setWaiting(false);
+            }
+        }
+
+        // ===== Plan Display (§5.4 step 12) =====
+        function showPlan(plan, needsApproval) {
+            const riskColors = { LOW: 'var(--risk-low)', MEDIUM: 'var(--risk-medium)', HIGH: 'var(--risk-high)', CRITICAL: 'var(--risk-critical)' };
+            const riskEmoji = { LOW: '🟢', MEDIUM: '🟡', HIGH: '🟠', CRITICAL: '🔴' };
+
+            let html = `<div class="plan-card">`;
+            html += `<div class="plan-header"><strong>📋 Kế hoạch</strong> <span class="risk-badge" style="color:${riskColors[plan.risk_level] || '#fff'}">${riskEmoji[plan.risk_level] || '⚪'} ${plan.risk_level}</span></div>`;
+            html += `<p class="plan-desc">${escapeHtml(plan.description || '')}</p>`;
+            html += `<ol class="plan-steps">`;
+            (plan.steps || []).forEach(step => {
+                const emoji = riskEmoji[step.risk_level] || '⚪';
+                html += `<li>${emoji} <code>${step.tool_name}</code> — ${escapeHtml(step.description || '')}</li>`;
             });
+            html += `</ol>`;
+
+            if (needsApproval) {
+                html += `<div class="plan-actions">`;
+                html += `<button class="btn-approve" onclick="approvePlan('${plan.id}')">✅ Duyệt</button>`;
+                html += `<button class="btn-reject" onclick="rejectPlan('${plan.id}')">❌ Từ chối</button>`;
+                html += `</div>`;
+            }
+            html += `</div>`;
+
+            appendMessage('bot', html, true);
         }
 
-        function updateAssistantLabel(enabled) {
-            const lang = storageGet('language', 'vi');
-            const t = TRANSLATIONS[lang];
-            document.getElementById('assistantLabel').textContent = enabled ? t.assistant_on : t.assistant_off;
+        // ===== Approval (§5.5) =====
+        async function approvePlan(planId) {
+            try {
+                const data = await api('POST', '/api/approval', {
+                    plan_id: planId,
+                    action: 'approve',
+                    user_id: currentUser.id,
+                });
+                if (data && data.ok) {
+                    appendMessage('bot', '✅ Đã duyệt! Đang thực thi...');
+                    if (data.execution) {
+                        const r = data.execution;
+                        const emoji = r.status === 'completed' ? '✅' : '⚠️';
+                        appendMessage('bot', `${emoji} ${r.completed_steps || 0}/${r.total_steps || 0} bước hoàn thành.`);
+                    }
+                } else {
+                    appendMessage('bot', `❌ ${data?.reason || 'Không thể duyệt'}`);
+                }
+            } catch (e) {
+                appendMessage('bot', `❌ Lỗi: ${e.message}`);
+            }
         }
 
-        // ===== Chat =====
+        async function rejectPlan(planId) {
+            try {
+                const data = await api('POST', '/api/approval', {
+                    plan_id: planId,
+                    action: 'reject',
+                    reason: 'Rejected via web',
+                    user_id: currentUser.id,
+                });
+                if (data && data.ok) {
+                    appendMessage('bot', '❎ Đã từ chối. Kế hoạch bị hủy.');
+                }
+            } catch (e) {
+                appendMessage('bot', `❌ Lỗi: ${e.message}`);
+            }
+        }
+
+        // ===== UI Helpers =====
+        function appendMessage(role, content, isHtml = false) {
+            const container = document.getElementById('chatMessages');
+            const div = document.createElement('div');
+            div.className = `message ${role}`;
+
+            const avatar = role === 'user' ? '👤' : '🤖';
+            const rendered = isHtml ? content : marked.parse(content);
+
+            div.innerHTML = `
+                <div class="message-avatar">${avatar}</div>
+                <div class="message-content">${rendered}</div>
+            `;
+            container.appendChild(div);
+            container.scrollTop = container.scrollHeight;
+        }
+
+        function setWaiting(waiting) {
+            isWaitingResponse = waiting;
+            document.getElementById('typingIndicator').style.display = waiting ? 'flex' : 'none';
+        }
+
         function handleInputKey(event) {
             if (event.key === 'Enter' && !event.shiftKey) {
                 event.preventDefault();
@@ -369,211 +385,28 @@
             }
         }
 
-        async function sendMessage() {
-            const input = document.getElementById('chatInput');
-            const text = input.value.trim();
-
-            if (!text || isWaitingResponse) return;
-
-            // Append user message
-            appendMessage('user', text);
-            input.value = '';
-
-            // Show typing indicator
-            setTyping(true);
-            isWaitingResponse = true;
-
-            try {
-                const payload = {
-                    message: text,
-                    guild_id: currentGuild ? String(currentGuild) : null,
-                };
-
-                const response = await api('POST', '/api/v1/chat', payload);
-
-                setTyping(false);
-                isWaitingResponse = false;
-
-                if (response) {
-                    // FIX: CRITICAL — response.content is the correct field from API
-                    const botText = response.content || response.response || response.message || response.reply || JSON.stringify(response);
-                    appendMessage('bot', botText);
-
-                    // If the response triggered approvals, refresh immediately
-                    if (response.requires_approval || response.approval_id || (response.metadata && response.metadata.requires_approval)) {
-                        pollApprovals();
-                    }
-                }
-            } catch (err) {
-                setTyping(false);
-                isWaitingResponse = false;
-                appendMessage('bot', `❌ Lỗi: ${err.message || 'Không thể gửi tin nhắn'}`);
-                showToast('Gửi tin nhắn thất bại', 'error');
-            }
-        }
-
-        function appendMessage(role, content) {
-            const container = document.getElementById('chatMessages');
-            const msgDiv = document.createElement('div');
-            msgDiv.className = `message ${role}`;
-
-            const avatar = document.createElement('div');
-            avatar.className = 'message-avatar';
-            avatar.textContent = role === 'user' ? '👤' : '🤖';
-
-            const contentDiv = document.createElement('div');
-            contentDiv.className = 'message-content';
-
-            if (role === 'bot') {
-                contentDiv.innerHTML = renderMarkdown(content);
-            } else {
-                contentDiv.innerHTML = `<p>${escapeHtml(content)}</p>`;
-            }
-
-            msgDiv.appendChild(avatar);
-            msgDiv.appendChild(contentDiv);
-            container.appendChild(msgDiv);
-
-            // Scroll to bottom
-            container.scrollTop = container.scrollHeight;
-        }
-
-        function renderMarkdown(text) {
-            if (!text) return '';
-            try {
-                return marked.parse(text);
-            } catch {
-                return `<p>${escapeHtml(text)}</p>`;
-            }
-        }
-
-        function setTyping(active) {
-            const indicator = document.getElementById('typingIndicator');
-            if (active) {
-                indicator.classList.add('active');
-            } else {
-                indicator.classList.remove('active');
-            }
-        }
-
-        // ===== Approvals =====
-        function startApprovalPolling() {
-            pollApprovals();
-            approvalPollTimer = setInterval(pollApprovals, 3000);
-        }
-
-        async function pollApprovals() {
-            try {
-                const data = await api('GET', '/api/v1/approvals');
-                if (data) {
-                    renderApprovals(Array.isArray(data) ? data : data.approvals || []);
-                }
-            } catch (err) {
-                // Silently fail — polling will retry
-            }
-        }
-
-        function renderApprovals(approvals) {
-            const list = document.getElementById('approvalList');
-            const badge = document.getElementById('approvalCount');
-
-            badge.textContent = approvals.length;
-
-            if (approvals.length === 0) {
-                list.innerHTML = '';
-                list.appendChild(createEmptyState());
-                return;
-            }
-
-            list.innerHTML = '';
-            approvals.forEach(item => {
-                list.appendChild(createApprovalCard(item));
-            });
-        }
-
-        function createEmptyState() {
-            const lang = storageGet('language', 'vi');
-            const t = TRANSLATIONS[lang];
-            const div = document.createElement('div');
-            div.className = 'empty-state';
-            div.innerHTML = `
-                <div class="empty-state-icon">✅</div>
-                <p class="empty-state-text">${t.no_pending}</p>
-            `;
-            return div;
-        }
-
-        function createApprovalCard(item) {
-            const lang = storageGet('language', 'vi');
-            const t = TRANSLATIONS[lang];
-            const risk = (item.risk_level || item.risk || 'low').toLowerCase();
-            const card = document.createElement('div');
-            card.className = `approval-card risk-${risk}`;
-
-            const description = item.description || item.action || item.summary || 'Hành động chờ duyệt';
-            const stepsCount = item.steps_count || item.steps?.length || 0;
-
-            card.innerHTML = `
-                <div class="approval-description">${escapeHtml(description)}</div>
-                <div class="approval-meta">
-                    <span class="risk-badge ${risk}">${risk.toUpperCase()}</span>
-                    ${stepsCount ? `<span class="steps-count">${stepsCount} bước</span>` : ''}
-                </div>
-                <div class="approval-actions">
-                    <button class="btn-approve" onclick="approveAction('${item.id}')">${t.approve}</button>
-                    <button class="btn-reject" onclick="rejectAction('${item.id}')">${t.reject}</button>
-                </div>
-            `;
-
-            return card;
-        }
-
-        async function approveAction(id) {
-            try {
-                await api('POST', `/api/v1/approve/${id}`);
-                showToast('Đã phê duyệt thành công', 'success');
-                pollApprovals();
-            } catch (err) {
-                showToast('Phê duyệt thất bại: ' + err.message, 'error');
-            }
-        }
-
-        async function rejectAction(id) {
-            try {
-                await api('POST', `/api/v1/reject/${id}`);
-                showToast('Đã từ chối yêu cầu', 'info');
-                pollApprovals();
-            } catch (err) {
-                showToast('Từ chối thất bại: ' + err.message, 'error');
-            }
-        }
-
-        // ===== Mobile Panel Toggles =====
+        // ===== Panel toggles =====
         function toggleSidebar() {
-            const sidebar = document.getElementById('sidebar');
-            const overlay = document.getElementById('overlay');
-            const approvalPanel = document.getElementById('approvalPanel');
-
-            approvalPanel.classList.remove('open');
-            sidebar.classList.toggle('open');
-            overlay.classList.toggle('active', sidebar.classList.contains('open'));
+            document.getElementById('sidebar').classList.toggle('open');
+            document.getElementById('overlay').classList.toggle('show');
         }
-
         function toggleApprovals() {
-            const sidebar = document.getElementById('sidebar');
-            const overlay = document.getElementById('overlay');
-            const approvalPanel = document.getElementById('approvalPanel');
-
-            sidebar.classList.remove('open');
-            approvalPanel.classList.toggle('open');
-            overlay.classList.toggle('active', approvalPanel.classList.contains('open'));
+            document.getElementById('approvalPanel').classList.toggle('open');
+            document.getElementById('overlay').classList.toggle('show');
         }
-
         function closeAllPanels() {
             document.getElementById('sidebar').classList.remove('open');
             document.getElementById('approvalPanel').classList.remove('open');
-            document.getElementById('overlay').classList.remove('active');
+            document.getElementById('overlay').classList.remove('show');
         }
+
+        function logout() {
+            localStorage.removeItem('aura_user');
+            window.location.href = '/login';
+        }
+
+        function toggleLanguage() { /* TODO */ }
+        function toggleAssistant() { /* TODO - not in Phase 1 */ }
     </script>
 </body>
 </html>

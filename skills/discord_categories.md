@@ -5,7 +5,6 @@
 ### create
 - description: Create a new channel category in the guild
 - risk: medium
-- agent: assistant
 - parameters:
   - guild_id (int, required): Target guild ID
   - name (str, required): Category name
@@ -15,7 +14,6 @@
 ### delete
 - description: Delete an existing category and optionally its channels
 - risk: high
-- agent: admin
 - parameters:
   - guild_id (int, required): Target guild ID
   - category_id (int, required): Category ID to delete
@@ -25,7 +23,6 @@
 ### rename
 - description: Rename an existing category
 - risk: medium
-- agent: assistant
 - parameters:
   - guild_id (int, required): Target guild ID
   - category_id (int, required): Category ID to rename
@@ -35,7 +32,6 @@
 ### reorder
 - description: Reorder categories by specifying new position mapping
 - risk: medium
-- agent: assistant
 - parameters:
   - guild_id (int, required): Target guild ID
   - positions (dict, required): Mapping of category_id to new position index
