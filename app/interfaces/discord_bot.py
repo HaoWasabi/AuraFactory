@@ -180,18 +180,25 @@ class ApprovalView(nextcord.ui.View):
             await interaction.response.send_message("❌ Chỉ người tạo yêu cầu mới được duyệt.", ephemeral=True)
             return
 
-        result = await self.bot.approval_service.approve_plan(self.plan_id, interaction.user.id)
-        if not result["ok"]:
-            await interaction.response.send_message(f"❌ {result.get('reason', 'Error')}", ephemeral=True)
-            return
+        # Defer immediately to avoid 3s Discord interaction timeout
+        await interaction.response.defer()
 
-        await interaction.response.send_message("✅ Đã duyệt! Đang thực thi...")
-        self.stop()
+        try:
+            result = await self.bot.approval_service.approve_plan(self.plan_id, interaction.user.id)
+            if not result["ok"]:
+                await interaction.followup.send(f"❌ {result.get('error', 'Lỗi không xác định')}", ephemeral=True)
+                return
 
-        # Execute plan
-        exec_result = await self.bot.executor_service.execute_plan(self.plan_id)
-        summary = self.bot._format_execution_result(exec_result)
-        await interaction.followup.send(summary)
+            self.stop()
+            await interaction.followup.send("✅ Đã duyệt! Đang thực thi...")
+
+            # Execute plan
+            exec_result = await self.bot.executor_service.execute_plan(self.plan_id)
+            summary = self.bot._format_execution_result(exec_result)
+            await interaction.followup.send(summary)
+        except Exception as e:
+            logger.exception("Approve button error: %s", e)
+            await interaction.followup.send(f"❌ Lỗi: {str(e)[:200]}", ephemeral=True)
 
     @nextcord.ui.button(label="❌ Từ chối", style=nextcord.ButtonStyle.red)
     async def reject_button(self, button: nextcord.ui.Button, interaction: nextcord.Interaction):
@@ -199,9 +206,15 @@ class ApprovalView(nextcord.ui.View):
             await interaction.response.send_message("❌ Chỉ người tạo yêu cầu mới được từ chối.", ephemeral=True)
             return
 
-        result = await self.bot.approval_service.reject_plan(self.plan_id, interaction.user.id, "User rejected via Discord")
-        if result["ok"]:
-            await interaction.response.send_message("❎ Đã từ chối. Kế hoạch đã bị hủy.")
-        else:
-            await interaction.response.send_message(f"❌ {result.get('reason', 'Error')}", ephemeral=True)
-        self.stop()
+        await interaction.response.defer()
+
+        try:
+            result = await self.bot.approval_service.reject_plan(self.plan_id, interaction.user.id, "User rejected via Discord")
+            if result["ok"]:
+                await interaction.followup.send("🚫 Đã hủy kế hoạch.")
+            else:
+                await interaction.followup.send(f"❌ {result.get('error', 'Lỗi không xác định')}", ephemeral=True)
+            self.stop()
+        except Exception as e:
+            logger.exception("Reject button error: %s", e)
+            await interaction.followup.send(f"❌ Lỗi: {str(e)[:200]}", ephemeral=True)
