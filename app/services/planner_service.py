@@ -117,7 +117,7 @@ class PlannerService:
                 messages=messages,
                 system_prompt=PLANNER_SYSTEM_PROMPT,
                 temperature=0.2,
-                max_tokens=4096,
+                max_tokens=8192,
             )
 
             # 5. Parse LLM response into plan
@@ -234,8 +234,17 @@ Server Info: {server_context.get('server_info', '{}')}
         try:
             data = json.loads(cleaned)
         except json.JSONDecodeError:
-            logger.warning("Failed to parse plan JSON: %s", cleaned[:200])
-            return None
+            # Attempt to repair truncated JSON (missing closing brackets)
+            repaired = cleaned
+            open_braces = repaired.count('{') - repaired.count('}')
+            open_brackets = repaired.count('[') - repaired.count(']')
+            repaired += ']' * open_brackets + '}' * open_braces
+            try:
+                data = json.loads(repaired)
+                logger.info("Plan JSON repaired (added %d closing brackets)", open_braces + open_brackets)
+            except json.JSONDecodeError:
+                logger.warning("Failed to parse plan JSON: %s", cleaned[:200])
+                return None
 
         # Validate structure
         if not isinstance(data, dict):
