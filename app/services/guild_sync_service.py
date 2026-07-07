@@ -124,7 +124,7 @@ class GuildSyncService:
             result.append(d)
         return result
 
-    def get_bot_invite_url(self, guild_id: int) -> str:
+    def get_bot_invite_url(self, guild_id) -> str:
         """Generate bot invite URL for a specific guild."""
         # Bot permissions: Administrator for full functionality
         permissions = 8  # ADMINISTRATOR
@@ -133,5 +133,5 @@ class GuildSyncService:
             f"?client_id={settings.discord_client_id}"
             f"&permissions={permissions}"
             f"&scope=bot"
-            f"&guild_id={guild_id}"
+            f"&guild_id={int(guild_id) if guild_id else 0}"
         )

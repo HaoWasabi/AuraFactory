@@ -280,7 +280,13 @@ class ExecutorService:
         """
         step_id: str = step["id"]
         tool_name: str = step["tool_name"]
-        tool_params: dict = step.get("tool_params", {})
+        # tool_params may come from DB as dict (JSONB auto-parsed) or string
+        raw_params = step.get("tool_params", {})
+        if isinstance(raw_params, str):
+            import json as _json
+            tool_params = _json.loads(raw_params)
+        else:
+            tool_params = raw_params if isinstance(raw_params, dict) else {}
         description: str = step.get("description", "")
         risk_level: str = step.get("risk_level", "low")
 
@@ -315,9 +321,11 @@ class ExecutorService:
 
         if response.success:
             # Step succeeded
+            import json as _json2
+            step_result_json = _json2.dumps(response.result, default=str) if response.result else '{"status": "ok"}'
             await self._db.execute(
-                "UPDATE plan_steps SET status = 'completed', result = $1 WHERE id = $2",
-                str(response.result)[:2000] if response.result else "OK",
+                "UPDATE plan_steps SET status = 'completed', result = $1::jsonb WHERE id = $2",
+                step_result_json[:4000],
                 step_id,
             )
             return {
@@ -371,9 +379,10 @@ class ExecutorService:
 
         if react_result.get("success"):
             # ReAct retry succeeded
+            react_res_json = _json2.dumps(react_result.get("result", {}), default=str) if react_result.get("result") else '{"status": "ok"}'
             await self._db.execute(
-                "UPDATE plan_steps SET status = 'completed', result = $1 WHERE id = $2",
-                str(react_result.get("result", ""))[:2000],
+                "UPDATE plan_steps SET status = 'completed', result = $1::jsonb WHERE id = $2",
+                react_res_json[:4000],
                 step_id,
             )
             return {
@@ -389,9 +398,10 @@ class ExecutorService:
 
         # Both attempts failed
         error_msg = react_result.get("error", response.error or "Step execution failed")
+        fail_json = _json2.dumps({"error": error_msg}, default=str)
         await self._db.execute(
-            "UPDATE plan_steps SET status = 'failed', result = $1 WHERE id = $2",
-            f"FAILED: {error_msg}"[:2000],
+            "UPDATE plan_steps SET status = 'failed', result = $1::jsonb WHERE id = $2",
+            fail_json[:4000],
             step_id,
         )
         return {
@@ -443,6 +453,23 @@ class ExecutorService:
 
         audit_id = uuid.uuid4()
 
+        # Safe JSON serialization helper
+        def safe_json(obj):
+            """Convert to valid JSON string, handling already-serialized strings and non-dict types."""
+            if obj is None:
+                return None
+            if isinstance(obj, str):
+                # Check if already valid JSON
+                try:
+                    json.loads(obj)
+                    return obj  # Already valid JSON string
+                except (json.JSONDecodeError, ValueError):
+                    return json.dumps(obj)  # Wrap raw string as JSON
+            try:
+                return json.dumps(obj, default=str)
+            except (TypeError, ValueError):
+                return json.dumps(str(obj))
+
         try:
             await self._db.execute(
                 """
@@ -462,10 +489,10 @@ class ExecutorService:
                 guild_id,
                 user_id,
                 tool_name,
-                json.dumps(tool_params),
+                safe_json(tool_params),
                 risk_level,
                 success,
-                json.dumps(result) if result is not None else None,
+                safe_json(result),
                 error,
                 duration_ms,
                 react_adjusted,

@@ -14,7 +14,7 @@ logger = logging.getLogger(__name__)
 # === Request/Response schemas ===
 class ChatRequest(BaseModel):
     message: str
-    guild_id: int
+    guild_id: str  # String to preserve Discord snowflake precision
     user_id: str  # String to preserve Discord snowflake precision
 
 class ApprovalRequest(BaseModel):
@@ -125,13 +125,15 @@ def create_api_router(services: dict) -> APIRouter:
         
         Flow: check bot → request → classify → plan/query → execute (if auto-approve)
         """
+        guild_id = int(req.guild_id)
+
         # §5.1 step 3: Check bot is installed in this guild
         bot_row = await guild_sync_service.db.fetchrow(
             "SELECT is_active FROM bot_installs WHERE guild_id = $1 AND is_active = TRUE",
-            req.guild_id,
+            guild_id,
         )
         if not bot_row:
-            invite_url = guild_sync_service.get_bot_invite_url(req.guild_id)
+            invite_url = guild_sync_service.get_bot_invite_url(guild_id)
             return {
                 "ok": False,
                 "type": "bot_not_installed",
@@ -141,7 +143,7 @@ def create_api_router(services: dict) -> APIRouter:
 
         # Create request
         req_result = await request_service.create_request(
-            guild_id=req.guild_id,
+            guild_id=guild_id,
             user_id=int(req.user_id),
             message=req.message,
             origin="web",
@@ -160,7 +162,7 @@ def create_api_router(services: dict) -> APIRouter:
 
         # Route by intent
         if intent == "query":
-            answer = await query_service.answer(req.message, req.guild_id)
+            answer = await query_service.answer(req.message, guild_id)
             await request_service.update_status(request_id, "completed", response=answer)
             return {"ok": True, "type": "answer", "content": answer, "request_id": request_id}
 
@@ -172,7 +174,7 @@ def create_api_router(services: dict) -> APIRouter:
         # Action intents → plan
         plan_result = await planner_service.generate_plan(
             request_id=request_id,
-            guild_id=req.guild_id,
+            guild_id=guild_id,
             user_id=int(req.user_id),
             message=req.message,
             intent=intent,

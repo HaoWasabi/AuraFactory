@@ -248,7 +248,7 @@
                 return;
             }
 
-            currentGuild = parseInt(value);
+            currentGuild = value;  // Keep as string to preserve snowflake precision
             document.getElementById('channelCount').textContent = '⏳';
             document.getElementById('roleCount').textContent = '⏳';
             document.getElementById('memberCount').textContent = '⏳';

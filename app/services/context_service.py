@@ -67,24 +67,45 @@ class ContextService:
         """Fetch live server state via MCP tools."""
         import json
 
-        categories_resp = await self.mcp_client.call_tool(
-            "discord.categories.list", {"guild_id": guild_id}
-        )
-        channels_resp = await self.mcp_client.call_tool(
-            "discord.channels.list", {"guild_id": guild_id}
-        )
-        roles_resp = await self.mcp_client.call_tool(
-            "discord.roles.list", {"guild_id": guild_id}
-        )
-        info_resp = await self.mcp_client.call_tool(
-            "discord.guild.get_info", {"guild_id": guild_id}
-        )
+        # Fetch each with error handling — partial failures shouldn't block
+        categories = []
+        channels = []
+        roles = []
+        server_info = {}
+
+        try:
+            resp = await self.mcp_client.call_tool("discord.categories.list", {"guild_id": guild_id})
+            if resp.success and resp.result:
+                categories = resp.result.get("categories", []) if isinstance(resp.result, dict) else resp.result
+        except Exception as e:
+            logger.warning("Failed to fetch categories for guild %d: %s", guild_id, e)
+
+        try:
+            resp = await self.mcp_client.call_tool("discord.channels.list", {"guild_id": guild_id})
+            if resp.success and resp.result:
+                channels = resp.result.get("channels", []) if isinstance(resp.result, dict) else resp.result
+        except Exception as e:
+            logger.warning("Failed to fetch channels for guild %d: %s", guild_id, e)
+
+        try:
+            resp = await self.mcp_client.call_tool("discord.roles.list", {"guild_id": guild_id})
+            if resp.success and resp.result:
+                roles = resp.result.get("roles", []) if isinstance(resp.result, dict) else resp.result
+        except Exception as e:
+            logger.warning("Failed to fetch roles for guild %d: %s", guild_id, e)
+
+        try:
+            resp = await self.mcp_client.call_tool("discord.guild.get_info", {"guild_id": guild_id})
+            if resp.success and resp.result:
+                server_info = resp.result
+        except Exception as e:
+            logger.warning("Failed to fetch guild info for guild %d: %s", guild_id, e)
 
         return {
-            "categories": json.dumps(categories_resp.result or []),
-            "channels": json.dumps(channels_resp.result or []),
-            "roles": json.dumps(roles_resp.result or []),
-            "server_info": json.dumps(info_resp.result or {}),
+            "categories": json.dumps(categories, default=str),
+            "channels": json.dumps(channels, default=str),
+            "roles": json.dumps(roles, default=str),
+            "server_info": json.dumps(server_info, default=str),
         }
 
     async def invalidate(self, guild_id: int) -> None:
