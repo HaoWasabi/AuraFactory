@@ -424,7 +424,7 @@ class ExecutorService:
         """
         import json
 
-        audit_id = str(uuid.uuid4())
+        audit_id = uuid.uuid4()
 
         try:
             await self._db.execute(
@@ -440,8 +440,8 @@ class ExecutorService:
                 )
                 """,
                 audit_id,
-                uuid.UUID(request_id) if isinstance(request_id, str) else request_id,
-                uuid.UUID(step_id) if isinstance(step_id, str) else step_id,
+                uuid.UUID(str(request_id)) if not isinstance(request_id, uuid.UUID) else request_id,
+                uuid.UUID(str(step_id)) if not isinstance(step_id, uuid.UUID) else step_id,
                 guild_id,
                 user_id,
                 tool_name,

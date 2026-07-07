@@ -71,7 +71,7 @@ class DiscordMCPServer(MCPServer):
         result = await self._connector.execute(
             tool_name=tool_name,
             guild=guild,
-            params=params,
+            **params,
         )
         return result
 

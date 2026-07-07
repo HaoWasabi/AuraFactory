@@ -55,6 +55,19 @@ class MCPClient:
         """Register a server and index all its tools for routing."""
         name = server.get_server_name()
         self._servers[name] = server
+        self._reindex_server(name, server)
+
+    def reindex(self) -> None:
+        """Re-index all tools from all registered servers.
+        
+        Call this after a server has registered new tools dynamically
+        (e.g. after DiscordMCPServer.set_bot() is called).
+        """
+        for name, server in self._servers.items():
+            self._reindex_server(name, server)
+
+    def _reindex_server(self, name: str, server: MCPServer) -> None:
+        """Index all tools from a specific server."""
         for tool in server.list_tools():
             self._tool_index[tool.name] = name
 

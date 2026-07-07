@@ -104,6 +104,7 @@ async def lifespan(app: FastAPI):
         "query_service": query_service,
         "auth_service": auth_service,
         "guild_sync_service": guild_sync_service,
+        "_mcp_client": mcp_client,
     }
     logger.info("✅ All services initialized")
 

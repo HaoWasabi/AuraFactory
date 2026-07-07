@@ -32,12 +32,17 @@ class DiscordBot(commands.Bot):
         self.query_service = services["query_service"]
         self.guild_sync_service = services["guild_sync_service"]
         self.mcp_discord_server = mcp_discord_server
+        self._mcp_client = services.get("_mcp_client")
 
     async def on_ready(self):
         logger.info("🤖 AuraFactory bot ready: %s (ID: %d)", self.user.name, self.user.id)
         # Set MCP bot reference
         if self.mcp_discord_server:
             self.mcp_discord_server.set_bot(self)
+            # Re-index tools now that the connector has registered them
+            if self._mcp_client:
+                self._mcp_client.reindex()
+                logger.info("✅ MCP tools re-indexed after bot ready (%d tools)", len(self._mcp_client._tool_index))
 
     async def on_guild_join(self, guild: nextcord.Guild):
         """Bot was added to a guild."""
