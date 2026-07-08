@@ -55,7 +55,7 @@ class GeminiLLM(BaseLLM):
         genai.configure(api_key=new_api_key)
         logger.info("Gemini API key updated at runtime")
 
-    def _convert_tools_to_gemini(self, tools: List[Dict[str, Any]]) -> List[genai.types.Tool]:
+    def _convert_tools_to_gemini(self, tools: List[Dict[str, Any]]) -> List[Any]:
         """Convert tool definitions to Gemini FunctionDeclaration format.
         
         Args:
@@ -67,18 +67,46 @@ class GeminiLLM(BaseLLM):
         function_declarations = []
         
         for tool in tools:
-            func_decl = genai.types.FunctionDeclaration(
+            params = tool.get("parameters", {})
+            gemini_params = None
+            
+            if params and params.get("properties"):
+                # Build Schema using protos (always available)
+                schema_properties = {}
+                for prop_name, prop_def in params.get("properties", {}).items():
+                    prop_type = self._map_type(prop_def.get("type", "string"))
+                    schema_properties[prop_name] = genai.protos.Schema(
+                        type=prop_type,
+                        description=prop_def.get("description", ""),
+                    )
+                
+                gemini_params = genai.protos.Schema(
+                    type=genai.protos.Type.OBJECT,
+                    properties=schema_properties,
+                    required=params.get("required", []),
+                )
+            
+            func_decl = genai.protos.FunctionDeclaration(
                 name=tool.get("name", ""),
                 description=tool.get("description", ""),
-                parameters=genai.types.Schema(
-                    type=genai.types.Type.OBJECT,
-                    properties=tool.get("parameters", {}).get("properties", {}),
-                    required=tool.get("parameters", {}).get("required", []),
-                ),
+                parameters=gemini_params,
             )
             function_declarations.append(func_decl)
         
-        return [genai.types.Tool(function_declarations=function_declarations)]
+        return [genai.protos.Tool(function_declarations=function_declarations)]
+
+    @staticmethod
+    def _map_type(json_type: str) -> int:
+        """Map JSON Schema type string to Gemini proto Type enum."""
+        type_map = {
+            "string": genai.protos.Type.STRING,
+            "number": genai.protos.Type.NUMBER,
+            "integer": genai.protos.Type.INTEGER,
+            "boolean": genai.protos.Type.BOOLEAN,
+            "array": genai.protos.Type.ARRAY,
+            "object": genai.protos.Type.OBJECT,
+        }
+        return type_map.get(json_type.lower(), genai.protos.Type.STRING)
 
     def _build_gemini_content(
         self, messages: List[Dict[str, str]], system_prompt: Optional[str] = None
@@ -134,10 +162,18 @@ class GeminiLLM(BaseLLM):
         
         if hasattr(response_content, "function_call"):
             func_call = response_content.function_call
+            # func_call.args is a MapComposite (proto struct), convert to dict
+            if func_call.args:
+                try:
+                    args = dict(func_call.args)
+                except (TypeError, ValueError):
+                    args = json.loads(str(func_call.args)) if func_call.args else {}
+            else:
+                args = {}
             tool_calls.append(
                 ToolCall(
                     name=func_call.name,
-                    arguments=json.loads(func_call.args) if func_call.args else {},
+                    arguments=args,
                 )
             )
         
