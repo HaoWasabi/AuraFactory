@@ -32,7 +32,18 @@ logger = logging.getLogger(__name__)
 REACT_SYSTEM_PROMPT = """You are fixing a failed Discord operation. The step failed with this error.
 You can ONLY adjust the parameters (tool_params) of the same tool.
 You CANNOT: add new steps, change the tool name, or exceed the approved risk.
+
 Given the current server state and the error, suggest adjusted parameters.
+
+IMPORTANT — ID RESOLUTION:
+- The server context includes a "_created_this_run" section with resources created
+  earlier in this plan (roles, categories, channels). Use these IDs to fix
+  unresolved references (e.g. role names used where IDs are required).
+- allowed_role_ids MUST be a list of Discord snowflake IDs (17-19 digit strings),
+  NOT role names. Look up the correct IDs from roles in the server context or
+  _created_this_run.
+- category_id, channel_id, role_id MUST be Discord snowflake IDs, not names.
+
 Respond in JSON: {"adjusted_params": {...}, "reason": "why this fix should work"}
 If the error is unfixable with parameter adjustment alone, respond: {"unfixable": true, "reason": "..."}"""
 
@@ -225,6 +236,17 @@ class ReActStepHandler:
         server_context: dict,
     ) -> str:
         """Build the user message for the Reason phase LLM call."""
+        # Work on a copy to avoid mutating the caller's dict
+        ctx = dict(server_context) if isinstance(server_context, dict) else {}
+        created_this_run = ctx.pop("_created_this_run", None)
+        created_section = ""
+        if created_this_run:
+            created_section = f"""
+## Resources Created Earlier In This Plan Run
+(Use these IDs to resolve references — these may not yet appear in Server State)
+{json.dumps(created_this_run, indent=2)}
+"""
+
         return f"""A plan step failed during execution. Please analyze and suggest fixed parameters.
 
 ## Failed Step
@@ -237,12 +259,19 @@ class ReActStepHandler:
 {error}
 
 ## Current Server State
-{json.dumps(server_context, indent=2, default=str) if isinstance(server_context, dict) else str(server_context)}
-
+{json.dumps(ctx, indent=2, default=str) if ctx else "(unavailable)"}
+{created_section}
 ## Instructions
 Suggest adjusted parameters for the SAME tool ({tool_name}) that will fix the error.
 You CANNOT change the tool name or add additional steps.
 The adjusted parameters must not exceed the approved risk level ({risk_level}).
+
+Common fixes:
+- If error mentions "not found" for a role/channel/category: look up the correct ID from
+  Server State or Resources Created Earlier and use that ID.
+- If allowed_role_ids contains names instead of IDs: replace with the correct snowflake IDs.
+- If category_id / channel_id looks wrong: find the correct ID from Server State.
+- If error is a Discord rate limit (429): keep the same params (rate limit is transient).
 
 Respond in JSON only."""
 

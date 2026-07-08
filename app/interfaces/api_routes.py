@@ -25,10 +25,35 @@ class ApprovalRequest(BaseModel):
     reason: Optional[str] = None
 
 
+class CommunityUpgradeRequest(BaseModel):
+    """Payload when user confirms or declines the Community upgrade prompt."""
+    action: str           # "confirm" or "decline"
+    user_id: str
+    community_payload: dict  # Exact community_payload from execute_plan response
+
+
 async def _run_execution_background(executor_service, plan_id: str) -> None:
     """Run plan execution as background task — never raises."""
     try:
         await executor_service.execute_plan(plan_id)
+    except Exception as e:
+        logger.error("Background execution error for plan %s: %s", plan_id, e)
+
+
+async def _run_execution_background_with_community_check(
+    executor_service, plan_id: str, db
+) -> None:
+    """Run plan execution and persist community_payload to DB when upgrade is needed."""
+    import json as _j, uuid as _u
+    try:
+        result = await executor_service.execute_plan(plan_id)
+        if result.get("status") == "community_upgrade_needed":
+            payload = result.get("community_payload", {})
+            await db.execute(
+                "UPDATE plans SET community_payload = $2::jsonb WHERE id = $1",
+                _u.UUID(plan_id),
+                _j.dumps(payload, default=str),
+            )
     except Exception as e:
         logger.error("Background execution error for plan %s: %s", plan_id, e)
 
@@ -203,8 +228,12 @@ def create_api_router(services: dict) -> APIRouter:
                 "request_id": request_id,
             }
         else:
-            # Auto-approved → execute in background
-            asyncio.create_task(_run_execution_background(executor_service, plan_id))
+            # Auto-approved → execute in background, watch for community upgrade
+            asyncio.create_task(
+                _run_execution_background_with_community_check(
+                    executor_service, plan_id, approval_service.db
+                )
+            )
             return {
                 "ok": True,
                 "type": "executing",
@@ -331,12 +360,6 @@ def create_api_router(services: dict) -> APIRouter:
         if not new_key:
             raise HTTPException(status_code=400, detail="API key không được để trống")
 
-        if not new_key.startswith("AIza"):
-            raise HTTPException(
-                status_code=400,
-                detail="API key không hợp lệ (Gemini key phải bắt đầu bằng 'AIza')",
-            )
-
         # Update settings singleton
         _settings.GEMINI_API_KEY = new_key
 
@@ -366,6 +389,55 @@ def create_api_router(services: dict) -> APIRouter:
         owner_ids = _get_bot_owner_ids(request)
         return {"is_admin": bool(owner_ids) and uid in owner_ids}
 
+    # === Community Upgrade ===
+
+    @router.post("/community-upgrade/confirm")
+    async def community_upgrade_confirm(req: CommunityUpgradeRequest):
+        """Handle user response to the Community upgrade prompt.
+
+        action="confirm" → enable Community + resume remaining plan steps.
+        action="decline" → cancel the paused plan.
+        """
+        import uuid as _ucu
+
+        payload = req.community_payload
+        plan_id = payload.get("plan_id")
+        request_id = payload.get("request_id")
+        ch_type = payload.get("channel_type", "stage")
+        lang = "vi"
+
+        if req.action == "decline":
+            if plan_id:
+                try:
+                    await approval_service.db.execute(
+                        "UPDATE plans SET status = 'cancelled' WHERE id = $1",
+                        _ucu.UUID(plan_id),
+                    )
+                    if request_id:
+                        await approval_service.db.execute(
+                            "UPDATE requests SET status = 'cancelled', completed_at = NOW() WHERE id = $1",
+                            _ucu.UUID(request_id),
+                        )
+                except Exception as e:
+                    logger.warning("Failed to cancel paused plan %s: %s", plan_id, e)
+            return {
+                "ok": True,
+                "status": "cancelled",
+                "message": msg("community_upgrade_declined", lang=lang, channel_type=ch_type),
+            }
+
+        if req.action == "confirm":
+            # Fire-and-forget — frontend polls /execution/{plan_id}/status
+            asyncio.create_task(executor_service.enable_community_and_resume(payload))
+            return {
+                "ok": True,
+                "status": "executing",
+                "plan_id": plan_id,
+                "message": msg("community_upgrade_confirmed", lang=lang),
+            }
+
+        raise HTTPException(status_code=400, detail="action must be 'confirm' or 'decline'")
+
     # === Health ===
 
     @router.get("/health")
@@ -383,7 +455,7 @@ def create_api_router(services: dict) -> APIRouter:
             raise HTTPException(status_code=400, detail="Invalid plan_id format")
 
         plan = await approval_service.db.fetchrow(
-            "SELECT status, current_step, total_steps FROM plans WHERE id = $1",
+            "SELECT status, current_step, total_steps, community_payload FROM plans WHERE id = $1",
             plan_uuid,
         )
         if not plan:
@@ -393,12 +465,36 @@ def create_api_router(services: dict) -> APIRouter:
             "SELECT step_number, status, result FROM plan_steps WHERE plan_id = $1 ORDER BY step_number",
             plan_uuid,
         )
-        return {
+
+        response_data: dict = {
             "status": plan["status"],
             "completed_steps": plan["current_step"] or 0,
             "total_steps": plan["total_steps"],
             "results": [dict(s) for s in steps],
             "error": "Execution failed" if plan["status"] in ("failed", "partial") else None,
         }
+
+        # When plan is paused for Community upgrade, attach the prompt
+        if plan["status"] == "paused" and plan.get("community_payload"):
+            import json as _jep
+            raw = plan["community_payload"]
+            try:
+                payload = _jep.loads(raw) if isinstance(raw, str) else (raw or {})
+            except Exception:
+                payload = {}
+
+            if payload.get("type") == "community_required":
+                ch_type = payload.get("channel_type", "stage")
+                ch_name = payload.get("channel_name", "")
+                response_data["type"] = "community_upgrade_needed"
+                response_data["community_payload"] = payload
+                response_data["upgrade_prompt"] = msg(
+                    "community_upgrade_needed",
+                    lang="vi",
+                    channel_type=ch_type,
+                    channel_name=ch_name,
+                )
+
+        return response_data
 
     return router

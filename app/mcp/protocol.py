@@ -43,6 +43,32 @@ class ToolDefinition:
             "parameters": self.parameters,
         }
 
+    def to_compact_schema(self) -> Dict[str, Any]:
+        """Compact schema for planner prompt — only name, description, required params.
+
+        Reduces token usage significantly vs full JSON Schema.
+        """
+        props = self.parameters.get("properties", {})
+        required = self.parameters.get("required", [])
+        # Build compact param list: "name(type): description"
+        param_lines = []
+        for pname, pdef in props.items():
+            if pname == "guild_id":
+                continue  # always injected — skip from prompt
+            ptype = pdef.get("type", "any")
+            pdesc = pdef.get("description", "")
+            req_marker = "*" if pname in required else ""
+            # Truncate long descriptions
+            if len(pdesc) > 80:
+                pdesc = pdesc[:77] + "..."
+            param_lines.append(f"  {pname}{req_marker}({ptype}): {pdesc}")
+        params_str = "\n".join(param_lines) if param_lines else "  (no extra params)"
+        return {
+            "name": self.name,
+            "description": self.description[:120] + ("..." if len(self.description) > 120 else ""),
+            "params": params_str,
+        }
+
 
 @dataclass
 class MCPRequest:

@@ -1,0 +1,13 @@
+# Bỏ qua các thư mục không cần thiết
+.git
+.venv
+venv
+env
+__pycache__
+*.pyc
+*.pyo
+*.pyd
+.Python
+.idea
+.vscode
+logs/

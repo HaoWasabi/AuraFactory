@@ -6,8 +6,8 @@ MESSAGES = {
         "en": "⏳ You have an active request — please wait for it to finish.",
     },
     "clarify": {
-        "vi": "🤔 Bạn có thể mô tả cụ thể hơn được không? Ví dụ: tạo những channel gì, cho ai, trong category nào?",
-        "en": "🤔 Could you be more specific? For example: what channels to create, for whom, in which category?",
+        "vi": "🤔 Bạn có thể mô tả cụ thể hơn được không? Ví dụ: tạo channel/role gì, cho ai, trong category nào?",
+        "en": "🤔 Could you be more specific? For example: what channels or roles to create/assign, for whom, in which category?",
     },
     "out_of_scope": {
         "vi": "❌ Yêu cầu này nằm ngoài phạm vi AuraFactory. Tôi chỉ hỗ trợ quản lý Discord server (channels, roles, permissions, moderation).",
@@ -84,6 +84,32 @@ MESSAGES = {
     "only_creator_can_reject": {
         "vi": "Chỉ người tạo yêu cầu mới được từ chối.",
         "en": "Only the request creator can reject.",
+    },
+    "community_upgrade_needed": {
+        "vi": (
+            "⚠️ **Cần bật tính năng Community**\n\n"
+            "Kênh **{channel_type}** `{channel_name}` yêu cầu server phải bật Community.\n\n"
+            "Bật Community sẽ mở khoá:\n"
+            "• Kênh Stage & Announcement\n"
+            "• Member Screening & Server Discovery\n\n"
+            "Bạn có muốn **bật Community ngay bây giờ** và tiếp tục tạo kênh không?"
+        ),
+        "en": (
+            "⚠️ **Community Feature Required**\n\n"
+            "The **{channel_type}** channel `{channel_name}` requires Community to be enabled.\n\n"
+            "Enabling Community unlocks:\n"
+            "• Stage & Announcement channels\n"
+            "• Member Screening & Server Discovery\n\n"
+            "Would you like to **enable Community now** and continue creating the channel?"
+        ),
+    },
+    "community_upgrade_confirmed": {
+        "vi": "✅ Đang bật Community và tiếp tục tạo kênh...",
+        "en": "✅ Enabling Community and resuming channel creation...",
+    },
+    "community_upgrade_declined": {
+        "vi": "🚫 Đã huỷ. Kênh {channel_type} sẽ không được tạo cho đến khi Community được bật.",
+        "en": "🚫 Cancelled. The {channel_type} channel won't be created until Community is enabled.",
     },
 }
 

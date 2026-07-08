@@ -139,7 +139,9 @@ class GuildConnector(BaseConnector):
             guild: Target guild.
             new_name: New server name (2–100 chars).
             icon_url: URL of new server icon image (PNG/JPG/GIF).
+                      Pass empty string ("") to remove/clear the current server icon.
             banner_url: URL of new server banner image (requires boost level 2+).
+                        Pass empty string ("") to remove/clear the current banner.
             description: Server description shown in Discovery (Community servers).
             verification_level: One of 'none', 'low', 'medium', 'high', 'highest'.
             explicit_content_filter: One of 'disabled', 'no_role', 'all_members'.
@@ -185,23 +187,33 @@ class GuildConnector(BaseConnector):
 
         # Download and attach icon / banner bytes
         if icon_url is not None:
-            img = await _fetch_image_bytes(icon_url)
-            if img is None:
-                raise ValueError(f"Could not download icon image from: {icon_url}")
-            payload["icon"] = img
-            updated.append("icon")
+            if icon_url == "":
+                # Empty string → clear/remove the server icon
+                payload["icon"] = None
+                updated.append("icon (cleared)")
+            else:
+                img = await _fetch_image_bytes(icon_url)
+                if img is None:
+                    raise ValueError(f"Could not download icon image from: {icon_url}")
+                payload["icon"] = img
+                updated.append("icon")
 
         if banner_url is not None:
-            if guild.premium_tier < 2:
-                raise ValueError(
-                    f"Server banners require Boost Level 2+. "
-                    f"Current level: {guild.premium_tier}."
-                )
-            img = await _fetch_image_bytes(banner_url)
-            if img is None:
-                raise ValueError(f"Could not download banner image from: {banner_url}")
-            payload["banner"] = img
-            updated.append("banner")
+            if banner_url == "":
+                # Empty string → clear/remove the banner
+                payload["banner"] = None
+                updated.append("banner (cleared)")
+            else:
+                if guild.premium_tier < 2:
+                    raise ValueError(
+                        f"Server banners require Boost Level 2+. "
+                        f"Current level: {guild.premium_tier}."
+                    )
+                img = await _fetch_image_bytes(banner_url)
+                if img is None:
+                    raise ValueError(f"Could not download banner image from: {banner_url}")
+                payload["banner"] = img
+                updated.append("banner")
 
         if not payload:
             raise ValueError("No valid edit parameters provided")
@@ -213,7 +225,7 @@ class GuildConnector(BaseConnector):
         except nextcord.errors.HTTPException as exc:
             raise RuntimeError(f"Failed to edit server profile: {exc}")
 
-        # Collect human-readable field names
+        # Collect human-readable field names (icon/banner already appended above)
         for key in payload:
             if key not in ("icon", "banner"):
                 updated.append(key)
@@ -251,7 +263,6 @@ class GuildConnector(BaseConnector):
             raise PermissionError("manage_guild")
 
         current_features = list(guild.features)
-        payload: Dict[str, Any] = {}
 
         if enable:
             if "COMMUNITY" not in current_features:
@@ -281,20 +292,35 @@ class GuildConnector(BaseConnector):
             if updates_ch is None:
                 updates_ch = guild.public_updates_channel or rules_ch
 
-            payload["features"] = current_features
-            payload["rules_channel"] = rules_ch
-            payload["public_updates_channel"] = updates_ch
+            # nextcord's Guild.edit() does not accept a 'features' kwarg.
+            # Use the raw HTTP endpoint instead, which accepts the full features list.
+            http_payload: Dict[str, Any] = {
+                "features": current_features,
+                "rules_channel_id": str(rules_ch.id),
+                "public_updates_channel_id": str(updates_ch.id),
+                # Community requires explicit_content_filter = all_members (2)
+                # Discord rejects values < 2 with error code 50035
+                "explicit_content_filter": 2,  # 2 = all_members
+                # Community requires verification_level >= low
+                "verification_level": max(guild.verification_level.value, 1),
+            }
+            try:
+                await guild._state.http.edit_guild(guild.id, reason=None, **http_payload)
+            except nextcord.errors.Forbidden:
+                raise PermissionError("manage_guild")
+            except nextcord.errors.HTTPException as exc:
+                raise RuntimeError(f"Failed to set community: {exc}")
         else:
             if "COMMUNITY" in current_features:
                 current_features.remove("COMMUNITY")
-            payload["features"] = current_features
-
-        try:
-            await guild.edit(**payload)
-        except nextcord.errors.Forbidden:
-            raise PermissionError("manage_guild")
-        except nextcord.errors.HTTPException as exc:
-            raise RuntimeError(f"Failed to set community: {exc}")
+            try:
+                await guild._state.http.edit_guild(
+                    guild.id, reason=None, features=current_features
+                )
+            except nextcord.errors.Forbidden:
+                raise PermissionError("manage_guild")
+            except nextcord.errors.HTTPException as exc:
+                raise RuntimeError(f"Failed to disable community: {exc}")
 
         logger.info(
             "Community %s for guild '%s'", "enabled" if enable else "disabled", guild.name
@@ -581,17 +607,27 @@ class GuildConnector(BaseConnector):
                     "Batch-edit server profile fields in a single call. "
                     "Supports: rename, change icon (via URL), change banner (Boost Lv2+, via URL), "
                     "set description, verification level, explicit content filter, and preferred locale. "
-                    "Only provided fields are updated; omitted fields are left unchanged."
+                    "Only provided fields are updated; omitted fields are left unchanged. "
+                    "To remove/clear the server icon or banner, pass an empty string (\"\") for icon_url or banner_url."
                 ),
                 parameters={
                     "type": "object",
                     "properties": {
                         "guild_id": {"type": "string", "description": "Target guild ID."},
                         "new_name": {"type": "string", "description": "New server name (2–100 chars)."},
-                        "icon_url": {"type": "string", "description": "URL of new server icon (PNG/JPG/GIF)."},
+                        "icon_url": {
+                            "type": "string",
+                            "description": (
+                                "URL of new server icon (PNG/JPG/GIF). "
+                                "Pass empty string (\"\") to remove/clear the current server icon."
+                            ),
+                        },
                         "banner_url": {
                             "type": "string",
-                            "description": "URL of new server banner image. Requires Boost Level 2+.",
+                            "description": (
+                                "URL of new server banner image. Requires Boost Level 2+. "
+                                "Pass empty string (\"\") to remove/clear the current banner."
+                            ),
                         },
                         "description": {
                             "type": "string",

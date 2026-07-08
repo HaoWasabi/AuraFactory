@@ -33,6 +33,10 @@ CRITICAL RULES:
 5. If you need to delete/modify something by name, find its ID in the context first
 6. Assign risk_level per step: LOW (read/inspect), MEDIUM (create/edit/move/rename), HIGH (delete/bulk ops/batch assign), CRITICAL (ban/bulk delete/server settings)
 7. Write step descriptions in the SAME language as the user request
+8. ROLE ID DEPENDENCY: When a step needs to reference a role that will be created in a PREVIOUS step of this same plan:
+   - Use the EXACT role name (e.g. "Sales Team") as a string placeholder in allowed_role_ids
+   - The executor will automatically resolve role names to their IDs at runtime
+   - Example: if step 3 creates role "Sales Team", step 6 can use allowed_role_ids=["Sales Team"]
 
 ROLE MANAGEMENT TOOL SELECTION GUIDE:
 - Creating ONE role with basic settings → discord.roles.create
@@ -77,6 +81,12 @@ EXAMPLE — Gán role cho nhiều người:
 User: "gán role Member cho @alice, @bob, @carol"
 Context: roles={"id":"555","name":"Member"}, members=[alice=id:1, bob=id:2, carol=id:3]
 → discord.roles.batch_assign with member_ids=["1","2","3"], role_id="555", action="add"
+
+EXAMPLE — Tạo role mới rồi gán ngay cho 1 member:
+User: "tạo role 'VIP' và gán cho tôi" (user_id=123456789)
+→ Step 1: discord.roles.create with name="VIP", risk: MEDIUM
+   Step 2: discord.roles.assign with member_id="123456789", role_id="VIP"
+   (role_id dùng tên "VIP" làm placeholder — executor sẽ tự resolve sang ID thực từ Step 1)
 
 EXAMPLE — Clone role:
 User: "tạo role Mod2 giống hệt role Mod"
@@ -137,8 +147,10 @@ Context: channels={"id":"555666777","name":"thông-báo"}, roles={"id":"11122233
 SERVER SETTINGS TOOL SELECTION GUIDE:
 - Read full server state (name, channels count, boost tier, features, AFK, locale, etc.) → discord.guild.get_info
 - Change server name → discord.guild.edit_profile with new_name="..."
-- Change server icon → discord.guild.edit_profile with icon_url="..."
-- Change server banner (Boost Lv2+) → discord.guild.edit_profile with banner_url="..."
+- Change server icon → discord.guild.edit_profile with icon_url="<url>"
+- Remove/clear server icon → discord.guild.edit_profile with icon_url=""
+- Change server banner (Boost Lv2+) → discord.guild.edit_profile with banner_url="<url>"
+- Remove/clear server banner → discord.guild.edit_profile with banner_url=""
 - Change server description → discord.guild.edit_profile with description="..."
 - Change verification level + other fields together → discord.guild.edit_profile (batch, one call)
 - Change ONLY verification level → discord.guild.set_verification with level="..."
@@ -242,7 +254,7 @@ class PlannerService:
             if not tools:
                 tools = self.mcp_client.list_all_tools()
 
-            tool_descriptions = [t.to_llm_schema() for t in tools]
+            tool_descriptions = [t.to_compact_schema() for t in tools]
 
             # 3. Build messages for LLM
             user_content = self._build_user_prompt(
@@ -275,8 +287,27 @@ class PlannerService:
             )
 
             # 5. Parse LLM response into plan
+            if not response.content or not response.content.strip():
+                logger.error(
+                    "Planner LLM returned empty content for request %s. "
+                    "This usually means the prompt was blocked by safety filters or "
+                    "the model hit max_tokens. Check Gemini logs for finish_reason.",
+                    request_id,
+                )
+                await self._fail_request(request_id, "LLM returned empty response")
+                return {"ok": False, "error": "Không thể tạo kế hoạch — LLM trả về nội dung rỗng. Thử lại hoặc rút gọn yêu cầu."}
+
+            logger.debug(
+                "Planner raw LLM response (request %s, %d chars): %.500s",
+                request_id, len(response.content), response.content,
+            )
+
             plan_data = self._parse_plan_response(response.content)
             if plan_data is None:
+                logger.error(
+                    "Planner failed to parse JSON for request %s. Raw response (first 1000 chars): %s",
+                    request_id, response.content[:1000],
+                )
                 await self._fail_request(request_id, "LLM returned invalid plan JSON")
                 return {"ok": False, "error": "Không thể tạo kế hoạch — LLM trả về JSON không hợp lệ."}
 
@@ -455,13 +486,40 @@ class PlannerService:
         server_context: dict,
         tool_list: List[Dict[str, Any]],
     ) -> str:
-        """Build the user prompt with human-readable context."""
+        """Build the user prompt with human-readable context.
+
+        Uses compact tool format to keep token count low.
+        """
         formatted_context = self._format_context_for_llm(server_context, guild_id)
+        # Build compact tool reference instead of full JSON schema
+        tool_lines = []
+        for t in tool_list:
+            # t may be full schema (dict with "name","description","parameters")
+            # or compact schema (dict with "name","description","params")
+            name = t.get("name", "")
+            desc = t.get("description", "")
+            if len(desc) > 120:
+                desc = desc[:117] + "..."
+            params_str = t.get("params", "")
+            if not params_str and "parameters" in t:
+                # Fallback: extract param names from full schema
+                props = t["parameters"].get("properties", {})
+                req = t["parameters"].get("required", [])
+                parts = []
+                for pn, pd in props.items():
+                    if pn == "guild_id":
+                        continue
+                    r = "*" if pn in req else ""
+                    parts.append(f"{pn}{r}({pd.get('type','any')})")
+                params_str = ", ".join(parts) if parts else "(no extra params)"
+            tool_lines.append(f"- {name}: {desc}\n  params: {params_str}")
+
+        tools_text = "\n".join(tool_lines)
         return f"""## Server Context
 {formatted_context}
 
 ## Available Tools
-{json.dumps(tool_list, indent=2, ensure_ascii=False)}
+{tools_text}
 
 ## User Request
 {message}"""
@@ -522,6 +580,7 @@ class PlannerService:
 
             # Fix 3: Warn if numeric IDs look like they were hallucinated
             # (very short IDs like "123" are suspicious — real Discord IDs are 17-19 digits)
+            # Skip allowed_role_ids — those may be name-based placeholders resolved at runtime.
             for field in id_fields:
                 if field in params and field != "guild_id":
                     val = str(params[field])
@@ -539,7 +598,13 @@ class PlannerService:
             if "member_ids" in params and isinstance(params["member_ids"], list):
                 params["member_ids"] = [str(x) for x in params["member_ids"]]
 
-            # Fix 5: Normalize bulk_create roles list — ensure colors are strings
+            # Fix 5: allowed_role_ids / allowed_user_ids — keep as strings (may be names or IDs)
+            if "allowed_role_ids" in params and isinstance(params["allowed_role_ids"], list):
+                params["allowed_role_ids"] = [str(x) for x in params["allowed_role_ids"]]
+            if "allowed_user_ids" in params and isinstance(params["allowed_user_ids"], list):
+                params["allowed_user_ids"] = [str(x) for x in params["allowed_user_ids"]]
+
+            # Fix 6: Normalize bulk_create roles list — ensure colors are strings
             if "roles" in params and isinstance(params["roles"], list):
                 for role_def in params["roles"]:
                     if isinstance(role_def, dict) and "color" in role_def:
@@ -556,53 +621,78 @@ class PlannerService:
 
     def _parse_plan_response(self, content: str) -> Optional[dict]:
         """Parse LLM response into plan dict. Returns None on failure."""
+        if not content:
+            return None
+
         cleaned = content.strip()
+
+        # Remove BOM if present
+        if cleaned.startswith("\ufeff"):
+            cleaned = cleaned[1:]
+
+        # Strip markdown code fences — handle ```json, ```JSON, ``` etc.
         if cleaned.startswith("```"):
             lines = cleaned.split("\n")
-            if lines[0].startswith("```"):
-                lines = lines[1:]
-            if lines and lines[-1].strip() == "```":
-                lines = lines[:-1]
-            cleaned = "\n".join(lines)
+            # Remove opening fence (```json or ```)
+            lines = lines[1:]
+            # Remove closing fence
+            while lines and lines[-1].strip().startswith("```"):
+                lines.pop()
+            cleaned = "\n".join(lines).strip()
 
+        # Direct JSON parse (happy path)
         try:
             data = json.loads(cleaned)
+            return self._validate_plan_dict(data)
         except json.JSONDecodeError:
-            # Attempt to repair truncated JSON
-            repaired = cleaned
-            open_braces = repaired.count('{') - repaired.count('}')
-            open_brackets = repaired.count('[') - repaired.count(']')
-            repaired += ']' * open_brackets + '}' * open_braces
+            pass
+
+        # Try to repair truncated JSON (missing closing braces/brackets)
+        repaired = cleaned
+        open_braces = repaired.count("{") - repaired.count("}")
+        open_brackets = repaired.count("[") - repaired.count("]")
+        if open_braces > 0 or open_brackets > 0:
+            repaired += "]" * open_brackets + "}" * open_braces
             try:
                 data = json.loads(repaired)
-                logger.info("Plan JSON repaired (added %d closing brackets)", open_braces + open_brackets)
+                logger.info(
+                    "Plan JSON repaired (added %d ']', %d '}')",
+                    open_brackets, open_braces,
+                )
+                return self._validate_plan_dict(data)
             except json.JSONDecodeError:
-                # Last resort: try to find the JSON object
-                try:
-                    start = cleaned.index('{')
-                    end = cleaned.rindex('}') + 1
-                    data = json.loads(cleaned[start:end])
-                except (ValueError, json.JSONDecodeError):
-                    logger.warning("Failed to parse plan JSON: %s", cleaned[:300])
-                    return None
+                pass
 
+        # Last resort: extract first {...} block
+        try:
+            start = cleaned.index("{")
+            end = cleaned.rindex("}") + 1
+            data = json.loads(cleaned[start:end])
+            return self._validate_plan_dict(data)
+        except (ValueError, json.JSONDecodeError):
+            pass
+
+        logger.warning(
+            "Failed to parse plan JSON. First 500 chars: %s",
+            cleaned[:500],
+        )
+        return None
+
+    def _validate_plan_dict(self, data: Any) -> Optional[dict]:
+        """Validate that parsed data has the expected plan structure."""
         if not isinstance(data, dict):
+            logger.warning("Plan JSON is not a dict (got %s)", type(data).__name__)
             return None
         if "steps" not in data or not isinstance(data["steps"], list):
+            logger.warning("Plan JSON missing 'steps' list")
             return None
-
-        # Validate each step has at minimum a tool_name
-        valid_steps = []
-        for step in data["steps"]:
-            if not isinstance(step, dict):
-                continue
-            if "tool_name" not in step:
-                continue
-            valid_steps.append(step)
-
+        valid_steps = [
+            s for s in data["steps"]
+            if isinstance(s, dict) and s.get("tool_name")
+        ]
         if not valid_steps:
+            logger.warning("Plan JSON has no valid steps (each needs tool_name)")
             return None
-
         data["steps"] = valid_steps
         return data
 

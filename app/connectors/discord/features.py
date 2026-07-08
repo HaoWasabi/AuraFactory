@@ -60,16 +60,35 @@ class FeaturesConnector(BaseConnector):
         feature_name = feature_name.upper()
 
         try:
-            # For COMMUNITY feature, special handling is needed
+            # For COMMUNITY feature, special handling is needed:
+            # Discord requires rules_channel_id, public_updates_channel_id,
+            # explicit_content_filter >= 1, and verification_level >= 1.
+            # nextcord's Guild.edit() does not accept 'features', so use raw HTTP.
             if feature_name == "COMMUNITY":
-                # Requires rules_channel and public_updates_channel
-                await guild.edit(community=True)
+                current_features = list(guild.features)
+                if "COMMUNITY" not in current_features:
+                    current_features.append("COMMUNITY")
+                rules_ch = guild.rules_channel or (guild.text_channels[0] if guild.text_channels else None)
+                updates_ch = guild.public_updates_channel or rules_ch
+                if rules_ch is None:
+                    raise ValueError("No text channels available to assign as rules channel for Community.")
+                await guild._state.http.edit_guild(
+                    guild.id,
+                    reason=None,
+                    features=current_features,
+                    rules_channel_id=str(rules_ch.id),
+                    public_updates_channel_id=str(updates_ch.id),
+                    explicit_content_filter=max(guild.explicit_content_filter.value, 2),
+                    verification_level=max(guild.verification_level.value, 1),
+                )
             else:
-                # Generic feature toggle via guild edit
+                # Generic feature toggle via raw HTTP
                 current_features = list(guild.features)
                 if feature_name not in current_features:
                     current_features.append(feature_name)
-                await guild.edit(features=current_features)
+                await guild._state.http.edit_guild(
+                    guild.id, reason=None, features=current_features
+                )
 
             logger.info("Enabled feature '%s' in guild '%s'", feature_name, guild.name)
             return {
@@ -103,12 +122,19 @@ class FeaturesConnector(BaseConnector):
 
         try:
             if feature_name == "COMMUNITY":
-                await guild.edit(community=False)
+                current_features = list(guild.features)
+                if "COMMUNITY" in current_features:
+                    current_features.remove("COMMUNITY")
+                await guild._state.http.edit_guild(
+                    guild.id, reason=None, features=current_features
+                )
             else:
                 current_features = list(guild.features)
                 if feature_name in current_features:
                     current_features.remove(feature_name)
-                await guild.edit(features=current_features)
+                await guild._state.http.edit_guild(
+                    guild.id, reason=None, features=current_features
+                )
 
             logger.info("Disabled feature '%s' in guild '%s'", feature_name, guild.name)
             return {

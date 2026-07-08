@@ -108,13 +108,6 @@ class DiscordBot(commands.Bot):
             await interaction.followup.send("❌ API key không được để trống.", ephemeral=True)
             return
 
-        if not new_key.startswith("AIza"):
-            await interaction.followup.send(
-                "❌ API key không hợp lệ. Gemini key phải bắt đầu bằng `AIza`.",
-                ephemeral=True,
-            )
-            return
-
         # Update config singleton
         settings.GEMINI_API_KEY = new_key
 
@@ -255,6 +248,29 @@ class DiscordBot(commands.Bot):
             async def _execute_and_reply():
                 try:
                     exec_result = await self.executor_service.execute_plan(plan_id)
+
+                    # Community upgrade needed — show prompt with confirm/decline buttons
+                    if exec_result.get("status") == "community_upgrade_needed":
+                        community_payload = exec_result.get("community_payload", {})
+                        ch_type = community_payload.get("channel_type", "stage")
+                        ch_name = community_payload.get("channel_name", "")
+                        prompt_text = msg(
+                            "community_upgrade_needed",
+                            lang=lang,
+                            channel_type=ch_type,
+                            channel_name=ch_name,
+                        )
+                        view = CommunityUpgradeView(
+                            bot=self,
+                            community_payload=community_payload,
+                            user_id=user_id,
+                            request_id=request_id,
+                            lang=lang,
+                        )
+                        sent = await message.reply(prompt_text, view=view)
+                        view.message = sent
+                        return
+
                     summary = self._format_execution_result(exec_result, lang=lang)
                     await message.reply(summary)
                     await self.request_service.update_status(request_id, "completed", response=summary)
@@ -378,3 +394,108 @@ class ApprovalView(nextcord.ui.View):
         except Exception as e:
             logger.exception("Reject button error: %s", e)
             await interaction.followup.send(f"❌ Error: {str(e)[:200]}", ephemeral=True)
+
+
+class CommunityUpgradeView(nextcord.ui.View):
+    """Discord UI buttons for Community upgrade prompt.
+
+    Shown when a plan step requires Community feature (e.g. creating a stage channel)
+    but the server hasn't enabled it yet.
+    """
+
+    def __init__(
+        self,
+        bot: DiscordBot,
+        community_payload: dict,
+        user_id: int,
+        request_id: str,
+        lang: str = "vi",
+    ):
+        super().__init__(timeout=300)  # 5-minute window to respond
+        self.bot = bot
+        self.community_payload = community_payload
+        self.user_id = user_id
+        self.request_id = request_id
+        self.lang = lang
+        self.message = None
+
+    async def on_timeout(self) -> None:
+        """Disable buttons and cancel the paused plan on timeout."""
+        for item in self.children:
+            if hasattr(item, "disabled"):
+                item.disabled = True
+        if self.message:
+            try:
+                await self.message.edit(
+                    content=getattr(self.message, "content", "") + "\n*(Hết thời gian — yêu cầu đã bị huỷ)*",
+                    view=self,
+                )
+            except Exception:
+                pass
+        # Cancel the paused plan
+        import uuid as _u
+        plan_id = self.community_payload.get("plan_id")
+        if plan_id:
+            try:
+                await self.bot.approval_service.db.execute(
+                    "UPDATE plans SET status = 'cancelled' WHERE id = $1", _u.UUID(plan_id)
+                )
+                await self.bot.request_service.update_status(self.request_id, "cancelled")
+            except Exception:
+                pass
+
+    @nextcord.ui.button(label="✅ Bật Community & Tiếp tục", style=nextcord.ButtonStyle.green)
+    async def confirm_button(self, button: nextcord.ui.Button, interaction: nextcord.Interaction):
+        if interaction.user.id != self.user_id:
+            await interaction.response.send_message(
+                msg("only_creator_approve", lang=self.lang), ephemeral=True
+            )
+            return
+
+        await interaction.response.defer()
+        self.stop()
+
+        try:
+            await interaction.followup.send(msg("community_upgrade_confirmed", lang=self.lang))
+            exec_result = await self.bot.executor_service.enable_community_and_resume(
+                self.community_payload
+            )
+            summary = self.bot._format_execution_result(exec_result, lang=self.lang)
+            await interaction.followup.send(summary)
+            await self.bot.request_service.update_status(
+                self.request_id,
+                "completed" if exec_result.get("status") == "completed" else "failed",
+                response=summary,
+            )
+        except Exception as e:
+            logger.exception("CommunityUpgrade confirm error: %s", e)
+            await interaction.followup.send(f"❌ Lỗi: {str(e)[:200]}", ephemeral=True)
+
+    @nextcord.ui.button(label="🚫 Huỷ", style=nextcord.ButtonStyle.red)
+    async def decline_button(self, button: nextcord.ui.Button, interaction: nextcord.Interaction):
+        if interaction.user.id != self.user_id:
+            await interaction.response.send_message(
+                msg("only_creator_reject", lang=self.lang), ephemeral=True
+            )
+            return
+
+        await interaction.response.defer()
+        self.stop()
+
+        import uuid as _u
+        plan_id = self.community_payload.get("plan_id")
+        ch_type = self.community_payload.get("channel_type", "stage")
+        try:
+            if plan_id:
+                await self.bot.request_service.db.execute(
+                    "UPDATE plans SET status = 'cancelled' WHERE id = $1", _u.UUID(plan_id)
+                )
+            await self.bot.request_service.update_status(
+                self.request_id, "cancelled"
+            )
+        except Exception as e:
+            logger.warning("Failed to cancel plan on community decline: %s", e)
+
+        await interaction.followup.send(
+            msg("community_upgrade_declined", lang=self.lang, channel_type=ch_type)
+        )

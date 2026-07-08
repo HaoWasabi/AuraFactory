@@ -215,10 +215,12 @@ class ChannelsConnector(BaseConnector):
                     shared["bitrate"] = int(bitrate)
                 if user_limit is not None:
                     shared["user_limit"] = int(user_limit)
+                # nextcord requires 'topic' as a mandatory keyword-only arg for stage channels
+                shared["topic"] = topic or name
                 channel = await guild.create_stage_channel(name=name, **shared)
                 # Optionally open a stage instance
                 try:
-                    await channel.create_instance(topic=topic or "Welcome!")
+                    await channel.create_instance(topic=topic or name)
                 except Exception:
                     pass  # Non-fatal — bot may lack Stage Moderator perms
 
@@ -233,8 +235,12 @@ class ChannelsConnector(BaseConnector):
 
             elif c_type in ("news", "announcement"):
                 if "COMMUNITY" not in guild.features:
-                    raise ValueError(
-                        "Announcement channels require the server's 'Community' feature to be enabled."
+                    from app.connectors.discord.exceptions import CommunityRequiredError
+                    raise CommunityRequiredError(
+                        feature_needed="COMMUNITY",
+                        blocked_action="create_news_channel",
+                        channel_name=name,
+                        channel_type="news",
                     )
                 if topic:
                     shared["topic"] = topic

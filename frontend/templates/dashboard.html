@@ -555,11 +555,6 @@
                 showToast('Vui lòng nhập API key', 'warning');
                 return;
             }
-            if (!newKey.startsWith('AIza')) {
-                showToast('API key không hợp lệ (phải bắt đầu bằng AIza)', 'error');
-                return;
-            }
-
             try {
                 const data = await api('POST', '/api/admin/update-gemini-key', {
                     api_key: newKey,

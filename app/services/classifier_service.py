@@ -26,9 +26,11 @@ INTENTS = {
 CLASSIFIER_SYSTEM_PROMPT = """You are an intent classifier for a Discord server management AI.
 Given a user message, classify it into ONE of these intents:
 
-- setup: Creating NEW categories, channels (text/voice/stage/forum/news), roles, permissions from scratch
+- setup: Creating NEW categories, channels (text/voice/stage/forum/news), roles, permissions from scratch;
+         also includes creating a role AND immediately assigning it to a member in the same request
 - manage: Moving, renaming, editing, deleting EXISTING channels/roles/categories;
-          also includes changing channel permissions (is_private, allowed_roles, slowmode, nsfw, bitrate, user_limit)
+          also includes changing channel permissions (is_private, allowed_roles, slowmode, nsfw, bitrate, user_limit);
+          also includes assigning or removing EXISTING roles to/from members (gán role, gỡ role, thêm role cho user)
 - moderate: Kick/ban/timeout/unban/warn members
 - query: Read-only questions — "list channels", "what roles exist", "server info", "thông tin server"
 - server_settings: Any change to the server (guild) itself:
@@ -45,6 +47,9 @@ Given a user message, classify it into ONE of these intents:
 - out_of_scope: Not related to Discord server management
 
 CLASSIFICATION HINTS:
+- "tạo role ... và gán cho", "tạo role ... rồi gán", "tạo role cho tôi" → setup  (tạo mới + gán = setup)
+- "gán role", "thêm role cho", "assign role", "gắn role", "cấp role" → manage  (role đã tồn tại)
+- "gỡ role", "xóa role khỏi", "remove role", "lấy lại role" → manage
 - "đổi tên server", "đổi icon", "đổi banner" → server_settings
 - "bật/tắt Community", "bật community" → server_settings
 - "tăng bảo mật", "verification level" → server_settings

@@ -172,6 +172,11 @@ class GeminiLLM(BaseLLM):
             "temperature": temperature,
             "max_output_tokens": max_tokens,
         }
+
+        # If no tools are being used, request JSON output directly.
+        # This prevents Gemini from wrapping the response in markdown or prose.
+        if not tools:
+            generation_config["response_mime_type"] = "application/json"
         
         # Create model with tools if provided
         model_kwargs = {
@@ -213,14 +218,43 @@ class GeminiLLM(BaseLLM):
         # Parse response
         content = ""
         tool_calls = []
-        
+        finish_reason = None
+
+        # Extract finish_reason from candidates (helps diagnose empty/blocked responses)
+        try:
+            if response.candidates:
+                cand = response.candidates[0]
+                finish_reason = str(getattr(cand, "finish_reason", "")).upper()
+        except Exception:
+            pass
+
         if response.parts:
             for part in response.parts:
                 if hasattr(part, "text"):
-                    content = part.text
-                
+                    content += part.text
+
                 if hasattr(part, "function_call"):
                     tool_calls.extend(self._extract_tool_calls(part))
+        else:
+            # No parts — response was likely blocked or truncated
+            if finish_reason:
+                logger.warning(
+                    "Gemini returned empty parts. finish_reason=%s model=%s",
+                    finish_reason, self.model,
+                )
+                if finish_reason in ("MAX_TOKENS", "2"):
+                    # Attempt to get partial text from prompt_feedback or safety ratings
+                    try:
+                        content = response.text  # may raise if blocked
+                    except Exception:
+                        pass
+            # Still empty — log safety feedback if available
+            if not content:
+                try:
+                    pf = response.prompt_feedback
+                    logger.warning("Gemini prompt_feedback: %s", pf)
+                except Exception:
+                    pass
         
         # Extract usage stats
         try:
