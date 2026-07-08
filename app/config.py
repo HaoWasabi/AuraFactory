@@ -59,10 +59,6 @@ class Config:
         self.AWS_REGION: str = os.environ.get('AWS_REGION', 'us-east-1')
         self.BEDROCK_MODEL_ID: str = os.environ.get('BEDROCK_MODEL_ID', '')
         
-        # Paths Configuration
-        self.PROMPTS_DIR: str = os.environ.get('PROMPTS_DIR', './prompts')
-        self.SKILLS_DIR: str = os.environ.get('SKILLS_DIR', './skills')
-        
         self._initialized = True
     
     @staticmethod

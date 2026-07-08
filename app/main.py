@@ -93,6 +93,7 @@ async def lifespan(app: FastAPI):
     from app.services.query_service import QueryService
     from app.services.auth_service import AuthService
     from app.services.guild_sync_service import GuildSyncService
+    from app.services.unified_agent import UnifiedAgent
 
     rate_limit_service = RateLimitService(db)
     request_service = RequestService(db, rate_limit_service=rate_limit_service)
@@ -104,6 +105,8 @@ async def lifespan(app: FastAPI):
     query_service = QueryService(llm, mcp_client, context_service)
     auth_service = AuthService(db)
     guild_sync_service = GuildSyncService(db)
+
+    unified_agent = UnifiedAgent(llm, mcp_client, context_service) if llm else None
 
     services = {
         "rate_limit_service": rate_limit_service,
@@ -117,6 +120,7 @@ async def lifespan(app: FastAPI):
         "auth_service": auth_service,
         "guild_sync_service": guild_sync_service,
         "_mcp_client": mcp_client,
+        "unified_agent": unified_agent,
     }
     logger.info("✅ All services initialized")
 

@@ -510,8 +510,12 @@ def create_api_router(services: dict) -> APIRouter:
         db = guild_sync_service.db
         rows = await db.fetch(
             """
-            SELECT id, 
-                   history->0->>'content' as first_message,
+            SELECT id,
+                   COALESCE(
+                       (SELECT elem->>'content' FROM jsonb_array_elements(history) AS elem
+                        WHERE elem->>'role' = 'user' LIMIT 1),
+                       history->0->>'content'
+                   ) as first_message,
                    created_at, 
                    last_active_at
             FROM sessions
@@ -746,5 +750,70 @@ def create_api_router(services: dict) -> APIRouter:
             media_type="text/event-stream",
             headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
         )
+
+    # ═══════════════════════════════════════════════════════════════════
+    # V2 — Unified Agent (single LLM call with function calling)
+    # ═══════════════════════════════════════════════════════════════════
+
+    unified_agent = services.get("unified_agent")
+
+    @router.post("/chat/v2")
+    async def chat_v2(req: ChatRequest):
+        """V2 chat endpoint — Unified Agent with native function calling.
+
+        Single LLM call that classifies + plans + executes.
+        Falls back to v1 pipeline if unified_agent not available.
+        """
+        if not unified_agent:
+            # Fallback to v1
+            return await chat(req)
+
+        guild_id = int(req.guild_id)
+        user_id_int = int(req.user_id)
+
+        # Check bot installed
+        bot_row = await guild_sync_service.db.fetchrow(
+            "SELECT is_active FROM bot_installs WHERE guild_id = $1 AND is_active = TRUE",
+            guild_id,
+        )
+        if not bot_row:
+            invite_url = guild_sync_service.get_bot_invite_url(guild_id)
+            return {
+                "ok": False,
+                "type": "bot_not_installed",
+                "error": f"Bot not installed. [Invite]({invite_url})",
+                "invite_url": invite_url,
+            }
+
+        # Get session history for context
+        history = []
+        if req.session_id:
+            import uuid as _uuid
+            try:
+                sid = _uuid.UUID(req.session_id)
+                row = await guild_sync_service.db.fetchrow(
+                    "SELECT history FROM sessions WHERE id = $1", sid
+                )
+                if row:
+                    import json as _json
+                    h = row["history"] or []
+                    if isinstance(h, str):
+                        h = _json.loads(h) if h.strip() else []
+                    history = h[-10:]  # Last 10 turns for context
+            except (ValueError, TypeError):
+                pass
+
+        # Process via Unified Agent
+        result = await unified_agent.process(
+            message=req.message,
+            guild_id=guild_id,
+            user_id=user_id_int,
+            history=history,
+        )
+
+        # Save to session history
+        await _save_to_session_history(guild_id, user_id_int, req.message, result["content"], req.session_id)
+
+        return {"ok": True, **result}
 
     return router

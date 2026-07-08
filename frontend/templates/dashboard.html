@@ -400,61 +400,28 @@ function appendBotMsg(text){
   return div;
 }
 
-// === Streaming ===
+// === Chat V2 (Unified Agent) ===
 function sendStream(text){
   var el=document.getElementById('msgs');
   var div=document.createElement('div');
   div.className='msg msg-bot streaming';
-  div.innerHTML='';
+  div.innerHTML='<em>Thinking...</em>';
   el.appendChild(div);
   el.scrollTop=el.scrollHeight;
-  var raw='';
 
-  fetch('/api/chat/stream',{
-    method:'POST',
-    headers:{'Content-Type':'application/json'},
-    body:JSON.stringify({message:text,guild_id:guildId,user_id:userId,session_id:currentSession||''})
-  }).then(function(resp){
-    if(!resp.ok){
-      div.classList.remove('streaming');
-      resp.json().then(function(d){div.innerHTML='<span style="color:var(--danger)">'+escHtml(d.error||d.detail||'Server error')+'</span>';}).catch(function(){div.innerHTML='<span style="color:var(--danger)">Server error ('+resp.status+')</span>';});
-      return;
-    }
-    var reader=resp.body.getReader();
-    var decoder=new TextDecoder();
-    var buffer='';
-    function read(){
-      reader.read().then(function(result){
-        if(result.done){div.classList.remove('streaming');return;}
-        buffer+=decoder.decode(result.value,{stream:true});
-        var lines=buffer.split('\n');
-        buffer=lines.pop();
-        lines.forEach(function(line){
-          if(line.indexOf('data: ')!==0)return;
-          var payload=line.slice(6);
-          if(payload==='[DONE]'){div.classList.remove('streaming');return;}
-          try{
-            var chunk=JSON.parse(payload);
-            if(chunk.type==='text'){raw+=chunk.content;div.innerHTML=marked.parse(raw);}
-            else if(chunk.type==='status'){div.innerHTML='<em>'+escHtml(chunk.message||chunk.status)+'</em>';}
-            else if(chunk.type==='approval'){renderApproval(chunk);}
-            else if(chunk.type==='clarify'){renderClarify(chunk);}
-            else if(chunk.type==='done'){div.classList.remove('streaming');if(chunk.final_message){raw+=chunk.final_message;div.innerHTML=marked.parse(raw);}}
-            else if(chunk.type==='error'){div.classList.remove('streaming');div.innerHTML='<span style="color:var(--danger)">'+escHtml(chunk.message)+'</span>';}
-          }catch(e){}
-          el.scrollTop=el.scrollHeight;
-        });
-        read();
-      });
-    }
-    read();
-  }).catch(function(){
-    // Fallback to non-streaming
+  api('POST','/api/chat/v2',{message:text,guild_id:guildId,user_id:userId,session_id:currentSession||''}).then(function(d){
     div.classList.remove('streaming');
-    api('POST','/api/chat',{message:text,guild_id:guildId,user_id:userId}).then(function(d){
-      if(d&&(d.content||d.error))div.innerHTML=marked.parse(d.content||d.error);
-      else div.innerHTML='<span style="color:var(--danger)">Error</span>';
-    });
+    if(!d){div.innerHTML='<span style="color:var(--danger)">No response</span>';return;}
+    if(d.ok&&d.content){
+      div.innerHTML=marked.parse(d.content);
+    }else if(d.error){
+      div.innerHTML='<span style="color:var(--danger)">'+marked.parse(d.error)+'</span>';
+    }else{
+      div.innerHTML='<span style="color:var(--danger)">Unexpected response</span>';
+    }
+    el.scrollTop=el.scrollHeight;
+    // Refresh structure after actions
+    if(d.type==='action')loadGuildData();
   });
 }
 
