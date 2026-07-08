@@ -67,20 +67,6 @@
 .msg-bot code{background:rgba(0,0,0,.3);padding:1px 4px;border-radius:3px;font-size:12px}
 .msg-bot pre{background:rgba(0,0,0,.3);padding:8px;border-radius:6px;overflow-x:auto;font-size:12px}
 
-/* Approval card */
-.card-approval{background:var(--bg-tertiary);border:1px solid var(--border-color);border-radius:10px;padding:14px;margin:6px 0;align-self:flex-start;max-width:80%}
-.card-approval .summary{font-weight:500;margin-bottom:6px;font-size:14px}
-.card-approval .steps{font-size:12px;color:var(--text-secondary);margin-bottom:10px}
-.card-approval .step{padding:2px 0}
-.card-approval .actions{display:flex;gap:8px}
-.card-approval .risk{display:inline-block;font-size:11px;font-weight:600;padding:2px 8px;border-radius:10px;margin-bottom:8px}
-.risk-low{background:var(--risk-low);color:#000}
-.risk-medium{background:var(--risk-medium);color:#000}
-.risk-high{background:var(--risk-high);color:#fff}
-.risk-critical{background:var(--risk-critical);color:#fff}
-.btn-approve{background:var(--success);color:#fff;border:none;border-radius:6px;padding:6px 14px;font-size:13px;font-weight:500;cursor:pointer}
-.btn-reject{background:var(--danger);color:#fff;border:none;border-radius:6px;padding:6px 14px;font-size:13px;font-weight:500;cursor:pointer}
-
 /* Clarify card */
 .card-clarify{background:var(--bg-tertiary);border:1px solid var(--warning);border-radius:10px;padding:14px;margin:6px 0;align-self:flex-start;max-width:80%}
 .card-clarify .ctitle{font-weight:500;margin-bottom:6px;color:var(--warning);font-size:14px}
@@ -424,25 +410,6 @@ function sendStream(text){
     if(d.type==='action')loadGuildData();
   });
 }
-
-// === Approval card ===
-function renderApproval(data){
-  var el=document.getElementById('msgs');
-  var div=document.createElement('div');
-  div.className='card-approval';
-  var riskCls='risk-'+((data.risk||'medium').toLowerCase());
-  var stepsHtml='';
-  (data.steps||[]).forEach(function(s,i){stepsHtml+='<div class="step">'+(i+1)+'. '+(s.description||s.tool_name)+'</div>';});
-  div.innerHTML='<span class="risk '+riskCls+'">'+(data.risk||'MEDIUM')+'</span>'+
-    '<div class="summary">'+escHtml(data.summary||'')+'</div>'+
-    '<div class="steps">'+stepsHtml+'</div>'+
-    '<div class="actions"><button class="btn-approve" onclick="doApprove(\''+data.plan_id+'\')">'+T[lang].approve+'</button>'+
-    '<button class="btn-reject" onclick="doReject(\''+data.plan_id+'\')">'+T[lang].reject+'</button></div>';
-  el.appendChild(div);
-  el.scrollTop=el.scrollHeight;
-}
-function doApprove(pid){api('POST','/api/approval',{plan_id:pid,action:'approve',user_id:userId}).then(function(){appendBotMsg('Plan approved. Executing...');});}
-function doReject(pid){api('POST','/api/approval',{plan_id:pid,action:'reject',user_id:userId}).then(function(){appendBotMsg('Plan rejected.');});}
 
 // === Clarify card ===
 function renderClarify(data){

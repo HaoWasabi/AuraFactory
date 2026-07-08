@@ -7,7 +7,6 @@ import nextcord
 from nextcord.ext import commands
 
 from app.config import settings
-from app.messages import msg
 
 logger = logging.getLogger(__name__)
 
@@ -38,7 +37,7 @@ class DiscordBot(commands.Bot):
         # Set of Discord user IDs that own this bot application (populated in on_ready)
         self._bot_owner_ids: Set[int] = set()
         # Flag: tools registered and ready
-        self._ready = False
+        self._tools_ready = False
 
     async def on_ready(self):
         logger.info("🤖 AuraFactory bot ready: %s (ID: %d)", self.user.name, self.user.id)
@@ -67,7 +66,7 @@ class DiscordBot(commands.Bot):
                 tool_count = len(self._mcp_client._tool_index)
                 logger.info("✅ MCP tools re-indexed after bot ready (%d tools)", tool_count)
 
-        self._ready = True
+        self._tools_ready = True
 
     # —— Admin: update Gemini API key ——————————————————————————————————
 
@@ -162,7 +161,7 @@ class DiscordBot(commands.Bot):
     async def _process_message(self, message: nextcord.Message, content: str, guild_id: int, user_id: int):
         """Process message via UnifiedAgent."""
         # Guard: bot not ready yet
-        if not self._ready:
+        if not self._tools_ready:
             await message.reply("⏳ Bot đang khởi động, vui lòng thử lại sau vài giây...")
             return
 

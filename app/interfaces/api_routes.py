@@ -8,8 +8,6 @@ from typing import Optional
 from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel
 
-from app.messages import msg
-
 logger = logging.getLogger(__name__)
 
 
