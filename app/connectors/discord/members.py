@@ -152,40 +152,57 @@ class MembersConnector(BaseConnector):
         member_id: int,
         duration_seconds: int,
     ) -> Dict[str, Any]:
-        """Server-mute a member (voice mute).
+        """Mute a member using Discord's timeout (communication disabled).
+
+        Uses the timeout API so the mute expires automatically after
+        duration_seconds. The old voice-mute approach (member.edit(mute=True))
+        never auto-expires — this implementation is correct for timed mutes.
+
+        Note: For a permanent voice-channel mute use discord.members.timeout
+        with a large duration, or manage voice permissions on the channel.
 
         Args:
             guild: The target guild.
             member_id: ID of the member to mute.
-            duration_seconds: Duration of the mute in seconds.
+            duration_seconds: Duration in seconds (1–2419200, i.e. up to 28 days).
 
         Returns:
-            Dict confirming the mute.
+            Dict confirming the mute with expiry info.
         """
         member = guild.get_member(int(member_id))
         if member is None:
             raise ValueError(f"Member '{member_id}' not found in guild")
 
-        if duration_seconds <= 0:
-            raise ValueError("duration_seconds must be positive")
+        max_duration = 28 * 24 * 60 * 60  # 28 days — Discord limit
+        if duration_seconds <= 0 or duration_seconds > max_duration:
+            raise ValueError(
+                f"duration_seconds must be between 1 and {max_duration} "
+                f"(28 days). Got: {duration_seconds}"
+            )
 
         try:
-            await member.edit(mute=True)
+            delta = timedelta(seconds=duration_seconds)
+            await member.edit(timeout=delta)
+            from datetime import datetime, timezone
+            expires_at = datetime.now(timezone.utc) + delta
             logger.info(
-                "Muted member '%s' (id=%s) in guild '%s' for %ds",
+                "Muted (timeout) member '%s' (id=%s) in guild '%s' for %ds — expires %s",
                 member.display_name,
                 member_id,
                 guild.name,
                 duration_seconds,
+                expires_at.isoformat(),
             )
             return {
                 "muted": True,
                 "member_id": str(member_id),
                 "member_name": member.display_name,
                 "duration_seconds": duration_seconds,
+                "expires_at": expires_at.isoformat(),
+                "method": "timeout",
             }
         except nextcord.errors.Forbidden:
-            raise PermissionError("mute_members")
+            raise PermissionError("moderate_members")
         except nextcord.errors.HTTPException as exc:
             raise RuntimeError(f"Failed to mute member: {exc}")
 
@@ -371,13 +388,22 @@ class MembersConnector(BaseConnector):
             ),
             ToolDefinition(
                 name="discord.members.mute",
-                description="Server-mute a member (voice mute).",
+                description=(
+                    "Mute a member using Discord timeout — communication is disabled "
+                    "and the mute expires automatically after duration_seconds. "
+                    "Max duration is 2419200 seconds (28 days). "
+                    "Prefer this over discord.members.timeout for 'mute' requests — "
+                    "both use the same timeout API."
+                ),
                 parameters={
                     "type": "object",
                     "properties": {
                         "guild_id": {"type": "string", "description": "Target guild ID."},
                         "member_id": {"type": "string", "description": "Member ID to mute."},
-                        "duration_seconds": {"type": "integer", "description": "Mute duration in seconds."},
+                        "duration_seconds": {
+                            "type": "integer",
+                            "description": "Mute duration in seconds (1–2419200). Expires automatically.",
+                        },
                     },
                     "required": ["guild_id", "member_id", "duration_seconds"],
                 },

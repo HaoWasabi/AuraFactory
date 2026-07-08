@@ -61,15 +61,21 @@ class CategoriesConnector(BaseConnector):
         self,
         guild: nextcord.Guild,
         category_id: int,
+        delete_channels: bool = False,
     ) -> Dict[str, Any]:
-        """Delete a category by ID (channels inside are NOT deleted).
+        """Delete a category by ID.
+
+        By default, channels inside are NOT deleted — they become uncategorised.
+        Set delete_channels=True to cascade-delete all channels inside first.
 
         Args:
             guild: The target guild.
             category_id: ID of the category to delete.
+            delete_channels: If True, delete every channel inside before deleting
+                             the category. Default False (channels become uncategorised).
 
         Returns:
-            Dict confirming deletion.
+            Dict confirming deletion, including how many channels were deleted.
         """
         category = guild.get_channel(int(category_id))
         if category is None or not isinstance(category, nextcord.CategoryChannel):
@@ -77,9 +83,37 @@ class CategoriesConnector(BaseConnector):
 
         try:
             name = category.name
+            channels_deleted = 0
+
+            if delete_channels:
+                # Snapshot the list first — iterating while deleting is unsafe
+                channels_in_category = list(category.channels)
+                for ch in channels_in_category:
+                    try:
+                        await ch.delete()
+                        channels_deleted += 1
+                        logger.info(
+                            "Cascade-deleted channel '%s' (id=%s) from category '%s'",
+                            ch.name, ch.id, name,
+                        )
+                    except nextcord.errors.Forbidden:
+                        raise PermissionError("manage_channels")
+                    except nextcord.errors.HTTPException as exc:
+                        raise RuntimeError(f"Failed to delete channel '{ch.name}': {exc}")
+
             await category.delete()
-            logger.info("Deleted category '%s' (id=%s) from guild '%s'", name, category_id, guild.name)
-            return {"deleted": True, "category_id": str(category_id), "name": name}
+            logger.info(
+                "Deleted category '%s' (id=%s) from guild '%s' (channels_deleted=%d)",
+                name, category_id, guild.name, channels_deleted,
+            )
+            return {
+                "deleted": True,
+                "category_id": str(category_id),
+                "name": name,
+                "channels_deleted": channels_deleted,
+            }
+        except PermissionError:
+            raise
         except nextcord.errors.Forbidden:
             raise PermissionError("manage_channels")
         except nextcord.errors.HTTPException as exc:
@@ -226,12 +260,26 @@ class CategoriesConnector(BaseConnector):
             ),
             ToolDefinition(
                 name="discord.categories.delete",
-                description="Delete a category (channels inside are NOT deleted).",
+                description=(
+                    "Delete a category. "
+                    "By default channels inside become uncategorised (NOT deleted). "
+                    "Set delete_channels=true to cascade-delete all channels inside first. "
+                    "IMPORTANT: if the user wants to remove the category AND its channels, "
+                    "you MUST set delete_channels=true — do NOT generate separate "
+                    "discord.channels.delete steps for each channel."
+                ),
                 parameters={
                     "type": "object",
                     "properties": {
                         "guild_id": {"type": "string", "description": "Target guild ID."},
                         "category_id": {"type": "string", "description": "Category ID to delete."},
+                        "delete_channels": {
+                            "type": "boolean",
+                            "description": (
+                                "If true, delete all channels inside the category first "
+                                "(cascade delete). Default false — channels become uncategorised."
+                            ),
+                        },
                     },
                     "required": ["guild_id", "category_id"],
                 },

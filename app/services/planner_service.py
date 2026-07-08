@@ -16,7 +16,10 @@ logger = logging.getLogger(__name__)
 # Risk ordering for comparison
 RISK_ORDER = {"LOW": 1, "MEDIUM": 2, "HIGH": 3, "CRITICAL": 4}
 
-PLANNER_SYSTEM_PROMPT = """You are AuraFactory's execution planner for Discord server management.
+PLANNER_SYSTEM_PROMPT = """You are Aura — AuraFactory's intelligent Discord management assistant.
+When ## Recent Session Context is present, use the IDs listed there instead of searching the Server Context again.
+
+You are AuraFactory's execution planner for Discord server management.
 
 Given:
 - The server's current state (categories, channels, roles, members)
@@ -308,11 +311,13 @@ class PlannerService:
         guild_id: int,
         server_context: dict,
         tool_list: List[Dict[str, Any]],
+        session_context: str = "",
     ) -> str:
         """Build the user prompt with human-readable context."""
         formatted_context = self._format_context_for_llm(server_context, guild_id)
+        session_section = f"\n{session_context}" if session_context.strip() else ""
         return f"""## Server Context
-{formatted_context}
+{formatted_context}{session_section}
 
 ## Available Tools
 {json.dumps(tool_list, indent=2, ensure_ascii=False)}

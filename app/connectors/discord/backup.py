@@ -119,17 +119,18 @@ class BackupConnector(BaseConnector):
         guild: nextcord.Guild,
         structure: dict,
     ) -> Dict[str, Any]:
-        """Import a guild structure (recreate categories, channels, roles).
+        """Import a guild structure (recreate categories, channels, roles, permissions).
 
-        WARNING: This is a critical operation. It will create new resources
-        but does NOT delete existing ones (additive import).
+        This is an ADDITIVE import — it creates new resources but does NOT
+        delete existing ones. Permission overwrites from the exported structure
+        are applied after all roles and channels are created.
 
         Args:
             guild: The target guild.
-            structure: Structure dict (from export_structure).
+            structure: Structure dict from export_structure.
 
         Returns:
-            Dict with import results.
+            Dict with import results including counts and any errors.
         """
         if not structure:
             raise ValueError("Structure dict cannot be empty")
@@ -138,80 +139,129 @@ class BackupConnector(BaseConnector):
             "categories_created": 0,
             "channels_created": 0,
             "roles_created": 0,
+            "permissions_applied": 0,
             "errors": [],
         }
 
-        try:
-            # Import roles first (needed for permission overwrites)
-            for role_data in structure.get("roles", []):
-                try:
-                    perms = nextcord.Permissions(permissions=role_data.get("permissions", 0))
-                    color = nextcord.Color(role_data.get("color", 0))
-                    await guild.create_role(
-                        name=role_data["name"],
-                        color=color,
-                        hoist=role_data.get("hoist", False),
-                        mentionable=role_data.get("mentionable", False),
-                        permissions=perms,
-                    )
-                    results["roles_created"] += 1
-                except Exception as exc:
-                    results["errors"].append(f"Role '{role_data.get('name')}': {exc}")
+        # --- Step 1: Import roles first (needed for permission overwrites) ---
+        # Map old_role_id → new_role for permission re-application
+        role_id_map: dict = {}  # old_id (str) → nextcord.Role
+        for role_data in structure.get("roles", []):
+            try:
+                perms = nextcord.Permissions(permissions=role_data.get("permissions", 0))
+                color = nextcord.Color(role_data.get("color", 0))
+                new_role = await guild.create_role(
+                    name=role_data["name"],
+                    color=color,
+                    hoist=role_data.get("hoist", False),
+                    mentionable=role_data.get("mentionable", False),
+                    permissions=perms,
+                )
+                role_id_map[str(role_data["id"])] = new_role
+                results["roles_created"] += 1
+            except Exception as exc:
+                results["errors"].append(f"Role '{role_data.get('name')}': {exc}")
 
-            # Import categories and their channels
-            for cat_data in structure.get("categories", []):
-                try:
-                    category = await guild.create_category(name=cat_data["name"])
-                    results["categories_created"] += 1
+        # --- Step 2: Import categories and their channels ---
+        # Map old_channel_id → new_channel for permission re-application
+        channel_id_map: dict = {}  # old_id (str) → nextcord.abc.GuildChannel
 
-                    for ch_data in cat_data.get("channels", []):
-                        try:
-                            ch_type = ch_data.get("type", "text")
-                            if "voice" in ch_type:
-                                await guild.create_voice_channel(
-                                    name=ch_data["name"],
-                                    category=category,
-                                )
-                            else:
-                                await guild.create_text_channel(
-                                    name=ch_data["name"],
-                                    category=category,
-                                    topic=ch_data.get("topic"),
-                                )
-                            results["channels_created"] += 1
-                        except Exception as exc:
-                            results["errors"].append(
-                                f"Channel '{ch_data.get('name')}': {exc}"
+        for cat_data in structure.get("categories", []):
+            try:
+                new_category = await guild.create_category(name=cat_data["name"])
+                results["categories_created"] += 1
+                channel_id_map[str(cat_data["id"])] = new_category
+
+                for ch_data in cat_data.get("channels", []):
+                    try:
+                        ch_type = ch_data.get("type", "text")
+                        if "voice" in str(ch_type):
+                            new_ch = await guild.create_voice_channel(
+                                name=ch_data["name"],
+                                category=new_category,
                             )
-                except Exception as exc:
-                    results["errors"].append(f"Category '{cat_data.get('name')}': {exc}")
+                        else:
+                            new_ch = await guild.create_text_channel(
+                                name=ch_data["name"],
+                                category=new_category,
+                                topic=ch_data.get("topic"),
+                            )
+                        channel_id_map[str(ch_data["id"])] = new_ch
+                        results["channels_created"] += 1
+                    except Exception as exc:
+                        results["errors"].append(
+                            f"Channel '{ch_data.get('name')}': {exc}"
+                        )
+            except Exception as exc:
+                results["errors"].append(f"Category '{cat_data.get('name')}': {exc}")
 
-            # Import uncategorized channels
-            for ch_data in structure.get("uncategorized_channels", []):
+        # --- Step 3: Import uncategorized channels ---
+        for ch_data in structure.get("uncategorized_channels", []):
+            try:
+                ch_type = ch_data.get("type", "text")
+                if "voice" in str(ch_type):
+                    new_ch = await guild.create_voice_channel(name=ch_data["name"])
+                else:
+                    new_ch = await guild.create_text_channel(name=ch_data["name"])
+                channel_id_map[str(ch_data["id"])] = new_ch
+                results["channels_created"] += 1
+            except Exception as exc:
+                results["errors"].append(f"Channel '{ch_data.get('name')}': {exc}")
+
+        # --- Step 4: Apply permission overwrites ---
+        # Iterate over all channels (categories + their channels + uncategorized)
+        all_channel_data = list(structure.get("uncategorized_channels", []))
+        for cat_data in structure.get("categories", []):
+            all_channel_data.append(cat_data)
+            all_channel_data.extend(cat_data.get("channels", []))
+
+        for ch_data in all_channel_data:
+            new_ch = channel_id_map.get(str(ch_data.get("id")))
+            if new_ch is None:
+                continue  # channel creation had failed, skip perms
+
+            for overwrite_data in ch_data.get("permission_overwrites", []):
                 try:
-                    ch_type = ch_data.get("type", "text")
-                    if "voice" in ch_type:
-                        await guild.create_voice_channel(name=ch_data["name"])
+                    target_id = str(overwrite_data.get("target_id"))
+                    target_type = overwrite_data.get("target_type", "role")
+                    allow_val = overwrite_data.get("allow", 0)
+                    deny_val = overwrite_data.get("deny", 0)
+
+                    # Resolve target — prefer newly-created objects, fall back to existing
+                    target = None
+                    if target_type == "role":
+                        target = role_id_map.get(target_id) or guild.get_role(int(target_id))
                     else:
-                        await guild.create_text_channel(name=ch_data["name"])
-                    results["channels_created"] += 1
+                        target = guild.get_member(int(target_id))
+
+                    if target is None:
+                        # Try @everyone
+                        if target_type == "role":
+                            target = guild.default_role
+                        else:
+                            continue  # member not found, skip
+
+                    allow_perms = nextcord.Permissions(allow_val)
+                    deny_perms = nextcord.Permissions(deny_val)
+                    overwrite = nextcord.PermissionOverwrite.from_pair(allow_perms, deny_perms)
+                    await new_ch.set_permissions(target, overwrite=overwrite)
+                    results["permissions_applied"] += 1
                 except Exception as exc:
-                    results["errors"].append(f"Channel '{ch_data.get('name')}': {exc}")
+                    results["errors"].append(
+                        f"Permission overwrite on '{ch_data.get('name')}': {exc}"
+                    )
 
-            logger.info(
-                "Imported structure to guild '%s': %d categories, %d channels, %d roles, %d errors",
-                guild.name,
-                results["categories_created"],
-                results["channels_created"],
-                results["roles_created"],
-                len(results["errors"]),
-            )
-            return results
-
-        except nextcord.errors.Forbidden:
-            raise PermissionError("administrator")
-        except nextcord.errors.HTTPException as exc:
-            raise RuntimeError(f"Failed to import structure: {exc}")
+        logger.info(
+            "Imported structure to guild '%s': %d categories, %d channels, "
+            "%d roles, %d permission overwrites, %d errors",
+            guild.name,
+            results["categories_created"],
+            results["channels_created"],
+            results["roles_created"],
+            results["permissions_applied"],
+            len(results["errors"]),
+        )
+        return results
 
     # ------------------------------------------------------------------
     # Helpers

@@ -65,6 +65,26 @@ class PermissionsConnector(BaseConnector):
         if not perms:
             raise ValueError("No permission overrides provided")
 
+        # Validate permission names early — wrong names cause nextcord TypeError
+        _VALID_PERMS = {
+            "view_channel", "send_messages", "send_messages_in_threads",
+            "create_public_threads", "create_private_threads", "embed_links",
+            "attach_files", "add_reactions", "use_external_emojis",
+            "use_external_stickers", "mention_everyone", "manage_messages",
+            "manage_threads", "read_message_history", "send_tts_messages",
+            "use_application_commands", "connect", "speak", "mute_members",
+            "deafen_members", "move_members", "use_voice_activation",
+            "priority_speaker", "manage_channels", "manage_roles",
+            "manage_webhooks", "kick_members", "ban_members", "administrator",
+            "manage_guild", "view_audit_log", "view_guild_insights",
+        }
+        bad = [k for k in perms if k not in _VALID_PERMS]
+        if bad:
+            raise ValueError(
+                f"Invalid permission name(s): {bad}. "
+                f"Use exact nextcord names e.g. 'view_channel', 'send_messages'."
+            )
+
         try:
             overwrite = nextcord.PermissionOverwrite(**perms)
             await channel.set_permissions(target, overwrite=overwrite)
@@ -108,6 +128,26 @@ class PermissionsConnector(BaseConnector):
 
         if not perms:
             raise ValueError("No permissions provided")
+
+        # Validate permission names early — wrong names cause nextcord TypeError
+        _VALID_PERMS = {
+            "view_channel", "send_messages", "send_messages_in_threads",
+            "create_public_threads", "create_private_threads", "embed_links",
+            "attach_files", "add_reactions", "use_external_emojis",
+            "use_external_stickers", "mention_everyone", "manage_messages",
+            "manage_threads", "read_message_history", "send_tts_messages",
+            "use_application_commands", "connect", "speak", "mute_members",
+            "deafen_members", "move_members", "use_voice_activation",
+            "priority_speaker", "manage_channels", "manage_roles",
+            "manage_webhooks", "kick_members", "ban_members", "administrator",
+            "manage_guild", "view_audit_log", "view_guild_insights",
+        }
+        bad = [k for k in perms if k not in _VALID_PERMS]
+        if bad:
+            raise ValueError(
+                f"Invalid permission name(s): {bad}. "
+                f"Use exact nextcord names e.g. 'view_channel', 'send_messages'."
+            )
 
         try:
             new_perms = nextcord.Permissions(**perms)
@@ -191,17 +231,50 @@ class PermissionsConnector(BaseConnector):
 
     def get_tool_definitions(self) -> List[ToolDefinition]:
         """Return tool definitions for permission operations."""
+        _PERM_NAMES_DESC = (
+            "Permission names (all boolean): "
+            "view_channel, send_messages, send_messages_in_threads, create_public_threads, "
+            "create_private_threads, embed_links, attach_files, add_reactions, "
+            "use_external_emojis, use_external_stickers, mention_everyone, "
+            "manage_messages, manage_threads, read_message_history, send_tts_messages, "
+            "use_application_commands, connect, speak, mute_members, deafen_members, "
+            "move_members, use_voice_activation, priority_speaker, "
+            "manage_channels, manage_roles, manage_webhooks. "
+            "Use EXACT names — wrong names cause a runtime TypeError."
+        )
         return [
             ToolDefinition(
                 name="discord.permissions.set_channel_perms",
-                description="Set permission overrides for a specific role/member on a channel.",
+                description=(
+                    "Set permission overrides for a specific role or member on a channel. "
+                    "Pass permission names as extra boolean fields alongside the required params. "
+                    "Example: view_channel=false, send_messages=false. " + _PERM_NAMES_DESC
+                ),
                 parameters={
                     "type": "object",
                     "properties": {
                         "guild_id": {"type": "string", "description": "Target guild ID."},
                         "channel_id": {"type": "string", "description": "Channel ID."},
                         "target_id": {"type": "string", "description": "Role or member ID."},
-                        "target_type": {"type": "string", "enum": ["role", "member"], "description": "Target type."},
+                        "target_type": {
+                            "type": "string",
+                            "enum": ["role", "member"],
+                            "description": "Whether target_id is a role or member.",
+                        },
+                        "view_channel": {"type": "boolean"},
+                        "send_messages": {"type": "boolean"},
+                        "read_message_history": {"type": "boolean"},
+                        "manage_messages": {"type": "boolean"},
+                        "manage_channels": {"type": "boolean"},
+                        "connect": {"type": "boolean"},
+                        "speak": {"type": "boolean"},
+                        "mute_members": {"type": "boolean"},
+                        "move_members": {"type": "boolean"},
+                        "use_application_commands": {"type": "boolean"},
+                        "mention_everyone": {"type": "boolean"},
+                        "embed_links": {"type": "boolean"},
+                        "attach_files": {"type": "boolean"},
+                        "add_reactions": {"type": "boolean"},
                     },
                     "required": ["guild_id", "channel_id", "target_id", "target_type"],
                     "additionalProperties": True,
@@ -210,12 +283,28 @@ class PermissionsConnector(BaseConnector):
             ),
             ToolDefinition(
                 name="discord.permissions.set_role_perms",
-                description="Set base permissions for a role.",
+                description=(
+                    "Set base permissions for a role (applies server-wide). "
+                    "Pass permission names as extra boolean fields. " + _PERM_NAMES_DESC
+                ),
                 parameters={
                     "type": "object",
                     "properties": {
                         "guild_id": {"type": "string", "description": "Target guild ID."},
                         "role_id": {"type": "string", "description": "Role ID."},
+                        "view_channel": {"type": "boolean"},
+                        "send_messages": {"type": "boolean"},
+                        "read_message_history": {"type": "boolean"},
+                        "manage_messages": {"type": "boolean"},
+                        "manage_channels": {"type": "boolean"},
+                        "manage_roles": {"type": "boolean"},
+                        "kick_members": {"type": "boolean"},
+                        "ban_members": {"type": "boolean"},
+                        "administrator": {"type": "boolean"},
+                        "connect": {"type": "boolean"},
+                        "speak": {"type": "boolean"},
+                        "mention_everyone": {"type": "boolean"},
+                        "use_application_commands": {"type": "boolean"},
                     },
                     "required": ["guild_id", "role_id"],
                     "additionalProperties": True,
@@ -224,7 +313,11 @@ class PermissionsConnector(BaseConnector):
             ),
             ToolDefinition(
                 name="discord.permissions.sync",
-                description="Sync a channel's permissions with its parent category.",
+                description=(
+                    "Sync a channel's permission overrides with its parent category. "
+                    "Use this after moving a channel to a new category to inherit the "
+                    "category's permission overrides."
+                ),
                 parameters={
                     "type": "object",
                     "properties": {
