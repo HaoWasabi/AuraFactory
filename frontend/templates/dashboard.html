@@ -13,12 +13,26 @@
 .nav-left{display:flex;align-items:center;gap:12px}
 .nav-logo{width:32px;height:32px;border-radius:50%;background:var(--accent-primary);display:flex;align-items:center;justify-content:center;font-weight:700;font-size:14px;color:#fff}
 .nav-title{font-size:15px;font-weight:600;color:var(--text-primary)}
-.guild-sel{background:var(--bg-input);border:1px solid var(--border-color);border-radius:6px;color:var(--text-primary);padding:6px 10px;font-size:13px;min-width:170px}
 .nav-right{display:flex;align-items:center;gap:10px}
 .nav-user{font-size:13px;color:var(--text-secondary)}
 .nav-avatar{width:28px;height:28px;border-radius:50%}
 .btn-s{background:var(--bg-tertiary);border:1px solid var(--border-color);border-radius:6px;color:var(--text-secondary);padding:4px 10px;font-size:12px;cursor:pointer}
 .btn-s:hover{background:var(--accent-primary);color:#fff}
+
+/* Guild picker */
+.guild-picker{position:relative}
+.guild-btn{background:var(--bg-input);border:1px solid var(--border-color);border-radius:6px;color:var(--text-primary);padding:6px 10px;font-size:13px;min-width:180px;cursor:pointer;text-align:left}
+.guild-btn:hover{border-color:var(--accent-primary)}
+.guild-menu{position:absolute;top:100%;left:0;min-width:260px;background:var(--bg-panel);border:1px solid var(--border-color);border-radius:8px;box-shadow:0 4px 16px rgba(0,0,0,.4);z-index:100;max-height:340px;overflow-y:auto;margin-top:4px}
+.guild-menu.hidden{display:none}
+.guild-section-title{font-size:11px;color:var(--text-muted);text-transform:uppercase;padding:8px 12px 4px;letter-spacing:.5px;font-weight:600}
+.guild-item{padding:8px 12px;cursor:pointer;font-size:13px;color:var(--text-secondary);display:flex;align-items:center;gap:8px}
+.guild-item:hover{background:var(--bg-hover)}
+.guild-item.active{background:var(--accent-primary);color:#fff}
+.guild-item .badge{font-size:10px;padding:2px 6px;border-radius:10px;margin-left:auto;font-weight:500}
+.badge-ready{background:var(--success);color:#fff}
+.badge-invite{background:var(--warning);color:#000}
+.guild-divider{height:1px;background:var(--border-subtle);margin:4px 0}
 
 /* Content */
 .content{display:flex;flex:1;overflow:hidden}
@@ -108,9 +122,14 @@
     <div class="nav-left">
       <div class="nav-logo">A</div>
       <span class="nav-title">AuraFactory</span>
-      <select class="guild-sel" id="guildSel" onchange="selectGuild(this.value)">
-        <option value="" id="optDefault">Select server...</option>
-      </select>
+      <div class="guild-picker" id="guildPicker">
+        <button class="guild-btn" id="guildBtn" onclick="toggleGuildMenu()">Select server...</button>
+        <div class="guild-menu hidden" id="guildMenu">
+          <div id="guildReady"></div>
+          <div class="guild-divider" id="guildDivider" style="display:none"></div>
+          <div id="guildPending"></div>
+        </div>
+      </div>
     </div>
     <div class="nav-right">
       <span class="nav-user" id="navUser"></span>
@@ -177,7 +196,7 @@ function setLang(l){
   lang=l;localStorage.setItem('lang',l);
   var t=T[l];
   document.getElementById('btnNew').textContent=t.new_chat;
-  document.getElementById('optDefault').textContent=t.select_server;
+  if(!guildId)document.getElementById('guildBtn').textContent=t.select_server;
   document.getElementById('lblCh').textContent=t.channels;
   document.getElementById('lblRo').textContent=t.roles;
   document.getElementById('lblMe').textContent=t.members;
@@ -219,35 +238,87 @@ function api(method,url,body){
 }
 
 // === Guilds ===
+var _guildsData=null;
 function loadGuilds(){
   if(!userId)return;
   api('GET','/api/auth/guilds?user_id='+userId).then(function(d){
     if(!d)return;
-    var sel=document.getElementById('guildSel');
-    sel.innerHTML='<option value="" id="optDefault">'+T[lang].select_server+'</option>';
-    var all=(d.ready||[]).concat(d.pending||[]);
-    all.forEach(function(g){
-      var opt=document.createElement('option');
-      opt.value=g.guild_id;opt.textContent=g.guild_name;
-      sel.appendChild(opt);
-    });
+    _guildsData=d;
+    renderGuildMenu(d);
   });
+}
+function renderGuildMenu(d){
+  var readyEl=document.getElementById('guildReady');
+  var pendingEl=document.getElementById('guildPending');
+  var dividerEl=document.getElementById('guildDivider');
+  var readyList=d.ready||[];
+  var pendingList=d.pending||[];
+
+  // Ready section
+  var rHtml='';
+  if(readyList.length){
+    rHtml='<div class="guild-section-title">\u2713 Ready</div>';
+    readyList.forEach(function(g){
+      var cls='guild-item'+(g.guild_id===guildId?' active':'');
+      rHtml+='<div class="'+cls+'" data-gid="'+g.guild_id+'" onclick="selectGuild(\''+g.guild_id+'\')">'
+        +escHtml(g.guild_name)+'<span class="badge badge-ready">\u25cf</span></div>';
+    });
+  }
+  readyEl.innerHTML=rHtml;
+
+  // Pending section
+  var pHtml='';
+  if(pendingList.length){
+    pHtml='<div class="guild-section-title">+ Invite Bot</div>';
+    pendingList.forEach(function(g){
+      pHtml+='<div class="guild-item" onclick="inviteBot(\''+g.invite_url+'\',\''+escHtml(g.guild_name)+'\')">'
+        +escHtml(g.guild_name)+'<span class="badge badge-invite">invite</span></div>';
+    });
+  }
+  pendingEl.innerHTML=pHtml;
+  dividerEl.style.display=(readyList.length&&pendingList.length)?'block':'none';
+
+  // Update button text if guild selected
+  if(guildId){
+    var cur=readyList.find(function(g){return g.guild_id===guildId;});
+    if(cur)document.getElementById('guildBtn').textContent=cur.guild_name;
+  }
+}
+function toggleGuildMenu(){
+  document.getElementById('guildMenu').classList.toggle('hidden');
+}
+function inviteBot(url,name){
+  if(confirm('Invite AuraFactory bot to "'+name+'"?')){
+    window.open(url,'_blank');
+    setTimeout(function(){loadGuilds();},5000);
+  }
+  document.getElementById('guildMenu').classList.add('hidden');
 }
 function selectGuild(id){
   guildId=id;
+  document.getElementById('guildMenu').classList.add('hidden');
   if(!id)return;
-  loadServerInfo();
+  // Update button text
+  if(_guildsData){
+    var cur=(_guildsData.ready||[]).find(function(g){return g.guild_id===id;});
+    if(cur)document.getElementById('guildBtn').textContent=cur.guild_name;
+  }
   loadSessions();
-  loadStructure();
+  loadGuildData();
 }
 
-// === Server info ===
-function loadServerInfo(){
+// === Server info + Structure (single API call) ===
+var _guildData=null;
+function loadGuildData(){
+  if(!guildId)return;
   api('GET','/api/guild/'+guildId+'/info').then(function(d){
     if(!d)return;
+    _guildData=d;
     document.getElementById('valCh').textContent=d.channel_count||d.channels||'-';
     document.getElementById('valRo').textContent=d.role_count||d.roles||'-';
     document.getElementById('valMe').textContent=d.member_count||d.members||'-';
+    if(activeTab==='structure')renderStructure(d);
+    else loadAudit();
   });
 }
 
@@ -412,22 +483,23 @@ function showTab(tab){
   else loadAudit();
 }
 function loadStructure(){
-  if(!guildId){document.getElementById('rpContent').innerHTML='';return;}
-  api('GET','/api/guild/'+guildId+'/info').then(function(d){
-    if(!d)return;
-    var html='';
-    if(d.categories_detail&&d.categories_detail.length){d.categories_detail.forEach(function(cat){
-      html+='<div class="tree-cat">'+escHtml(cat.name)+'</div>';
-      (cat.channels||[]).forEach(function(ch){
-        var icon=ch.type==='voice'?'# ':'# ';
-        html+='<div class="tree-ch">'+icon+escHtml(ch.name)+'</div>';
-      });
-    });}
-    if(d.roles_detail&&d.roles_detail.length){html+='<div class="tree-cat" style="margin-top:12px">Roles</div>';
-      d.roles_detail.forEach(function(r){html+='<div class="tree-ch">@'+escHtml(r.name)+'</div>';});
-    }
-    document.getElementById('rpContent').innerHTML=html||'<p style="color:var(--text-muted)">Select a server</p>';
-  });
+  if(_guildData)renderStructure(_guildData);
+  else if(guildId)loadGuildData();
+  else document.getElementById('rpContent').innerHTML='';
+}
+function renderStructure(d){
+  var html='';
+  if(d.categories_detail&&d.categories_detail.length){d.categories_detail.forEach(function(cat){
+    html+='<div class="tree-cat">\u25BC '+escHtml(cat.name)+'</div>';
+    (cat.channels||[]).forEach(function(ch){
+      var icon=ch.type==='voice'?'\ud83d\udd0a ':'# ';
+      html+='<div class="tree-ch">'+icon+escHtml(ch.name)+'</div>';
+    });
+  });}
+  if(d.roles_detail&&d.roles_detail.length){html+='<div class="tree-cat" style="margin-top:12px">\ud83d\udc51 Roles</div>';
+    d.roles_detail.forEach(function(r){html+='<div class="tree-ch">@'+escHtml(r.name)+'</div>';});
+  }
+  document.getElementById('rpContent').innerHTML=html||'<p style="color:var(--text-muted)">Select a server</p>';
 }
 function loadAudit(){
   if(!guildId){document.getElementById('rpContent').innerHTML='';return;}
@@ -458,6 +530,11 @@ function escHtml(s){var d=document.createElement('div');d.textContent=s||'';retu
 
 // === Init ===
 if(initAuth()){setLang(lang);loadGuilds();}
+
+// === Close guild menu on outside click ===
+document.addEventListener('click',function(e){
+  if(!e.target.closest('.guild-picker'))document.getElementById('guildMenu').classList.add('hidden');
+});
 </script>
 </body>
 </html>

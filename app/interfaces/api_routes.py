@@ -164,6 +164,11 @@ def create_api_router(services: dict) -> APIRouter:
                 )
             session_id = row["id"]
             history = row["history"] or []
+            # asyncpg may return JSONB as string — ensure it's a list
+            if isinstance(history, str):
+                history = _json.loads(history) if history.strip() else []
+            if not isinstance(history, list):
+                history = []
             history.append({"role": "user", "content": user_msg})
             history.append({"role": "assistant", "content": bot_msg})
             await db.execute(
@@ -332,33 +337,48 @@ def create_api_router(services: dict) -> APIRouter:
 
             # Build structured categories with nested channels for right-panel tree view
             categories_structured = []
-            if isinstance(categories, list) and len(categories) > 0 and isinstance(categories[0], dict):
-                # Already structured
-                categories_structured = categories
-            elif isinstance(channels, list):
-                # Group channels by category
-                cat_map = {}
-                uncategorized = []
-                for ch in channels:
-                    if isinstance(ch, dict):
-                        cat_name = ch.get("category") or ch.get("parent") or "General"
-                        if cat_name not in cat_map:
-                            cat_map[cat_name] = []
-                        cat_map[cat_name].append({
-                            "name": ch.get("name", "unknown"),
-                            "type": ch.get("type", "text"),
-                        })
-                for cat_name, cat_channels in cat_map.items():
-                    categories_structured.append({"name": cat_name, "channels": cat_channels})
+            # Step 1: Build category id→name lookup from categories.list response
+            cat_id_to_name = {}
+            if isinstance(categories, list):
+                for cat in categories:
+                    if isinstance(cat, dict):
+                        cat_id_to_name[str(cat.get("id", ""))] = cat.get("name", "Unknown")
 
-            # Build roles list for right-panel
+            # Step 2: Group channels by category_id, skip category-type entries
+            grouped = {}  # {cat_name: [channel_info]}
+            if isinstance(channels, list):
+                for ch in channels:
+                    if not isinstance(ch, dict):
+                        continue
+                    ch_type = str(ch.get("type", "text"))
+                    if ch_type == "category":
+                        continue  # categories.list already handles these
+                    cat_id = str(ch.get("category_id", ""))
+                    cat_name = cat_id_to_name.get(cat_id, "Uncategorized")
+                    if cat_name not in grouped:
+                        grouped[cat_name] = []
+                    grouped[cat_name].append({
+                        "name": ch.get("name", "unknown"),
+                        "type": ch_type,
+                    })
+
+            # Step 3: Build ordered list (categorized first, then uncategorized)
+            for cat_name in cat_id_to_name.values():
+                if cat_name in grouped:
+                    categories_structured.append({"name": cat_name, "channels": grouped.pop(cat_name)})
+            for cat_name, cat_channels in grouped.items():
+                categories_structured.append({"name": cat_name, "channels": cat_channels})
+
+            # Build roles list for right-panel (deduplicated, exclude @everyone)
+            seen_roles = set()
             roles_structured = []
             if isinstance(roles, list):
                 for r in roles:
                     if isinstance(r, dict):
-                        roles_structured.append({"name": r.get("name", "unknown")})
-                    elif isinstance(r, str):
-                        roles_structured.append({"name": r})
+                        name = r.get("name", "")
+                        if name and name != "@everyone" and name not in seen_roles:
+                            seen_roles.add(name)
+                            roles_structured.append({"name": name})
 
             return {
                 "ok": True,
