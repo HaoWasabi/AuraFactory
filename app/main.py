@@ -1,7 +1,7 @@
 """
 AuraFactory — Main Entrypoint.
 FastAPI application with lifespan managing all services.
-7-layer architecture: Config → Infra → Models → MCP → Connectors → Services → Interfaces
+Architecture: Config → Infra → MCP → Connectors → Services → Interfaces
 """
 import asyncio
 import logging
@@ -30,16 +30,15 @@ async def lifespan(app: FastAPI):
     logger.info("🚀 AuraFactory starting up...")
     start_time = time.time()
 
-    # === L2: Infrastructure ===
+    # === Infrastructure ===
     from app.database import Database
     db = Database()
-    db_connected = False
     for attempt in range(5):
         try:
             await db.connect()
             await db.run_migrations("migrations")
             logger.info("✅ Database connected + migrations applied")
-            
+
             # Cleanup stuck requests from previous crash/restart
             cleaned = await db.execute(
                 """UPDATE requests SET status = 'failed', error_message = 'Server restarted', completed_at = NOW()
@@ -47,18 +46,17 @@ async def lifespan(app: FastAPI):
             )
             if cleaned and 'UPDATE' in cleaned and cleaned != 'UPDATE 0':
                 logger.info("🧹 Cleaned up stuck requests: %s", cleaned)
-            
-            db_connected = True
             break
         except Exception as e:
             if attempt < 4:
-                wait = 2 ** attempt  # 1, 2, 4, 8 seconds
+                wait = 2 ** attempt
                 logger.warning("⚠️ DB connection attempt %d failed: %s — retrying in %ds...", attempt + 1, e, wait)
                 await asyncio.sleep(wait)
             else:
                 logger.error("❌ Database connection failed after 5 attempts: %s", e)
                 raise RuntimeError(f"Cannot start without database: {e}")
 
+    # === LLM ===
     from app.llm import get_llm
     llm = None
     try:
@@ -70,61 +68,39 @@ async def lifespan(app: FastAPI):
         logger.info("✅ LLM provider: %s (%s)", settings.LLM_PROVIDER, settings.GEMINI_MODEL)
     except Exception as e:
         logger.error("❌ LLM initialization FAILED: %s", e, exc_info=True)
-        logger.error("   AI features (classify, plan, query) will NOT work.")
+        logger.error("   AI features will NOT work.")
 
-    # === L4: MCP ===
+    # === MCP ===
     from app.mcp import MCPClient
     from app.mcp.servers.discord_server import DiscordMCPServer
 
     mcp_client = MCPClient()
     discord_mcp_server = DiscordMCPServer()
-    # Note: bot reference set later in on_ready
     mcp_client.register_server(discord_mcp_server)
     logger.info("✅ MCP client ready (discord server registered, awaiting bot)")
 
-    # === L6: Services ===
-    from app.services.rate_limit_service import RateLimitService
-    from app.services.request_service import RequestService
-    from app.services.classifier_service import ClassifierService
+    # === Services ===
     from app.services.context_service import ContextService
-    from app.services.planner_service import PlannerService
-    from app.services.approval_service import ApprovalService
-    from app.services.executor_service import ExecutorService
-    from app.services.query_service import QueryService
     from app.services.auth_service import AuthService
     from app.services.guild_sync_service import GuildSyncService
     from app.services.unified_agent import UnifiedAgent
 
-    rate_limit_service = RateLimitService(db)
-    request_service = RequestService(db, rate_limit_service=rate_limit_service)
-    classifier_service = ClassifierService(llm)
     context_service = ContextService(db, mcp_client)
-    planner_service = PlannerService(db, llm, mcp_client, context_service)
-    approval_service = ApprovalService(db)
-    executor_service = ExecutorService(db, mcp_client, llm, context_service)
-    query_service = QueryService(llm, mcp_client, context_service)
     auth_service = AuthService(db)
     guild_sync_service = GuildSyncService(db)
-
     unified_agent = UnifiedAgent(llm, mcp_client, context_service) if llm else None
 
     services = {
-        "rate_limit_service": rate_limit_service,
-        "request_service": request_service,
-        "classifier_service": classifier_service,
         "context_service": context_service,
-        "planner_service": planner_service,
-        "approval_service": approval_service,
-        "executor_service": executor_service,
-        "query_service": query_service,
         "auth_service": auth_service,
         "guild_sync_service": guild_sync_service,
-        "_mcp_client": mcp_client,
         "unified_agent": unified_agent,
+        "_mcp_client": mcp_client,
+        "_db": db,
     }
     logger.info("✅ All services initialized")
 
-    # === L7: Interfaces ===
+    # === Interfaces ===
     from app.interfaces import DiscordBot, create_api_router
 
     # API routes
@@ -178,7 +154,7 @@ async def _run_bot(bot):
 app = FastAPI(
     title="AuraFactory",
     description="AI-powered Discord server management",
-    version="5.0",
+    version="6.0",
     lifespan=lifespan,
 )
 
@@ -225,4 +201,4 @@ async def serve_callback():
 
 @app.get("/health")
 async def health():
-    return {"status": "ok", "service": "AuraFactory", "version": "5.0"}
+    return {"status": "ok", "service": "AuraFactory", "version": "6.0"}
