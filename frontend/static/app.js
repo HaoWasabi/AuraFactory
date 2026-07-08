@@ -1,1 +1,1 @@
-/* AuraFactory — Legacy stub. All logic is now inline in dashboard.html. */
+/* Legacy stub - all logic is inline in dashboard.html */

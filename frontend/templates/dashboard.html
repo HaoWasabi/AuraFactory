@@ -3,341 +3,456 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>AuraFactory</title>
+<title>AuraFactory - Dashboard</title>
 <link rel="stylesheet" href="/static/style.css">
 <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
 <style>
-body{animation:fadeIn .3s ease}
-@keyframes fadeIn{from{opacity:0}to{opacity:1}}
-.app-layout{display:flex;flex-direction:column;height:100vh}
-/* Navbar */
-.navbar{display:flex;align-items:center;justify-content:space-between;height:var(--navbar-height);padding:0 16px;background:var(--bg-secondary);border-bottom:1px solid var(--border-color)}
+/* Layout */
+.layout{display:flex;flex-direction:column;height:100vh;overflow:hidden}
+.nav{display:flex;align-items:center;justify-content:space-between;height:56px;padding:0 16px;background:var(--bg-secondary);border-bottom:1px solid var(--border-color)}
 .nav-left{display:flex;align-items:center;gap:12px}
 .nav-logo{width:32px;height:32px;border-radius:50%;background:var(--accent-primary);display:flex;align-items:center;justify-content:center;font-weight:700;font-size:14px;color:#fff}
 .nav-title{font-size:15px;font-weight:600;color:var(--text-primary)}
-.guild-select{background:var(--bg-input);border:1px solid var(--border-color);border-radius:var(--radius-sm);color:var(--text-primary);padding:5px 10px;font-size:13px;min-width:170px}
+.guild-sel{background:var(--bg-input);border:1px solid var(--border-color);border-radius:6px;color:var(--text-primary);padding:6px 10px;font-size:13px;min-width:170px}
 .nav-right{display:flex;align-items:center;gap:10px}
+.nav-user{font-size:13px;color:var(--text-secondary)}
 .nav-avatar{width:28px;height:28px;border-radius:50%}
-.nav-user{font-size:12px;color:var(--text-secondary)}
-.btn-sm{background:var(--bg-tertiary);border:1px solid var(--border-color);border-radius:var(--radius-sm);color:var(--text-secondary);padding:4px 10px;font-size:12px;cursor:pointer;transition:var(--transition)}
-.btn-sm:hover{background:var(--accent-primary);color:#fff}
+.btn-s{background:var(--bg-tertiary);border:1px solid var(--border-color);border-radius:6px;color:var(--text-secondary);padding:4px 10px;font-size:12px;cursor:pointer}
+.btn-s:hover{background:var(--accent-primary);color:#fff}
+
 /* Content */
-.content-area{display:flex;flex:1;overflow:hidden}
+.content{display:flex;flex:1;overflow:hidden}
+
 /* Sidebar */
-.sidebar{width:var(--sidebar-width);background:var(--bg-panel);border-right:1px solid var(--border-color);display:flex;flex-direction:column;overflow:hidden}
-.sidebar-hdr{padding:10px 12px;border-bottom:1px solid var(--border-subtle)}
-.btn-new{width:100%;padding:7px;background:var(--accent-primary);border:none;border-radius:var(--radius-sm);color:#fff;font-size:13px;cursor:pointer;font-weight:500;transition:var(--transition)}
+.side{width:260px;background:var(--bg-panel);border-right:1px solid var(--border-color);display:flex;flex-direction:column;overflow:hidden}
+.side-hdr{padding:12px;border-bottom:1px solid var(--border-subtle)}
+.btn-new{width:100%;padding:8px;background:var(--accent-primary);border:none;border-radius:6px;color:#fff;font-size:13px;cursor:pointer;font-weight:500}
 .btn-new:hover{background:var(--accent-hover)}
-.session-list{flex:1;overflow-y:auto;padding:6px 8px}
-.session-group{font-size:11px;color:var(--text-muted);text-transform:uppercase;padding:8px 4px 4px;letter-spacing:.4px}
-.session-item{padding:7px 10px;border-radius:var(--radius-sm);cursor:pointer;font-size:12px;color:var(--text-secondary);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;transition:background .12s}
-.session-item:hover{background:var(--bg-hover)}
-.session-item.active{background:var(--accent-primary);color:#fff}
-.sidebar-section{padding:10px 12px;border-top:1px solid var(--border-subtle)}
-.sidebar-section-title{font-size:11px;color:var(--text-muted);text-transform:uppercase;letter-spacing:.4px;margin-bottom:6px}
-.info-row{display:flex;justify-content:space-between;font-size:12px;padding:2px 0}
-.info-label{color:var(--text-secondary)}
-.info-value{color:var(--text-primary);font-weight:500}
-.admin-input{width:100%;background:var(--bg-input);border:1px solid var(--border-color);border-radius:var(--radius-sm);color:var(--text-primary);font-size:12px;padding:5px 8px;margin-top:4px}
-.btn-admin{width:100%;margin-top:6px;padding:6px;background:var(--accent-primary);border:none;border-radius:var(--radius-sm);color:#fff;font-size:12px;cursor:pointer}
-/* Chat */
-.chat-area{flex:1;display:flex;flex-direction:column;overflow:hidden}
-.chat-messages{flex:1;overflow-y:auto;padding:16px;transition:opacity .12s}
-.chat-messages.loading{opacity:.4}
-.msg{margin-bottom:12px;display:flex}
-.msg-user{justify-content:flex-end}
-.msg-bot{justify-content:flex-start}
-.msg-bubble{max-width:70%;padding:10px 14px;border-radius:var(--radius-md);font-size:13px;line-height:1.6}
-.msg-user .msg-bubble{background:var(--chat-user);color:#fff;border-bottom-right-radius:4px}
-.msg-bot .msg-bubble{background:var(--chat-bot);color:var(--text-primary);border-bottom-left-radius:4px}
-.msg-bot .msg-bubble p{margin:0 0 6px}
-.msg-bot .msg-bubble p:last-child{margin:0}
-.msg-bot .msg-bubble code{background:rgba(0,0,0,.3);padding:1px 4px;border-radius:3px;font-size:12px}
-.msg-bot .msg-bubble pre{background:rgba(0,0,0,.3);padding:8px;border-radius:var(--radius-sm);overflow-x:auto;margin:6px 0}
-/* Cards */
-.approval-card,.clarify-card{background:var(--bg-secondary);border:1px solid var(--border-color);border-radius:var(--radius-md);padding:12px;margin:8px 0}
-.card-title{font-size:12px;font-weight:600;color:var(--text-primary);margin-bottom:6px}
-.plan-step{font-size:12px;color:var(--text-secondary);padding:2px 0 2px 10px;border-left:2px solid var(--border-color)}
-.risk-badge{display:inline-block;font-size:10px;font-weight:600;padding:2px 8px;border-radius:10px;margin:6px 0}
-.risk-low{background:rgba(34,197,94,.15);color:var(--risk-low)}
-.risk-medium{background:rgba(234,179,8,.15);color:var(--risk-medium)}
-.risk-high{background:rgba(249,115,22,.15);color:var(--risk-high)}
-.risk-critical{background:rgba(239,68,68,.15);color:var(--risk-critical)}
-.card-actions{display:flex;gap:8px;margin-top:8px}
-.btn-approve{background:var(--success);color:#fff;border:none;border-radius:var(--radius-sm);padding:5px 14px;font-size:12px;font-weight:500;cursor:pointer;transition:var(--transition)}
-.btn-approve:hover{filter:brightness(1.1)}
-.btn-reject{background:var(--danger);color:#fff;border:none;border-radius:var(--radius-sm);padding:5px 14px;font-size:12px;font-weight:500;cursor:pointer;transition:var(--transition)}
-.btn-reject:hover{filter:brightness(1.1)}
-.clarify-list{margin:4px 0 0 16px;font-size:12px;color:var(--text-secondary);line-height:1.7}
-.status-indicator{font-size:12px;color:var(--text-muted);padding:6px 14px;font-style:italic}
-/* Input */
-.chat-input-bar{display:flex;gap:8px;padding:12px 16px;border-top:1px solid var(--border-color);background:var(--bg-secondary)}
-.chat-input{flex:1;background:var(--bg-input);border:1px solid var(--border-color);border-radius:var(--radius-sm);color:var(--text-primary);padding:9px 12px;font-size:13px;resize:none;min-height:38px;max-height:120px;font-family:inherit}
-.chat-input:focus{outline:none;border-color:var(--accent-primary)}
-.btn-send{background:var(--accent-primary);border:none;border-radius:var(--radius-sm);color:#fff;padding:0 16px;font-size:13px;font-weight:500;cursor:pointer;transition:var(--transition)}
-.btn-send:hover{background:var(--accent-hover)}
-/* Right Panel */
-.right-panel{width:300px;background:var(--bg-panel);border-left:1px solid var(--border-color);display:flex;flex-direction:column;overflow:hidden;transition:width .2s ease}
-.right-panel.collapsed{width:0;border:none}
-.panel-tabs{display:flex;border-bottom:1px solid var(--border-subtle)}
-.panel-tab{flex:1;padding:8px;text-align:center;font-size:12px;color:var(--text-muted);cursor:pointer;border-bottom:2px solid transparent;transition:var(--transition)}
-.panel-tab.active{color:var(--accent-primary);border-bottom-color:var(--accent-primary)}
-.panel-content{flex:1;overflow-y:auto;padding:10px}
-.panel-content[hidden]{display:none}
-.tree-item{font-size:12px;padding:3px 0 3px 8px;color:var(--text-secondary)}
-.tree-cat{font-weight:600;color:var(--text-primary);padding:5px 0 2px}
-.tree-icon{display:inline-block;width:16px;color:var(--text-muted);font-size:11px}
-.audit-entry{display:flex;align-items:center;gap:8px;padding:6px 0;font-size:12px;border-bottom:1px solid var(--border-subtle)}
-.audit-dot{width:8px;height:8px;border-radius:50%;flex-shrink:0}
-.audit-dot.ok{background:var(--success)}
-.audit-dot.fail{background:var(--danger)}
-.audit-tool{color:var(--text-primary);flex:1}
-.audit-time{color:var(--text-muted);font-size:11px}
-.empty-state{text-align:center;color:var(--text-muted);padding:40px 20px;font-size:13px}
+.sess-list{flex:1;overflow-y:auto;padding:8px}
+.sess-grp{font-size:11px;color:var(--text-muted);text-transform:uppercase;padding:8px 4px 4px;letter-spacing:.5px}
+.sess-item{padding:8px 10px;border-radius:6px;cursor:pointer;margin-bottom:2px;font-size:13px;color:var(--text-secondary);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.sess-item:hover{background:var(--bg-hover)}
+.sess-item.active{background:var(--accent-primary);color:#fff}
+.side-info{padding:12px;border-top:1px solid var(--border-subtle);font-size:12px;color:var(--text-muted)}
+.side-info .row{display:flex;justify-content:space-between;padding:3px 0}
+.side-info .val{color:var(--text-secondary)}
+
+/* Admin section */
+.admin-sec{padding:12px;border-top:1px solid var(--border-subtle);display:none}
+.admin-sec .sec-title{font-size:11px;color:var(--text-muted);text-transform:uppercase;margin-bottom:8px}
+.admin-sec input{width:100%;background:var(--bg-input);border:1px solid var(--border-color);border-radius:6px;color:var(--text-primary);padding:6px 8px;font-size:12px;margin-bottom:6px;box-sizing:border-box}
+.admin-sec button{width:100%;padding:6px;background:var(--accent-primary);border:none;border-radius:6px;color:#fff;font-size:12px;cursor:pointer}
+
+/* Main chat */
+.main{flex:1;display:flex;flex-direction:column;overflow:hidden}
+.msgs{flex:1;overflow-y:auto;padding:16px;display:flex;flex-direction:column;gap:10px}
+.msg{max-width:75%;padding:10px 14px;border-radius:12px;font-size:14px;line-height:1.5;word-wrap:break-word}
+.msg-user{align-self:flex-end;background:var(--chat-user);color:#fff;border-bottom-right-radius:4px}
+.msg-bot{align-self:flex-start;background:var(--chat-bot);color:var(--text-primary);border-bottom-left-radius:4px}
+.msg-bot p{margin:4px 0}
+.msg-bot code{background:rgba(0,0,0,.3);padding:1px 4px;border-radius:3px;font-size:12px}
+.msg-bot pre{background:rgba(0,0,0,.3);padding:8px;border-radius:6px;overflow-x:auto;font-size:12px}
+
+/* Approval card */
+.card-approval{background:var(--bg-tertiary);border:1px solid var(--border-color);border-radius:10px;padding:14px;margin:6px 0;align-self:flex-start;max-width:80%}
+.card-approval .summary{font-weight:500;margin-bottom:6px;font-size:14px}
+.card-approval .steps{font-size:12px;color:var(--text-secondary);margin-bottom:10px}
+.card-approval .step{padding:2px 0}
+.card-approval .actions{display:flex;gap:8px}
+.card-approval .risk{display:inline-block;font-size:11px;font-weight:600;padding:2px 8px;border-radius:10px;margin-bottom:8px}
+.risk-low{background:var(--risk-low);color:#000}
+.risk-medium{background:var(--risk-medium);color:#000}
+.risk-high{background:var(--risk-high);color:#fff}
+.risk-critical{background:var(--risk-critical);color:#fff}
+.btn-approve{background:var(--success);color:#fff;border:none;border-radius:6px;padding:6px 14px;font-size:13px;font-weight:500;cursor:pointer}
+.btn-reject{background:var(--danger);color:#fff;border:none;border-radius:6px;padding:6px 14px;font-size:13px;font-weight:500;cursor:pointer}
+
+/* Clarify card */
+.card-clarify{background:var(--bg-tertiary);border:1px solid var(--warning);border-radius:10px;padding:14px;margin:6px 0;align-self:flex-start;max-width:80%}
+.card-clarify .ctitle{font-weight:500;margin-bottom:6px;color:var(--warning);font-size:14px}
+.card-clarify ul{padding-left:18px;font-size:13px;color:var(--text-secondary)}
+.card-clarify li{padding:3px 0}
+
+/* Input bar */
+.input-bar{display:flex;gap:8px;padding:12px 16px;border-top:1px solid var(--border-color);background:var(--bg-secondary)}
+.input-bar input{flex:1;background:var(--bg-input);border:1px solid var(--border-color);border-radius:8px;color:var(--text-primary);padding:10px 14px;font-size:14px;outline:none}
+.input-bar input:focus{border-color:var(--accent-primary)}
+.input-bar button{background:var(--accent-primary);border:none;border-radius:8px;color:#fff;padding:10px 18px;font-size:14px;cursor:pointer;font-weight:500}
+.input-bar button:hover{background:var(--accent-hover)}
+
+/* Streaming cursor */
+.streaming::after{content:"\2588";animation:blink .8s infinite;color:var(--accent-primary)}
+@keyframes blink{0%,100%{opacity:1}50%{opacity:0}}
+
+/* Right panel */
+.rpanel{width:280px;background:var(--bg-panel);border-left:1px solid var(--border-color);display:flex;flex-direction:column;overflow:hidden}
+.rpanel.hidden{display:none}
+.rp-tabs{display:flex;border-bottom:1px solid var(--border-subtle)}
+.rp-tab{flex:1;padding:10px;font-size:12px;text-align:center;cursor:pointer;color:var(--text-muted);border-bottom:2px solid transparent}
+.rp-tab.active{color:var(--accent-primary);border-bottom-color:var(--accent-primary)}
+.rp-content{flex:1;overflow-y:auto;padding:12px;font-size:13px}
+.tree-cat{padding:4px 0;color:var(--text-accent);font-weight:500}
+.tree-ch{padding:2px 0 2px 16px;color:var(--text-secondary)}
+.audit-entry{padding:6px 0;border-bottom:1px solid var(--border-subtle);font-size:12px}
+.audit-ok{color:var(--success)}
+.audit-fail{color:var(--danger)}
+
+/* Responsive */
+@media(max-width:768px){.side{display:none}.rpanel{display:none}}
 </style>
 </head>
 <body>
-<div class="app-layout">
-<!-- Navbar -->
-<nav class="navbar">
-  <div class="nav-left">
-    <div class="nav-logo">A</div>
-    <span class="nav-title">AuraFactory</span>
-    <select class="guild-select" id="guildSelect" onchange="selectGuild(this.value)">
-      <option value="" data-i18n="select_server">Select server...</option>
-    </select>
+<div class="layout">
+  <!-- Navbar -->
+  <nav class="nav">
+    <div class="nav-left">
+      <div class="nav-logo">A</div>
+      <span class="nav-title">AuraFactory</span>
+      <select class="guild-sel" id="guildSel" onchange="selectGuild(this.value)">
+        <option value="" id="optDefault">Select server...</option>
+      </select>
+    </div>
+    <div class="nav-right">
+      <span class="nav-user" id="navUser"></span>
+      <img class="nav-avatar" id="navAvatar" src="" alt="" onerror="this.style.display='none'">
+      <button class="btn-s" id="langBtn" onclick="toggleLang()">VI</button>
+      <button class="btn-s" id="logoutBtn" onclick="logout()">Log out</button>
+    </div>
+  </nav>
+
+  <div class="content">
+    <!-- Sidebar -->
+    <aside class="side">
+      <div class="side-hdr">
+        <button class="btn-new" id="btnNew" onclick="newChat()">New Chat</button>
+      </div>
+      <div class="sess-list" id="sessList"></div>
+      <div class="side-info" id="sideInfo">
+        <div class="row"><span id="lblCh">Channels</span><span class="val" id="valCh">-</span></div>
+        <div class="row"><span id="lblRo">Roles</span><span class="val" id="valRo">-</span></div>
+        <div class="row"><span id="lblMe">Members</span><span class="val" id="valMe">-</span></div>
+      </div>
+      <div class="admin-sec" id="adminSec">
+        <div class="sec-title">Admin Panel</div>
+        <input type="password" id="keyInput" placeholder="Gemini API Key">
+        <button onclick="updateKey()">Update Key</button>
+      </div>
+    </aside>
+
+    <!-- Main chat -->
+    <main class="main">
+      <div class="msgs" id="msgs"></div>
+      <div class="input-bar">
+        <input type="text" id="chatInput" placeholder="Type a message..." onkeydown="if(event.key==='Enter')sendMsg()">
+        <button onclick="sendMsg()" id="sendBtn">Send</button>
+      </div>
+    </main>
+
+    <!-- Right panel -->
+    <aside class="rpanel" id="rpanel">
+      <div class="rp-tabs">
+        <div class="rp-tab active" onclick="showTab('structure')" id="tabStruct">Structure</div>
+        <div class="rp-tab" onclick="showTab('audit')" id="tabAudit">Audit Log</div>
+      </div>
+      <div class="rp-content" id="rpContent"></div>
+    </aside>
   </div>
-  <div class="nav-right">
-    <span class="nav-user" id="navUser"></span>
-    <img class="nav-avatar" id="navAvatar" src="" alt="" onerror="this.style.display='none'">
-    <button class="btn-sm" id="langBtn" onclick="toggleLang()">VI</button>
-    <button class="btn-sm" data-i18n="logout" onclick="logout()">Log out</button>
-  </div>
-</nav>
-<!-- Content -->
-<div class="content-area">
-  <!-- Sidebar -->
-  <aside class="sidebar">
-    <div class="sidebar-hdr">
-      <button class="btn-new" data-i18n="new_chat" onclick="newChat()">New Chat</button>
-    </div>
-    <div class="session-list" id="sessionList">
-      <div class="empty-state" data-i18n="no_sessions">No conversations yet</div>
-    </div>
-    <!-- Server Info -->
-    <div class="sidebar-section">
-      <div class="sidebar-section-title" data-i18n="server_info">Server Info</div>
-      <div class="info-row"><span class="info-label" data-i18n="channels">Channels</span><span class="info-value" id="infoChannels">--</span></div>
-      <div class="info-row"><span class="info-label" data-i18n="roles">Roles</span><span class="info-value" id="infoRoles">--</span></div>
-      <div class="info-row"><span class="info-label" data-i18n="members">Members</span><span class="info-value" id="infoMembers">--</span></div>
-    </div>
-    <!-- Admin Panel -->
-    <div class="sidebar-section" id="adminSection" style="display:none">
-      <div class="sidebar-section-title" data-i18n="admin_panel">Admin Panel</div>
-      <input type="password" class="admin-input" id="adminKeyInput" placeholder="Gemini API Key..." autocomplete="off">
-      <button class="btn-admin" data-i18n="update_key" onclick="updateKey()">Update API Key</button>
-    </div>
-  </aside>
-  <!-- Chat Area -->
-  <main class="chat-area">
-    <div class="chat-messages" id="chatMessages">
-      <div class="empty-state" data-i18n="no_sessions">No conversations yet</div>
-    </div>
-    <div class="chat-input-bar">
-      <textarea class="chat-input" id="chatInput" data-i18n="type_message" placeholder="Type a message..." rows="1" onkeydown="handleKey(event)"></textarea>
-      <button class="btn-send" data-i18n="send" onclick="sendMessage()">Send</button>
-    </div>
-  </main>
-  <!-- Right Panel -->
-  <aside class="right-panel" id="rightPanel">
-    <div class="panel-tabs">
-      <div class="panel-tab active" data-i18n="structure" onclick="switchTab('structure')">Structure</div>
-      <div class="panel-tab" data-i18n="audit_log" onclick="switchTab('audit')">Audit Log</div>
-    </div>
-    <div class="panel-content" id="tabStructure">
-      <div class="empty-state" data-i18n="loading">Loading...</div>
-    </div>
-    <div class="panel-content" id="tabAudit" hidden>
-      <div class="empty-state" data-i18n="loading">Loading...</div>
-    </div>
-  </aside>
 </div>
-</div>
+
 <script>
-// === i18n ===
-const I18N={en:{new_chat:"New Chat",sessions:"Sessions",today:"Today",yesterday:"Yesterday",this_week:"This Week",earlier:"Earlier",server_info:"Server Info",channels:"Channels",roles:"Roles",members:"Members",structure:"Structure",audit_log:"Audit Log",send:"Send",approve:"Approve",reject:"Reject",logout:"Log out",select_server:"Select server...",admin_panel:"Admin Panel",update_key:"Update API Key",no_sessions:"No conversations yet",type_message:"Type a message...",pending_approval:"Pending Approval",plan_steps:"steps",risk_level:"Risk",clarify_title:"Need more information",loading:"Loading...",lang_toggle:"VI"},vi:{new_chat:"Cuộc trò chuyện mới",sessions:"Lịch sử",today:"Hôm nay",yesterday:"Hôm qua",this_week:"Tuần này",earlier:"Trước đó",server_info:"Thông tin Server",channels:"Kênh",roles:"Vai trò",members:"Thành viên",structure:"Cấu trúc",audit_log:"Nhật ký",send:"Gửi",approve:"Duyệt",reject:"Từ chối",logout:"Đăng xuất",select_server:"Chọn server...",admin_panel:"Quản trị",update_key:"Cập nhật API Key",no_sessions:"Chưa có cuộc trò chuyện nào",type_message:"Nhập tin nhắn...",pending_approval:"Chờ duyệt",plan_steps:"bước",risk_level:"Rủi ro",clarify_title:"Cần thêm thông tin",loading:"Đang tải...",lang_toggle:"EN"}};
-let currentLang=localStorage.getItem('lang')||'en';
-function setLang(l){currentLang=l;localStorage.setItem('lang',l);document.querySelectorAll('[data-i18n]').forEach(el=>{const k=el.getAttribute('data-i18n');if(I18N[l][k]){if(el.tagName==='INPUT'||el.tagName==='TEXTAREA')el.placeholder=I18N[l][k];else el.textContent=I18N[l][k]}});document.getElementById('langBtn').textContent=I18N[l].lang_toggle}
-function toggleLang(){setLang(currentLang==='en'?'vi':'en')}
-
 // === State ===
-let guildId='',userId='';
-let activeSession=null;
+var guildId='',userId='',currentSession='',activeTab='structure';
+var lang=localStorage.getItem('lang')||'en';
 
-// === Guild ===
-async function loadGuilds(){
-  try{const r=await fetch('/api/auth/guilds');const d=await r.json();const sel=document.getElementById('guildSelect');
-  sel.innerHTML='<option value="" data-i18n="select_server">'+I18N[currentLang].select_server+'</option>';
-  (d.guilds||d||[]).forEach(g=>{const o=document.createElement('option');o.value=g.id;o.textContent=g.name;sel.appendChild(o)})}catch(e){console.error(e)}
+// === i18n ===
+var T={
+  en:{new_chat:'New Chat',select_server:'Select server...',channels:'Channels',roles:'Roles',members:'Members',
+      structure:'Structure',audit_log:'Audit Log',send:'Send',approve:'Approve',reject:'Reject',logout:'Log out',
+      type_msg:'Type a message...',no_sessions:'No conversations yet',clarify:'Need more information',toggle:'VI'},
+  vi:{new_chat:'Chat moi',select_server:'Chon server...',channels:'Kenh',roles:'Vai tro',members:'Thanh vien',
+      structure:'Cau truc',audit_log:'Nhat ky',send:'Gui',approve:'Duyet',reject:'Tu choi',logout:'Dang xuat',
+      type_msg:'Nhap tin nhan...',no_sessions:'Chua co cuoc tro chuyen',clarify:'Can them thong tin',toggle:'EN'}
+};
+function setLang(l){
+  lang=l;localStorage.setItem('lang',l);
+  var t=T[l];
+  document.getElementById('btnNew').textContent=t.new_chat;
+  document.getElementById('optDefault').textContent=t.select_server;
+  document.getElementById('lblCh').textContent=t.channels;
+  document.getElementById('lblRo').textContent=t.roles;
+  document.getElementById('lblMe').textContent=t.members;
+  document.getElementById('tabStruct').textContent=t.structure;
+  document.getElementById('tabAudit').textContent=t.audit_log;
+  document.getElementById('sendBtn').textContent=t.send;
+  document.getElementById('logoutBtn').textContent=t.logout;
+  document.getElementById('chatInput').placeholder=t.type_msg;
+  document.getElementById('langBtn').textContent=t.toggle;
 }
-function selectGuild(id){guildId=id;if(id){loadServerInfo();loadSessions();loadStructure();loadAudit()}}
-async function loadServerInfo(){
-  try{const r=await fetch(`/api/guild/${guildId}/info`);const d=await r.json();
-  document.getElementById('infoChannels').textContent=d.channel_count||d.channels||'--';
-  document.getElementById('infoRoles').textContent=d.role_count||d.roles||'--';
-  document.getElementById('infoMembers').textContent=d.member_count||d.members||'--'}catch(e){}
+function toggleLang(){setLang(lang==='en'?'vi':'en');}
+
+// === Auth ===
+function logout(){localStorage.removeItem('token');localStorage.removeItem('user');window.location.href='/login';}
+function initAuth(){
+  var raw=localStorage.getItem('user');
+  var token=localStorage.getItem('token');
+  if(!raw||!token){window.location.href='/login';return false;}
+  try{
+    var u=JSON.parse(raw);
+    userId=u.id||'';
+    document.getElementById('navUser').textContent=u.username||'';
+    if(u.avatar){
+      document.getElementById('navAvatar').src='https://cdn.discordapp.com/avatars/'+u.id+'/'+u.avatar+'.png?size=64';
+    }
+    if(u.is_admin)document.getElementById('adminSec').style.display='block';
+    return true;
+  }catch(e){window.location.href='/login';return false;}
+}
+
+// === API helper ===
+function api(method,url,body){
+  var opts={method:method,headers:{'Content-Type':'application/json'}};
+  if(body)opts.body=JSON.stringify(body);
+  return fetch(url,opts).then(function(r){
+    if(r.status===401){logout();return null;}
+    return r.json();
+  });
+}
+
+// === Guilds ===
+function loadGuilds(){
+  if(!userId)return;
+  api('GET','/api/auth/guilds?user_id='+userId).then(function(d){
+    if(!d)return;
+    var sel=document.getElementById('guildSel');
+    sel.innerHTML='<option value="" id="optDefault">'+T[lang].select_server+'</option>';
+    var all=(d.ready||[]).concat(d.pending||[]);
+    all.forEach(function(g){
+      var opt=document.createElement('option');
+      opt.value=g.id;opt.textContent=g.name;
+      sel.appendChild(opt);
+    });
+  });
+}
+function selectGuild(id){
+  guildId=id;
+  if(!id)return;
+  loadServerInfo();
+  loadSessions();
+  loadStructure();
+}
+
+// === Server info ===
+function loadServerInfo(){
+  api('GET','/api/guild/'+guildId+'/info').then(function(d){
+    if(!d)return;
+    document.getElementById('valCh').textContent=d.channel_count||d.channels||'-';
+    document.getElementById('valRo').textContent=d.role_count||d.roles||'-';
+    document.getElementById('valMe').textContent=d.member_count||d.members||'-';
+  });
 }
 
 // === Sessions ===
-async function loadSessions(){
+function loadSessions(){
+  api('GET','/api/sessions?guild_id='+guildId+'&user_id='+userId).then(function(d){
+    if(!d||!d.sessions)return;
+    var el=document.getElementById('sessList');
+    if(d.sessions.length===0){el.innerHTML='<p style="padding:12px;color:var(--text-muted);font-size:12px">'+T[lang].no_sessions+'</p>';return;}
+    var html='';
+    d.sessions.forEach(function(s){
+      var cls=s.id===currentSession?'sess-item active':'sess-item';
+      html+='<div class="'+cls+'" onclick="loadSession(\''+s.id+'\')">'+escHtml(s.first_message||'...')+'</div>';
+    });
+    el.innerHTML=html;
+  });
+}
+function loadSession(sid){
+  currentSession=sid;
+  api('GET','/api/sessions/'+sid+'/history').then(function(d){
+    if(!d)return;
+    var el=document.getElementById('msgs');el.innerHTML='';
+    (d.history||[]).forEach(function(m){
+      if(m.role==='user')appendUserMsg(m.content);
+      else appendBotMsg(m.content);
+    });
+    el.scrollTop=el.scrollHeight;
+    loadSessions(); // refresh active highlight
+  });
+}
+function newChat(){
   if(!guildId)return;
-  try{const r=await fetch(`/api/sessions?guild_id=${guildId}&user_id=${userId}`);const d=await r.json();
-  const list=document.getElementById('sessionList');
-  const sessions=d.sessions||[];
-  if(!sessions.length){list.innerHTML='<div class="empty-state" data-i18n="no_sessions">'+I18N[currentLang].no_sessions+'</div>';return}
-  const now=new Date(),groups={today:[],yesterday:[],week:[],earlier:[]};
-  sessions.forEach(s=>{const dt=new Date(s.last_active_at||s.created_at);const diff=Math.floor((now-dt)/864e5);
-    if(diff<1)groups.today.push(s);else if(diff<2)groups.yesterday.push(s);else if(diff<7)groups.week.push(s);else groups.earlier.push(s)});
-  let html='';
-  const render=(label,items)=>{if(!items.length)return;html+=`<div class="session-group" data-i18n="${label}">${I18N[currentLang][label]}</div>`;
-    items.forEach(s=>{const cls=s.id===activeSession?'session-item active':'session-item';html+=`<div class="${cls}" data-session="${s.id}" onclick="loadSession('${s.id}')">${s.first_message||'...'}</div>`})};
-  render('today',groups.today);render('yesterday',groups.yesterday);render('this_week',groups.week);render('earlier',groups.earlier);
-  list.innerHTML=html}catch(e){console.error(e)}
-}
-async function loadSession(id){
-  activeSession=id;const el=document.getElementById('chatMessages');el.classList.add('loading');
-  document.querySelectorAll('.session-item').forEach(e=>e.classList.remove('active'));
-  document.querySelector(`[data-session="${id}"]`)?.classList.add('active');
-  try{const r=await fetch(`/api/sessions/${id}/history`);const d=await r.json();
-  await new Promise(r=>setTimeout(r,80));renderMessages(d.history||[])}catch(e){el.innerHTML='<div class="empty-state">Error loading session</div>'}
-  el.classList.remove('loading');
-}
-async function newChat(){
-  if(!guildId)return;
-  try{const r=await fetch(`/api/sessions/new?guild_id=${guildId}&user_id=${userId}`,{method:'POST'});const d=await r.json();
-  activeSession=d.id;document.getElementById('chatMessages').innerHTML='';loadSessions()}catch(e){console.error(e)}
+  api('POST','/api/sessions/new?guild_id='+guildId+'&user_id='+userId).then(function(d){
+    if(!d)return;
+    currentSession=d.id;
+    document.getElementById('msgs').innerHTML='';
+    loadSessions();
+  });
 }
 
-// === Render Messages ===
-function renderMessages(history){
-  const el=document.getElementById('chatMessages');
-  if(!history||!history.length){el.innerHTML='<div class="empty-state" data-i18n="no_sessions">'+I18N[currentLang].no_sessions+'</div>';return}
-  let html='';history.forEach(m=>{
-    if(m.role==='user')html+=`<div class="msg msg-user"><div class="msg-bubble">${esc(m.content)}</div></div>`;
-    else html+=`<div class="msg msg-bot"><div class="msg-bubble">${marked.parse(m.content||'')}</div></div>`});
-  el.innerHTML=html;el.scrollTop=el.scrollHeight;
+// === Chat ===
+function sendMsg(){
+  var input=document.getElementById('chatInput');
+  var text=input.value.trim();
+  if(!text||!guildId)return;
+  input.value='';
+  appendUserMsg(text);
+  sendStream(text);
 }
-function esc(s){return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')}
-
-// === Send Message (Streaming) ===
-function handleKey(e){if(e.key==='Enter'&&!e.shiftKey){e.preventDefault();sendMessage()}}
-async function sendMessage(){
-  const input=document.getElementById('chatInput');const text=input.value.trim();if(!text||!guildId)return;
-  input.value='';appendMsg('user',text);
-  const botDiv=appendMsg('bot','');botDiv._rawText='';
-  try{
-    const resp=await fetch('/api/chat/stream',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({message:text,guild_id:guildId,user_id:userId})});
-    if(!resp.ok){const fallback=await fetchFallback(text);botDiv.querySelector('.msg-bubble').innerHTML=marked.parse(fallback);return}
-    const reader=resp.body.getReader();const dec=new TextDecoder();let buf='';
-    while(true){const{done,value}=await reader.read();if(done)break;
-      buf+=dec.decode(value,{stream:true});const lines=buf.split('\n');buf=lines.pop();
-      for(const line of lines){if(!line.startsWith('data: '))continue;const raw=line.slice(6);if(raw==='[DONE]')break;
-        try{const chunk=JSON.parse(raw);handleChunk(chunk,botDiv)}catch(e){}}}
-  }catch(e){botDiv.querySelector('.msg-bubble').innerHTML='<span style="color:var(--danger)">Connection error</span>'}
-  document.getElementById('chatMessages').scrollTop=999999;
+function appendUserMsg(text){
+  var el=document.getElementById('msgs');
+  var div=document.createElement('div');
+  div.className='msg msg-user';
+  div.textContent=text;
+  el.appendChild(div);
+  el.scrollTop=el.scrollHeight;
 }
-async function fetchFallback(text){
-  try{const r=await fetch('/api/chat',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({message:text,guild_id:guildId,user_id:userId})});
-  const d=await r.json();return d.response||d.message||JSON.stringify(d)}catch(e){return 'Error: '+e.message}
-}
-function handleChunk(chunk,botDiv){
-  const bubble=botDiv.querySelector('.msg-bubble');
-  if(chunk.type==='text'){botDiv._rawText+=chunk.content;bubble.innerHTML=marked.parse(botDiv._rawText)}
-  else if(chunk.type==='status'){bubble.innerHTML=`<div class="status-indicator">${esc(chunk.message||chunk.status)}</div>`+(botDiv._rawText?marked.parse(botDiv._rawText):'')}
-  else if(chunk.type==='approval'){bubble.innerHTML=renderApprovalCard(chunk)}
-  else if(chunk.type==='clarify'){bubble.innerHTML=renderClarifyCard(chunk)}
-  else if(chunk.type==='done'){if(chunk.final_message){botDiv._rawText+='\n\n'+chunk.final_message;bubble.innerHTML=marked.parse(botDiv._rawText)}}
-  else if(chunk.type==='error'){bubble.innerHTML=`<span style="color:var(--danger)">${esc(chunk.message)}</span>`}
-  document.getElementById('chatMessages').scrollTop=999999;
-}
-function renderApprovalCard(d){
-  const steps=(d.steps||[]).map((s,i)=>`<div class="plan-step">${i+1}. ${esc(s.tool_name||'')} - ${esc(s.description||'')}</div>`).join('');
-  const risk=d.risk||'MEDIUM';const rc=risk.toLowerCase();
-  return `<div class="approval-card"><div class="card-title" data-i18n="pending_approval">${I18N[currentLang].pending_approval}</div>
-  <div style="font-size:13px;margin:4px 0">${esc(d.summary||'')}</div>${steps}
-  <div class="risk-badge risk-${rc}">${risk}</div>
-  <div class="card-actions"><button class="btn-approve" data-i18n="approve" onclick="doApproval('${d.plan_id}','approve')">${I18N[currentLang].approve}</button>
-  <button class="btn-reject" data-i18n="reject" onclick="doApproval('${d.plan_id}','reject')">${I18N[currentLang].reject}</button></div></div>`;
-}
-function renderClarifyCard(d){
-  const qs=(d.questions||[]).map(q=>`<li>${esc(q)}</li>`).join('');
-  return `<div class="clarify-card"><div class="card-title" data-i18n="clarify_title">${I18N[currentLang].clarify_title}</div>
-  <div style="font-size:12px;color:var(--text-secondary);margin:2px 0">${esc(d.summary||'')}</div>
-  <ol class="clarify-list">${qs}</ol></div>`;
-}
-function appendMsg(role,content){
-  const el=document.getElementById('chatMessages');
-  if(el.querySelector('.empty-state'))el.innerHTML='';
-  const div=document.createElement('div');div.className=`msg msg-${role}`;
-  div.innerHTML=`<div class="msg-bubble">${role==='user'?esc(content):marked.parse(content)}</div>`;
-  el.appendChild(div);el.scrollTop=el.scrollHeight;return div;
-}
-async function doApproval(planId,action){
-  try{await fetch('/api/approval',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({plan_id:planId,action,user_id:userId})});
-  document.querySelectorAll('.approval-card .card-actions').forEach(el=>el.innerHTML=`<span style="font-size:12px;color:var(--text-muted)">${action==='approve'?'Approved':'Rejected'}</span>`)}catch(e){}
+function appendBotMsg(text){
+  var el=document.getElementById('msgs');
+  var div=document.createElement('div');
+  div.className='msg msg-bot';
+  div.innerHTML=marked.parse(text||'');
+  el.appendChild(div);
+  el.scrollTop=el.scrollHeight;
+  return div;
 }
 
-// === Right Panel ===
-function switchTab(tab){
-  document.querySelectorAll('.panel-tab').forEach(t=>t.classList.remove('active'));
-  document.querySelector(`.panel-tab[data-i18n="${tab==='structure'?'structure':'audit_log'}"]`).classList.add('active');
-  document.getElementById('tabStructure').hidden=tab!=='structure';
-  document.getElementById('tabAudit').hidden=tab!=='audit';
+// === Streaming ===
+function sendStream(text){
+  var el=document.getElementById('msgs');
+  var div=document.createElement('div');
+  div.className='msg msg-bot streaming';
+  div.innerHTML='';
+  el.appendChild(div);
+  el.scrollTop=el.scrollHeight;
+  var raw='';
+
+  fetch('/api/chat/stream',{
+    method:'POST',
+    headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({message:text,guild_id:guildId,user_id:userId})
+  }).then(function(resp){
+    var reader=resp.body.getReader();
+    var decoder=new TextDecoder();
+    var buffer='';
+    function read(){
+      reader.read().then(function(result){
+        if(result.done){div.classList.remove('streaming');return;}
+        buffer+=decoder.decode(result.value,{stream:true});
+        var lines=buffer.split('\n');
+        buffer=lines.pop();
+        lines.forEach(function(line){
+          if(line.indexOf('data: ')!==0)return;
+          var payload=line.slice(6);
+          if(payload==='[DONE]'){div.classList.remove('streaming');return;}
+          try{
+            var chunk=JSON.parse(payload);
+            if(chunk.type==='text'){raw+=chunk.content;div.innerHTML=marked.parse(raw);}
+            else if(chunk.type==='status'){div.innerHTML='<em>'+escHtml(chunk.message||chunk.status)+'</em>';}
+            else if(chunk.type==='approval'){renderApproval(chunk);}
+            else if(chunk.type==='clarify'){renderClarify(chunk);}
+            else if(chunk.type==='done'){div.classList.remove('streaming');if(chunk.final_message){raw+=chunk.final_message;div.innerHTML=marked.parse(raw);}}
+            else if(chunk.type==='error'){div.classList.remove('streaming');div.innerHTML='<span style="color:var(--danger)">'+escHtml(chunk.message)+'</span>';}
+          }catch(e){}
+          el.scrollTop=el.scrollHeight;
+        });
+        read();
+      });
+    }
+    read();
+  }).catch(function(){
+    // Fallback to non-streaming
+    div.classList.remove('streaming');
+    api('POST','/api/chat',{message:text,guild_id:guildId,user_id:userId}).then(function(d){
+      if(d&&d.reply)div.innerHTML=marked.parse(d.reply);
+      else div.innerHTML='<span style="color:var(--danger)">Error</span>';
+    });
+  });
 }
-async function loadStructure(){
-  if(!guildId)return;const el=document.getElementById('tabStructure');
-  try{const r=await fetch(`/api/guild/${guildId}/info`);const d=await r.json();
-  let html='';const cats=d.categories||[];const roles=d.roles||[];
-  if(cats.length){cats.forEach(c=>{html+=`<div class="tree-cat"><span class="tree-icon">&#9656;</span> ${esc(c.name)}</div>`;
-    (c.channels||[]).forEach(ch=>{const icon=ch.type==='voice'?'&#9835;':'#';html+=`<div class="tree-item"><span class="tree-icon">${icon}</span> ${esc(ch.name)}</div>`})})}
-  if(roles.length){html+=`<div class="tree-cat" style="margin-top:10px"><span class="tree-icon">&#9656;</span> Roles</div>`;
-    roles.forEach(r=>{html+=`<div class="tree-item"><span class="tree-icon" style="color:${r.color||'inherit'}">&#9679;</span> ${esc(r.name)}</div>`})}
-  el.innerHTML=html||'<div class="empty-state">No data</div>'}catch(e){el.innerHTML='<div class="empty-state">Error</div>'}
+
+// === Approval card ===
+function renderApproval(data){
+  var el=document.getElementById('msgs');
+  var div=document.createElement('div');
+  div.className='card-approval';
+  var riskCls='risk-'+((data.risk||'medium').toLowerCase());
+  var stepsHtml='';
+  (data.steps||[]).forEach(function(s,i){stepsHtml+='<div class="step">'+(i+1)+'. '+(s.description||s.tool_name)+'</div>';});
+  div.innerHTML='<span class="risk '+riskCls+'">'+(data.risk||'MEDIUM')+'</span>'+
+    '<div class="summary">'+escHtml(data.summary||'')+'</div>'+
+    '<div class="steps">'+stepsHtml+'</div>'+
+    '<div class="actions"><button class="btn-approve" onclick="doApprove(\''+data.plan_id+'\')">'+T[lang].approve+'</button>'+
+    '<button class="btn-reject" onclick="doReject(\''+data.plan_id+'\')">'+T[lang].reject+'</button></div>';
+  el.appendChild(div);
+  el.scrollTop=el.scrollHeight;
 }
-async function loadAudit(){
-  if(!guildId)return;const el=document.getElementById('tabAudit');
-  try{const r=await fetch(`/api/audit?guild_id=${guildId}&limit=20`);const d=await r.json();
-  const entries=d.entries||[];if(!entries.length){el.innerHTML='<div class="empty-state">No entries</div>';return}
-  let html='';entries.forEach(e=>{const dot=e.success?'ok':'fail';const time=e.executed_at?timeAgo(e.executed_at):'';
-    html+=`<div class="audit-entry"><span class="audit-dot ${dot}"></span><span class="audit-tool">${esc(e.tool_name)}</span><span class="audit-time">${time}</span></div>`});
-  el.innerHTML=html}catch(e){el.innerHTML='<div class="empty-state">Error</div>'}
+function doApprove(pid){api('POST','/api/approval',{plan_id:pid,action:'approve',user_id:userId}).then(function(){appendBotMsg('Plan approved. Executing...');});}
+function doReject(pid){api('POST','/api/approval',{plan_id:pid,action:'reject',user_id:userId}).then(function(){appendBotMsg('Plan rejected.');});}
+
+// === Clarify card ===
+function renderClarify(data){
+  var el=document.getElementById('msgs');
+  var div=document.createElement('div');
+  div.className='card-clarify';
+  var qs='';(data.questions||[]).forEach(function(q){qs+='<li>'+escHtml(q)+'</li>';});
+  div.innerHTML='<div class="ctitle">'+T[lang].clarify+'</div><ul>'+qs+'</ul>';
+  el.appendChild(div);
+  el.scrollTop=el.scrollHeight;
 }
-function timeAgo(iso){const s=Math.floor((Date.now()-new Date(iso))/1000);if(s<60)return s+'s';if(s<3600)return Math.floor(s/60)+'m';if(s<86400)return Math.floor(s/3600)+'h';return Math.floor(s/86400)+'d'}
+
+// === Right panel ===
+function showTab(tab){
+  activeTab=tab;
+  document.getElementById('tabStruct').className='rp-tab'+(tab==='structure'?' active':'');
+  document.getElementById('tabAudit').className='rp-tab'+(tab==='audit'?' active':'');
+  if(tab==='structure')loadStructure();
+  else loadAudit();
+}
+function loadStructure(){
+  if(!guildId){document.getElementById('rpContent').innerHTML='';return;}
+  api('GET','/api/guild/'+guildId+'/info').then(function(d){
+    if(!d)return;
+    var html='';
+    if(d.categories){d.categories.forEach(function(cat){
+      html+='<div class="tree-cat">'+escHtml(cat.name)+'</div>';
+      (cat.channels||[]).forEach(function(ch){
+        var icon=ch.type==='voice'?'# ':'# ';
+        html+='<div class="tree-ch">'+icon+escHtml(ch.name)+'</div>';
+      });
+    });}
+    if(d.roles){html+='<div class="tree-cat" style="margin-top:12px">Roles</div>';
+      d.roles.forEach(function(r){html+='<div class="tree-ch">@'+escHtml(r.name)+'</div>';});
+    }
+    document.getElementById('rpContent').innerHTML=html||'<p style="color:var(--text-muted)">Select a server</p>';
+  });
+}
+function loadAudit(){
+  if(!guildId){document.getElementById('rpContent').innerHTML='';return;}
+  api('GET','/api/audit?guild_id='+guildId+'&limit=20').then(function(d){
+    if(!d||!d.entries)return;
+    var html='';
+    d.entries.forEach(function(e){
+      var cls=e.success?'audit-ok':'audit-fail';
+      var icon=e.success?'[OK]':'[FAIL]';
+      html+='<div class="audit-entry"><span class="'+cls+'">'+icon+'</span> '+escHtml(e.tool_name)+'</div>';
+    });
+    document.getElementById('rpContent').innerHTML=html||'<p style="color:var(--text-muted)">No entries</p>';
+  });
+}
 
 // === Admin ===
-async function updateKey(){
-  const key=document.getElementById('adminKeyInput').value.trim();if(!key)return;
-  try{await fetch('/api/admin/update-gemini-key',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({api_key:key})});
-  document.getElementById('adminKeyInput').value='';alert('Updated')}catch(e){alert('Error')}
+function updateKey(){
+  var key=document.getElementById('keyInput').value.trim();
+  if(!key)return;
+  api('POST','/api/admin/update-gemini-key',{api_key:key}).then(function(){
+    document.getElementById('keyInput').value='';
+    alert('Updated');
+  });
 }
-document.getElementById('adminSection').style.display='none';
+
+// === Util ===
+function escHtml(s){var d=document.createElement('div');d.textContent=s||'';return d.innerHTML;}
 
 // === Init ===
-function logout(){window.location.href='/api/auth/login'}
-window.addEventListener('DOMContentLoaded',()=>{
-  // Auth check — load user from localStorage
-  const stored=localStorage.getItem('user');
-  if(!stored||!localStorage.getItem('token')){window.location.href='/login';return;}
-  try{
-    const u=JSON.parse(stored);
-    userId=u.id||'';
-    document.getElementById('navUser').textContent=u.username||'';
-    if(u.avatar_url)document.getElementById('navAvatar').src=u.avatar_url;
-    if(u.is_admin)document.getElementById('adminSection').style.display='block';
-  }catch(e){window.location.href='/login';return;}
-  setLang(currentLang);
-  loadGuilds();
-});
+if(initAuth()){setLang(lang);loadGuilds();}
 </script>
 </body>
 </html>

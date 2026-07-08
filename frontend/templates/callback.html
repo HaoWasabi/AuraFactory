@@ -1,43 +1,39 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>AuraFactory</title>
-    <link rel="stylesheet" href="/static/style.css">
-    <style>
-    body{display:flex;align-items:center;justify-content:center;min-height:100vh;background:var(--bg-primary);animation:fadeIn .3s ease}
-    @keyframes fadeIn{from{opacity:0}to{opacity:1}}
-    .cb{text-align:center}
-    .cb p{font-size:15px;color:var(--text-secondary);margin-top:16px}
-    .spinner{width:28px;height:28px;border:3px solid var(--border-color);border-top-color:var(--accent-primary);border-radius:50%;animation:spin .7s linear infinite;margin:0 auto}
-    @keyframes spin{to{transform:rotate(360deg)}}
-    </style>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>AuraFactory</title>
+<link rel="stylesheet" href="/static/style.css">
+<style>
+body{display:flex;align-items:center;justify-content:center;min-height:100vh;background:var(--bg-primary)}
+.wrap{text-align:center}
+.wrap p{font-size:14px;color:var(--text-secondary);margin-top:16px}
+.spin{width:28px;height:28px;border:3px solid var(--border-color);border-top-color:var(--accent-primary);border-radius:50%;animation:sp .7s linear infinite;margin:0 auto}
+@keyframes sp{to{transform:rotate(360deg)}}
+</style>
 </head>
 <body>
-<div class="cb"><div class="spinner"></div><p>Redirecting...</p></div>
+<div class="wrap"><div class="spin"></div><p>Redirecting...</p></div>
 <script>
 (function(){
-  var params = new URLSearchParams(window.location.search);
-  var code = params.get('code');
-  var state = params.get('state') || '';
-  if (!code) { window.location.href = '/login'; return; }
+  var search=new URLSearchParams(window.location.search);
+  var code=search.get('code');
+  var state=search.get('state')||'';
+  if(!code){window.location.href='/login';return;}
 
-  var apiUrl = new URL('/api/auth/callback', window.location.origin);
-  apiUrl.searchParams.set('code', code);
-  apiUrl.searchParams.set('state', state);
+  var u=new URL('/api/auth/callback',window.location.origin);
+  u.searchParams.set('code',code);
+  u.searchParams.set('state',state);
 
-  fetch(apiUrl.toString())
-    .then(function(r) { return r.json(); })
-    .then(function(d) {
-      if (d.token) localStorage.setItem('token', d.token);
-      if (d.user) localStorage.setItem('user', JSON.stringify(d.user));
-      window.location.href = '/dashboard';
+  fetch(u.toString())
+    .then(function(r){return r.json()})
+    .then(function(d){
+      if(d.token)localStorage.setItem('token',d.token);
+      if(d.user)localStorage.setItem('user',JSON.stringify(d.user));
+      window.location.href='/dashboard';
     })
-    .catch(function(e) {
-      console.error('Auth callback failed:', e);
-      window.location.href = '/login';
-    });
+    .catch(function(){window.location.href='/login';});
 })();
 </script>
 </body>
