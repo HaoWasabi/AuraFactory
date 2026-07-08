@@ -228,7 +228,7 @@ function loadGuilds(){
     var all=(d.ready||[]).concat(d.pending||[]);
     all.forEach(function(g){
       var opt=document.createElement('option');
-      opt.value=g.id;opt.textContent=g.name;
+      opt.value=g.guild_id;opt.textContent=g.guild_name;
       sel.appendChild(opt);
     });
   });
@@ -330,6 +330,11 @@ function sendStream(text){
     headers:{'Content-Type':'application/json'},
     body:JSON.stringify({message:text,guild_id:guildId,user_id:userId})
   }).then(function(resp){
+    if(!resp.ok){
+      div.classList.remove('streaming');
+      resp.json().then(function(d){div.innerHTML='<span style="color:var(--danger)">'+escHtml(d.error||d.detail||'Server error')+'</span>';}).catch(function(){div.innerHTML='<span style="color:var(--danger)">Server error ('+resp.status+')</span>';});
+      return;
+    }
     var reader=resp.body.getReader();
     var decoder=new TextDecoder();
     var buffer='';
@@ -362,7 +367,7 @@ function sendStream(text){
     // Fallback to non-streaming
     div.classList.remove('streaming');
     api('POST','/api/chat',{message:text,guild_id:guildId,user_id:userId}).then(function(d){
-      if(d&&d.reply)div.innerHTML=marked.parse(d.reply);
+      if(d&&(d.content||d.error))div.innerHTML=marked.parse(d.content||d.error);
       else div.innerHTML='<span style="color:var(--danger)">Error</span>';
     });
   });
@@ -411,15 +416,15 @@ function loadStructure(){
   api('GET','/api/guild/'+guildId+'/info').then(function(d){
     if(!d)return;
     var html='';
-    if(d.categories){d.categories.forEach(function(cat){
+    if(d.categories_detail&&d.categories_detail.length){d.categories_detail.forEach(function(cat){
       html+='<div class="tree-cat">'+escHtml(cat.name)+'</div>';
       (cat.channels||[]).forEach(function(ch){
         var icon=ch.type==='voice'?'# ':'# ';
         html+='<div class="tree-ch">'+icon+escHtml(ch.name)+'</div>';
       });
     });}
-    if(d.roles){html+='<div class="tree-cat" style="margin-top:12px">Roles</div>';
-      d.roles.forEach(function(r){html+='<div class="tree-ch">@'+escHtml(r.name)+'</div>';});
+    if(d.roles_detail&&d.roles_detail.length){html+='<div class="tree-cat" style="margin-top:12px">Roles</div>';
+      d.roles_detail.forEach(function(r){html+='<div class="tree-ch">@'+escHtml(r.name)+'</div>';});
     }
     document.getElementById('rpContent').innerHTML=html||'<p style="color:var(--text-muted)">Select a server</p>';
   });

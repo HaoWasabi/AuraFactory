@@ -283,6 +283,36 @@ def create_api_router(services: dict) -> APIRouter:
             server_info = json.loads(ctx.get("server_info", "{}")) if isinstance(ctx.get("server_info"), str) else ctx.get("server_info", {})
             categories = json.loads(ctx.get("categories", "[]")) if isinstance(ctx.get("categories"), str) else ctx.get("categories", [])
 
+            # Build structured categories with nested channels for right-panel tree view
+            categories_structured = []
+            if isinstance(categories, list) and len(categories) > 0 and isinstance(categories[0], dict):
+                # Already structured
+                categories_structured = categories
+            elif isinstance(channels, list):
+                # Group channels by category
+                cat_map = {}
+                uncategorized = []
+                for ch in channels:
+                    if isinstance(ch, dict):
+                        cat_name = ch.get("category") or ch.get("parent") or "General"
+                        if cat_name not in cat_map:
+                            cat_map[cat_name] = []
+                        cat_map[cat_name].append({
+                            "name": ch.get("name", "unknown"),
+                            "type": ch.get("type", "text"),
+                        })
+                for cat_name, cat_channels in cat_map.items():
+                    categories_structured.append({"name": cat_name, "channels": cat_channels})
+
+            # Build roles list for right-panel
+            roles_structured = []
+            if isinstance(roles, list):
+                for r in roles:
+                    if isinstance(r, dict):
+                        roles_structured.append({"name": r.get("name", "unknown")})
+                    elif isinstance(r, str):
+                        roles_structured.append({"name": r})
+
             return {
                 "ok": True,
                 "guild_id": guild_id,
@@ -291,6 +321,8 @@ def create_api_router(services: dict) -> APIRouter:
                 "categories": len(categories) if isinstance(categories, list) else 0,
                 "member_count": server_info.get("member_count") or server_info.get("approximate_member_count") or "?",
                 "server_name": server_info.get("name", ""),
+                "categories_detail": categories_structured,
+                "roles_detail": roles_structured,
             }
         except Exception as e:
             logger.error("Failed to get guild info: %s", e)
@@ -459,12 +491,8 @@ def create_api_router(services: dict) -> APIRouter:
         db = guild_sync_service.db
         row = await db.fetchrow(
             """
-            INSERT INTO sessions (guild_id, user_id, user_role, history)
-            VALUES ($1, $2, 'admin', '[]'::jsonb)
-            ON CONFLICT (guild_id, user_id) DO UPDATE SET 
-                history = '[]'::jsonb, 
-                last_active_at = NOW(),
-                expires_at = NOW() + INTERVAL '30 minutes'
+            INSERT INTO sessions (id, guild_id, user_id, user_role, history)
+            VALUES (gen_random_uuid(), $1, $2, 'admin', '[]'::jsonb)
             RETURNING id, created_at
             """,
             int(guild_id),
