@@ -18,18 +18,26 @@
 <div class="cb"><div class="spinner"></div><p>Redirecting...</p></div>
 <script>
 (function(){
-  var p=new URLSearchParams(window.location.search);
-  var code=p.get('code');
-  var state=p.get('state')||'';
-  if(!code){window.location.href='/dashboard';return;}
-  fetch('/api/auth/callback?code='+encodeURIComponent(code)+'&state='+encodeURIComponent(state))
-    .then(function(r){return r.json()})
-    .then(function(d){
-      if(d.token)localStorage.setItem('token',d.token);
-      if(d.user)localStorage.setItem('user',JSON.stringify(d.user));
-      window.location.href='/dashboard';
+  var params = new URLSearchParams(window.location.search);
+  var code = params.get('code');
+  var state = params.get('state') || '';
+  if (!code) { window.location.href = '/login'; return; }
+
+  var apiUrl = new URL('/api/auth/callback', window.location.origin);
+  apiUrl.searchParams.set('code', code);
+  apiUrl.searchParams.set('state', state);
+
+  fetch(apiUrl.toString())
+    .then(function(r) { return r.json(); })
+    .then(function(d) {
+      if (d.token) localStorage.setItem('token', d.token);
+      if (d.user) localStorage.setItem('user', JSON.stringify(d.user));
+      window.location.href = '/dashboard';
     })
-    .catch(function(){window.location.href='/dashboard';});
+    .catch(function(e) {
+      console.error('Auth callback failed:', e);
+      window.location.href = '/login';
+    });
 })();
 </script>
 </body>
