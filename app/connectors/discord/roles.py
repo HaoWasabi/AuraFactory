@@ -14,6 +14,9 @@ import nextcord
 
 from app.connectors.base import BaseConnector
 from app.mcp.protocol import ToolDefinition
+from app.connectors.discord._helpers import coerce_color, coerce_permissions, merge_permissions
+from app.connectors.discord._permissions import check_bot_permissions
+from app.connectors.discord._validation import check_role_hierarchy, validate_kwargs
 
 logger = logging.getLogger(__name__)
 

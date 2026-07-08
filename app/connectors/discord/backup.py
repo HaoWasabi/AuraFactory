@@ -13,6 +13,8 @@ import nextcord
 
 from app.connectors.base import BaseConnector
 from app.mcp.protocol import ToolDefinition
+from app.connectors.discord._helpers import RateLimitGate
+from app.connectors.discord._permissions import check_bot_permissions
 
 logger = logging.getLogger(__name__)
 

@@ -196,8 +196,12 @@ User: "setup server: đổi tên 'Gaming Hub', bật Community, bảo mật medi
    Step 5: discord.guild.set_preferred_locale (locale="vi", risk: LOW)
 
 Respond with ONLY valid JSON, no markdown fences:
+
+If you have ENOUGH information to create a plan:
 {
-  "description": "Human-readable summary of what will be done",
+  "status": "ready",
+  "summary": "Human-readable summary of what will be done",
+  "questions": [],
   "steps": [
     {
       "tool_name": "discord.roles.bulk_create",
@@ -206,7 +210,20 @@ Respond with ONLY valid JSON, no markdown fences:
       "risk_level": "HIGH"
     }
   ]
-}"""
+}
+
+If you NEED MORE INFORMATION from the user before you can create a plan:
+{
+  "status": "clarify",
+  "summary": "Brief explanation of why you need more info",
+  "questions": [
+    "Specific question 1?",
+    "Specific question 2?"
+  ],
+  "steps": []
+}
+
+IMPORTANT: ALWAYS output valid JSON with one of the two formats above. NEVER output plain text."""
 
 
 class PlannerService:
@@ -279,6 +296,21 @@ class PlannerService:
             if plan_data is None:
                 await self._fail_request(request_id, "LLM returned invalid plan JSON")
                 return {"ok": False, "error": "Không thể tạo kế hoạch — LLM trả về JSON không hợp lệ."}
+
+            # 5b. Handle clarify status — send questions back to user
+            if plan_data.get("status") == "clarify":
+                questions = plan_data.get("questions", [])
+                summary = plan_data.get("summary", "")
+                logger.info("Planner needs clarification: %s", summary)
+                # Update request status to waiting_for_info
+                await self.db.execute(
+                    "UPDATE requests SET status = 'waiting_for_info' WHERE id = $1",
+                    uuid.UUID(str(request_id)) if not isinstance(request_id, uuid.UUID) else request_id,
+                )
+                return {
+                    "ok": True, "status": "clarify",
+                    "summary": summary, "questions": questions,
+                }
 
             # 6. Validate and fix tool_params (inject guild_id if missing, type-fix IDs)
             plan_data["steps"] = self._validate_and_fix_steps(
@@ -555,8 +587,20 @@ class PlannerService:
     # ------------------------------------------------------------------
 
     def _parse_plan_response(self, content: str) -> Optional[dict]:
-        """Parse LLM response into plan dict. Returns None on failure."""
+        """Parse LLM response into plan dict.
+
+        Handles three cases:
+        1. Valid JSON with status="ready" → normal plan
+        2. Valid JSON with status="clarify" → questions for user
+        3. Prose/invalid JSON → fallback to clarify (wrap raw text)
+
+        Returns:
+            dict with keys: status, summary, questions, steps
+            None only on truly unrecoverable errors.
+        """
         cleaned = content.strip()
+
+        # Strip markdown fences
         if cleaned.startswith("```"):
             lines = cleaned.split("\n")
             if lines[0].startswith("```"):
@@ -565,10 +609,12 @@ class PlannerService:
                 lines = lines[:-1]
             cleaned = "\n".join(lines)
 
+        # Attempt JSON parse
+        data = None
         try:
             data = json.loads(cleaned)
         except json.JSONDecodeError:
-            # Attempt to repair truncated JSON
+            # Try repair truncated JSON
             repaired = cleaned
             open_braces = repaired.count('{') - repaired.count('}')
             open_brackets = repaired.count('[') - repaired.count(']')
@@ -577,21 +623,41 @@ class PlannerService:
                 data = json.loads(repaired)
                 logger.info("Plan JSON repaired (added %d closing brackets)", open_braces + open_brackets)
             except json.JSONDecodeError:
-                # Last resort: try to find the JSON object
+                # Last resort: extract JSON from middle of text
                 try:
                     start = cleaned.index('{')
                     end = cleaned.rindex('}') + 1
                     data = json.loads(cleaned[start:end])
                 except (ValueError, json.JSONDecodeError):
-                    logger.warning("Failed to parse plan JSON: %s", cleaned[:300])
-                    return None
+                    pass  # Will hit fallback below
 
-        if not isinstance(data, dict):
-            return None
-        if "steps" not in data or not isinstance(data["steps"], list):
-            return None
+        # FALLBACK: If no valid JSON parsed, treat entire response as clarification
+        if data is None or not isinstance(data, dict):
+            logger.info("LLM returned prose instead of JSON — wrapping as clarify response")
+            return {
+                "status": "clarify",
+                "summary": "Cần thêm thông tin từ người dùng",
+                "questions": [content.strip()[:1500]],
+                "steps": [],
+            }
 
-        # Validate each step has at minimum a tool_name
+        # Normalize: add status if missing (backward compatibility)
+        if "status" not in data:
+            data["status"] = "ready" if data.get("steps") else "clarify"
+
+        # Normalize: ensure all expected fields exist
+        data.setdefault("summary", data.get("description", ""))
+        data.setdefault("questions", [])
+        data.setdefault("steps", [])
+
+        # If status=clarify, return as-is (no step validation needed)
+        if data["status"] == "clarify":
+            return data
+
+        # Status=ready — validate steps
+        if not isinstance(data["steps"], list):
+            data["steps"] = []
+
         valid_steps = []
         for step in data["steps"]:
             if not isinstance(step, dict):
@@ -599,9 +665,6 @@ class PlannerService:
             if "tool_name" not in step:
                 continue
             valid_steps.append(step)
-
-        if not valid_steps:
-            return None
 
         data["steps"] = valid_steps
         return data

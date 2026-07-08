@@ -22,6 +22,9 @@ import nextcord
 
 from app.connectors.base import BaseConnector
 from app.mcp.protocol import ToolDefinition
+from app.connectors.discord._helpers import download_image_bytes
+from app.connectors.discord._permissions import check_bot_permissions
+from app.connectors.discord._validation import check_afk_channel_is_voice, check_afk_timeout, validate_kwargs
 
 logger = logging.getLogger(__name__)
 
@@ -44,19 +47,6 @@ _CONTENT_FILTER_MAP = {
     "no_role": nextcord.ContentFilter.no_role,
     "all_members": nextcord.ContentFilter.all_members,
 }
-
-
-async def _fetch_image_bytes(url: str, timeout: int = 15) -> Optional[bytes]:
-    """Download image bytes from a URL. Returns None on failure."""
-    try:
-        async with aiohttp.ClientSession() as session:
-            async with session.get(url, timeout=aiohttp.ClientTimeout(total=timeout)) as resp:
-                if resp.status == 200:
-                    return await resp.read()
-                logger.warning("Image fetch failed: HTTP %s for %s", resp.status, url)
-    except Exception as exc:
-        logger.warning("Image fetch error for %s: %s", url, exc)
-    return None
 
 
 class GuildConnector(BaseConnector):
@@ -185,7 +175,7 @@ class GuildConnector(BaseConnector):
 
         # Download and attach icon / banner bytes
         if icon_url is not None:
-            img = await _fetch_image_bytes(icon_url)
+            img = await download_image_bytes(icon_url)
             if img is None:
                 raise ValueError(f"Could not download icon image from: {icon_url}")
             payload["icon"] = img
@@ -197,7 +187,7 @@ class GuildConnector(BaseConnector):
                     f"Server banners require Boost Level 2+. "
                     f"Current level: {guild.premium_tier}."
                 )
-            img = await _fetch_image_bytes(banner_url)
+            img = await download_image_bytes(banner_url)
             if img is None:
                 raise ValueError(f"Could not download banner image from: {banner_url}")
             payload["banner"] = img

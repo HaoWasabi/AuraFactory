@@ -235,6 +235,16 @@ class DiscordBot(commands.Bot):
             await self.request_service.update_status(request_id, "failed", error_message=plan_result.get("error"))
             return
 
+        # Step 4b: Handle clarify — LLM needs more info from user
+        if plan_result.get("status") == "clarify":
+            questions = plan_result.get("questions", [])
+            summary = plan_result.get("summary", "")
+            clarify_text = f"**{summary}**\n\n" if summary else ""
+            for q in questions:
+                clarify_text += f"- {q}\n"
+            await message.reply(clarify_text.strip())
+            return
+
         plan_id = plan_result["plan_id"]
 
         # Step 5: Show plan to user
@@ -273,11 +283,11 @@ class DiscordBot(commands.Bot):
         """Format plan steps for Discord display (max 1800 chars)."""
         lines = [f"> {plan.get('description', '')}"]
         steps = plan.get("steps", [])
-        risk_emoji = {"LOW": "🟢", "MEDIUM": "🟡", "HIGH": "🟠", "CRITICAL": "🔴"}
+        risk_label = {"LOW": "[LOW]", "MEDIUM": "[MED]", "HIGH": "[HIGH]", "CRITICAL": "[CRIT]"}
 
         for i, step in enumerate(steps, 1):
-            emoji = risk_emoji.get(step.get("risk_level", "MEDIUM"), "⚪")
-            line = f"{emoji} Step {i}: {step.get('description', step.get('tool_name', ''))}"
+            label = risk_label.get(step.get("risk_level", "MEDIUM"), "[?]")
+            line = f"{label} Step {i}: {step.get('description', step.get('tool_name', ''))}"
             remaining = len(steps) - (i - 1)
             suffix = f"... và {remaining} bước khác" if lang == "vi" else f"... and {remaining} more steps"
 

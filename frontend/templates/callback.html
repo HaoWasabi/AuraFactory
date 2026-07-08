@@ -1,70 +1,36 @@
 <!DOCTYPE html>
-<html lang="vi">
+<html lang="en">
 <head>
     <meta charset="UTF-8">
-    <title>AuraFactory — Đang xác thực...</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>AuraFactory</title>
+    <link rel="stylesheet" href="/static/style.css">
     <style>
-        body {
-            margin: 0; min-height: 100vh;
-            display: flex; align-items: center; justify-content: center;
-            background: #1a1a2e; color: #e2e8f0;
-            font-family: -apple-system, sans-serif;
-        }
-        .container { text-align: center; }
-        .spinner { font-size: 48px; animation: pulse 1s infinite; }
-        @keyframes pulse { 0%,100% { opacity: 1; } 50% { opacity: 0.5; } }
-        .error { color: #fc8181; }
+    body{display:flex;align-items:center;justify-content:center;min-height:100vh;background:var(--bg-primary);animation:fadeIn .3s ease}
+    @keyframes fadeIn{from{opacity:0}to{opacity:1}}
+    .cb{text-align:center}
+    .cb p{font-size:15px;color:var(--text-secondary);margin-top:16px}
+    .spinner{width:28px;height:28px;border:3px solid var(--border-color);border-top-color:var(--accent-primary);border-radius:50%;animation:spin .7s linear infinite;margin:0 auto}
+    @keyframes spin{to{transform:rotate(360deg)}}
     </style>
 </head>
 <body>
-    <div class="container">
-        <div class="spinner">🔄</div>
-        <p id="status">Đang xác thực với Discord...</p>
-    </div>
-    <script>
-        (async function() {
-            const params = new URLSearchParams(window.location.search);
-            const code = params.get('code');
-            const state = params.get('state');
-            const statusEl = document.getElementById('status');
-
-            if (!code) {
-                statusEl.className = 'error';
-                statusEl.textContent = '❌ Lỗi: Không nhận được mã xác thực.';
-                return;
-            }
-
-            // Verify state matches what we stored
-            const savedState = localStorage.getItem('aura_oauth_state');
-            if (state && savedState && state !== savedState) {
-                statusEl.className = 'error';
-                statusEl.textContent = '❌ Lỗi: State mismatch — có thể bị tấn công CSRF.';
-                return;
-            }
-
-            try {
-                const resp = await fetch(`/api/auth/callback?code=${encodeURIComponent(code)}&state=${encodeURIComponent(state || '')}`);
-                const data = await resp.json();
-
-                if (resp.ok && data.user) {
-                    // Save user to localStorage
-                    localStorage.setItem('aura_user', JSON.stringify(data.user));
-                    // Clean up oauth state
-                    localStorage.removeItem('aura_oauth_state');
-                    
-                    statusEl.textContent = '✅ Đăng nhập thành công! Đang chuyển hướng...';
-                    setTimeout(() => {
-                        window.location.href = '/dashboard';
-                    }, 500);
-                } else {
-                    statusEl.className = 'error';
-                    statusEl.textContent = `❌ Xác thực thất bại: ${data.detail || 'Unknown error'}`;
-                }
-            } catch (e) {
-                statusEl.className = 'error';
-                statusEl.textContent = '❌ Lỗi kết nối: ' + e.message;
-            }
-        })();
-    </script>
+<div class="cb"><div class="spinner"></div><p>Redirecting...</p></div>
+<script>
+(function(){
+  var p=new URLSearchParams(window.location.search);
+  var code=p.get('code');
+  var state=p.get('state')||'';
+  if(!code){window.location.href='/dashboard';return;}
+  fetch('/api/auth/callback?code='+encodeURIComponent(code)+'&state='+encodeURIComponent(state))
+    .then(function(r){return r.json()})
+    .then(function(d){
+      if(d.token)localStorage.setItem('token',d.token);
+      if(d.user)localStorage.setItem('user',JSON.stringify(d.user));
+      window.location.href='/dashboard';
+    })
+    .catch(function(){window.location.href='/dashboard';});
+})();
+</script>
 </body>
 </html>

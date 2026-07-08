@@ -9,7 +9,7 @@ services:
     environment:
       POSTGRES_DB: aurafactory
       POSTGRES_USER: aurafactory
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-aurafactory_dev}
+      POSTGRES_PASSWORD: aurafactory123
     ports:
       - "5432:5432"
     volumes:
@@ -32,7 +32,7 @@ services:
     env_file:
       - .env
     environment:
-      DATABASE_URL: postgresql://aurafactory:${POSTGRES_PASSWORD:-aurafactory_dev}@postgres:5432/aurafactory
+      DATABASE_URL: postgresql://aurafactory:aurafactory123@postgres:5432/aurafactory
       HOST: "0.0.0.0"
       PORT: "8000"
     depends_on:

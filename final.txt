@@ -1,0 +1,8 @@
+**kwargs pattern — Đồng ý, nhưng cần guard rails:
+Validation layer trước khi rải kwargs vào Nextcord
+- Whitelist params theo context (channel_type, action_type)
+- Structured description cho LLM biết param nào available
+
+Owner/Admin only 
+Tầng 1 (Discord permission): Bot check guild.me.guild_permissions.X trước khi gọi API
+Tầng 2 (Application approval): Ai ra lệnh trên Discord? → auth_service.py kiểm tra role của message author

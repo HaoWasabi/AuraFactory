@@ -5,6 +5,7 @@ import secrets
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
 from app.messages import msg
@@ -400,5 +401,242 @@ def create_api_router(services: dict) -> APIRouter:
             "results": [dict(s) for s in steps],
             "error": "Execution failed" if plan["status"] in ("failed", "partial") else None,
         }
+
+    # === Session History Endpoints (Dashboard v2) ===
+
+    @router.get("/sessions")
+    async def list_sessions(guild_id: str, user_id: str):
+        """List chat sessions for a user in a guild (sidebar history)."""
+        db = guild_sync_service.db
+        rows = await db.fetch(
+            """
+            SELECT id, 
+                   history->0->>'content' as first_message,
+                   created_at, 
+                   last_active_at
+            FROM sessions
+            WHERE guild_id = $1 AND user_id = $2
+            ORDER BY last_active_at DESC
+            LIMIT 50
+            """,
+            int(guild_id),
+            int(user_id),
+        )
+        return {
+            "sessions": [
+                {
+                    "id": str(r["id"]),
+                    "first_message": (r["first_message"] or "")[:60],
+                    "created_at": r["created_at"].isoformat() if r["created_at"] else None,
+                    "last_active_at": r["last_active_at"].isoformat() if r["last_active_at"] else None,
+                }
+                for r in rows
+            ]
+        }
+
+    @router.get("/sessions/{session_id}/history")
+    async def get_session_history(session_id: str):
+        """Get full chat history for a specific session."""
+        import uuid as uuid_mod
+        db = guild_sync_service.db
+        row = await db.fetchrow(
+            "SELECT id, guild_id, user_id, history, created_at, last_active_at FROM sessions WHERE id = $1",
+            uuid_mod.UUID(session_id),
+        )
+        if not row:
+            raise HTTPException(status_code=404, detail="Session not found")
+        return {
+            "id": str(row["id"]),
+            "guild_id": str(row["guild_id"]),
+            "history": row["history"] or [],
+            "created_at": row["created_at"].isoformat() if row["created_at"] else None,
+            "last_active_at": row["last_active_at"].isoformat() if row["last_active_at"] else None,
+        }
+
+    @router.post("/sessions/new")
+    async def create_session(guild_id: str, user_id: str):
+        """Create a new chat session."""
+        db = guild_sync_service.db
+        row = await db.fetchrow(
+            """
+            INSERT INTO sessions (guild_id, user_id, user_role, history)
+            VALUES ($1, $2, 'admin', '[]'::jsonb)
+            ON CONFLICT (guild_id, user_id) DO UPDATE SET 
+                history = '[]'::jsonb, 
+                last_active_at = NOW(),
+                expires_at = NOW() + INTERVAL '30 minutes'
+            RETURNING id, created_at
+            """,
+            int(guild_id),
+            int(user_id),
+        )
+        return {"id": str(row["id"]), "created_at": row["created_at"].isoformat()}
+
+    @router.get("/audit")
+    async def get_audit_log(guild_id: str, limit: int = 20):
+        """Get recent audit log entries for a guild."""
+        db = guild_sync_service.db
+        rows = await db.fetch(
+            """
+            SELECT tool_name, success, user_id, executed_at, duration_ms, error_message
+            FROM audit_log
+            WHERE guild_id = $1
+            ORDER BY executed_at DESC
+            LIMIT $2
+            """,
+            int(guild_id),
+            min(limit, 100),
+        )
+        return {
+            "entries": [
+                {
+                    "tool_name": r["tool_name"],
+                    "success": r["success"],
+                    "user_id": str(r["user_id"]),
+                    "executed_at": r["executed_at"].isoformat() if r["executed_at"] else None,
+                    "duration_ms": r["duration_ms"],
+                    "error": r["error_message"],
+                }
+                for r in rows
+            ]
+        }
+
+    # === Streaming Chat Endpoint (SSE) ===
+
+    @router.post("/chat/stream")
+    async def chat_stream(req: ChatRequest):
+        """Stream chat response via Server-Sent Events (SSE).
+
+        Chunk protocol:
+        - {"type": "text", "content": "partial text"}
+        - {"type": "status", "status": "planning|executing", "message": "..."}
+        - {"type": "approval", "plan_id": "...", "summary": "...", "steps": [...], "risk": "..."}
+        - {"type": "clarify", "summary": "...", "questions": [...]}
+        - {"type": "done", "final_message": "..."}
+        - {"type": "error", "message": "..."}
+        """
+        import json as _json
+
+        guild_id = int(req.guild_id)
+        user_id = int(req.user_id)
+
+        async def _stream_generator():
+            try:
+                # Check bot installed
+                bot_row = await guild_sync_service.db.fetchrow(
+                    "SELECT is_active FROM bot_installs WHERE guild_id = $1 AND is_active = TRUE",
+                    guild_id,
+                )
+                if not bot_row:
+                    yield f"data: {_json.dumps({'type': 'error', 'message': 'Bot not installed in this server.'})}\n\n"
+                    yield "data: [DONE]\n\n"
+                    return
+
+                # Create request
+                req_result = await request_service.create_request(
+                    guild_id=guild_id,
+                    user_id=user_id,
+                    message=req.message,
+                    origin="web",
+                )
+                if not req_result["ok"]:
+                    yield f"data: {_json.dumps({'type': 'error', 'message': 'Request locked — another request is active.'})}\n\n"
+                    yield "data: [DONE]\n\n"
+                    return
+
+                request_id = req_result["request_id"]
+
+                # Classify
+                yield f"data: {_json.dumps({'type': 'status', 'status': 'classifying', 'message': 'Analyzing request...'})}\n\n"
+                classification = await classifier_service.classify(req.message)
+                intent = classification["intent"]
+                tool_mode = classification["tool_mode"]
+                lang = classification.get("lang", "en")
+                await request_service.update_status(request_id, "classified", intent=intent, tool_mode=tool_mode)
+
+                # Route by intent
+                if intent == "query":
+                    answer = await query_service.answer(req.message, guild_id)
+                    await request_service.update_status(request_id, "completed", response=answer)
+                    # Stream text word-by-word
+                    words = answer.split(" ")
+                    for i, word in enumerate(words):
+                        chunk = word if i == 0 else " " + word
+                        yield f"data: {_json.dumps({'type': 'text', 'content': chunk})}\n\n"
+                        await asyncio.sleep(0.03)
+                    yield f"data: {_json.dumps({'type': 'done', 'final_message': answer})}\n\n"
+                    yield "data: [DONE]\n\n"
+                    return
+
+                if intent in ("clarify", "out_of_scope"):
+                    reply = msg(intent, lang=lang)
+                    await request_service.update_status(request_id, "completed", response=reply)
+                    words = reply.split(" ")
+                    for i, word in enumerate(words):
+                        chunk = word if i == 0 else " " + word
+                        yield f"data: {_json.dumps({'type': 'text', 'content': chunk})}\n\n"
+                        await asyncio.sleep(0.03)
+                    yield f"data: {_json.dumps({'type': 'done', 'final_message': reply})}\n\n"
+                    yield "data: [DONE]\n\n"
+                    return
+
+                # Action intents -> plan
+                yield f"data: {_json.dumps({'type': 'status', 'status': 'planning', 'message': 'Creating execution plan...'})}\n\n"
+                plan_result = await planner_service.generate_plan(
+                    request_id=request_id,
+                    guild_id=guild_id,
+                    user_id=user_id,
+                    message=req.message,
+                    intent=intent,
+                )
+
+                if not plan_result.get("ok"):
+                    # Check if clarify
+                    if plan_result.get("status") == "clarify":
+                        yield f"data: {_json.dumps({'type': 'clarify', 'summary': plan_result.get('summary', ''), 'questions': plan_result.get('questions', [])})}\n\n"
+                    else:
+                        yield f"data: {_json.dumps({'type': 'error', 'message': plan_result.get('error', 'Planning failed.')})}\n\n"
+                    yield "data: [DONE]\n\n"
+                    return
+
+                plan_id = plan_result["plan_id"]
+                risk_level = plan_result.get("risk_level", "MEDIUM")
+
+                if risk_level in ("HIGH", "CRITICAL"):
+                    # Needs approval — send approval chunk
+                    yield f"data: {_json.dumps({'type': 'approval', 'plan_id': plan_id, 'summary': plan_result.get('description', ''), 'steps': plan_result.get('steps', []), 'risk': risk_level})}\n\n"
+                    yield "data: [DONE]\n\n"
+                    return
+
+                # Auto-approved — execute and stream progress
+                yield f"data: {_json.dumps({'type': 'status', 'status': 'executing', 'message': 'Executing plan...'})}\n\n"
+
+                exec_result = await executor_service.execute_plan(plan_id)
+
+                completed = exec_result.get("completed_steps", 0)
+                total = exec_result.get("total_steps", 0)
+                status = exec_result.get("status", "unknown")
+
+                if status == "completed":
+                    final_msg = f"Completed all {total} steps successfully."
+                    yield f"data: {_json.dumps({'type': 'done', 'final_message': final_msg})}\n\n"
+                elif status == "partial":
+                    err_msg = f"Completed {completed}/{total} steps. Error: {exec_result.get('error', 'Unknown')}"
+                    yield f"data: {_json.dumps({'type': 'error', 'message': err_msg})}\n\n"
+                else:
+                    yield f"data: {_json.dumps({'type': 'error', 'message': exec_result.get('error', 'Execution failed.')})}\n\n"
+
+                yield "data: [DONE]\n\n"
+
+            except Exception as e:
+                logger.error("Streaming chat error: %s", e, exc_info=True)
+                yield f"data: {_json.dumps({'type': 'error', 'message': str(e)})}\n\n"
+                yield "data: [DONE]\n\n"
+
+        return StreamingResponse(
+            _stream_generator(),
+            media_type="text/event-stream",
+            headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+        )
 
     return router

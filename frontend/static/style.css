@@ -1021,3 +1021,117 @@ body {
     margin-top: 6px;
 }
 .btn-refresh:hover { background: var(--bg-hover, #2a2a2a); }
+
+/* ===== UI v3 Additions ===== */
+
+/* Page transitions */
+body { animation: fadeIn 0.3s ease; }
+@keyframes fadeIn { from { opacity: 0; } to { opacity: 1; } }
+
+/* View switching */
+.view-container { opacity: 1; transition: opacity 0.15s ease; }
+.view-container.switching { opacity: 0; }
+
+/* Chat loading state */
+.chat-messages.loading { opacity: 0.5; transition: opacity 0.12s ease; }
+.chat-messages { transition: opacity 0.12s ease; }
+
+/* Right panel collapse/expand */
+.right-panel { transition: width 0.2s ease, transform 0.2s ease; overflow: hidden; }
+.right-panel.collapsed { width: 0 !important; padding: 0; border: none; }
+
+/* Approval/Reject buttons — NO emoji */
+.btn-approve {
+    background: var(--success);
+    color: #fff;
+    border: none;
+    border-radius: var(--radius-sm);
+    padding: 7px 16px;
+    font-size: 13px;
+    font-weight: 500;
+    cursor: pointer;
+    transition: var(--transition);
+}
+.btn-approve:hover { filter: brightness(1.1); }
+
+.btn-reject {
+    background: var(--danger);
+    color: #fff;
+    border: none;
+    border-radius: var(--radius-sm);
+    padding: 7px 16px;
+    font-size: 13px;
+    font-weight: 500;
+    cursor: pointer;
+    transition: var(--transition);
+}
+.btn-reject:hover { filter: brightness(1.1); }
+
+/* Approval card */
+.approval-card {
+    background: var(--bg-tertiary);
+    border: 1px solid var(--border-color);
+    border-radius: var(--radius-md);
+    padding: 14px;
+    margin: 8px 0;
+}
+.approval-card .plan-summary { font-weight: 500; margin-bottom: 8px; }
+.approval-card .plan-steps { font-size: 12px; color: var(--text-secondary); margin-bottom: 10px; }
+.approval-card .plan-step { padding: 2px 0; }
+.approval-card .approval-actions { display: flex; gap: 8px; margin-top: 10px; }
+.risk-badge {
+    display: inline-block;
+    font-size: 11px;
+    font-weight: 600;
+    padding: 2px 8px;
+    border-radius: 10px;
+    text-transform: uppercase;
+}
+.risk-badge.low { background: var(--risk-low); color: #000; }
+.risk-badge.medium { background: var(--risk-medium); color: #000; }
+.risk-badge.high { background: var(--risk-high); color: #fff; }
+.risk-badge.critical { background: var(--risk-critical); color: #fff; }
+
+/* Clarify card */
+.clarify-card {
+    background: var(--bg-tertiary);
+    border: 1px solid var(--warning);
+    border-radius: var(--radius-md);
+    padding: 14px;
+    margin: 8px 0;
+}
+.clarify-card .clarify-title { font-weight: 500; margin-bottom: 8px; color: var(--warning); }
+.clarify-card .clarify-questions { padding-left: 18px; font-size: 13px; color: var(--text-secondary); }
+.clarify-card .clarify-questions li { padding: 3px 0; }
+
+/* Tree view icons — CSS only, no emoji */
+.tree-icon {
+    display: inline-block;
+    width: 16px;
+    text-align: center;
+    font-size: 12px;
+    color: var(--text-muted);
+    margin-right: 4px;
+    font-family: monospace;
+}
+.tree-icon.folder { color: var(--text-accent); }
+.tree-icon.folder::before { content: "\25B8"; } /* ▸ */
+.tree-icon.folder.open::before { content: "\25BE"; } /* ▾ */
+.tree-icon.channel-text::before { content: "#"; color: var(--text-secondary); }
+.tree-icon.channel-voice::before { content: "\266A"; color: var(--success); } /* ♪ */
+.tree-icon.channel-stage::before { content: "\25CF"; color: var(--risk-medium); } /* ● */
+.tree-icon.channel-forum::before { content: "\2261"; color: var(--text-accent); } /* ≡ */
+.tree-icon.channel-news::before { content: "\25C6"; color: var(--accent-primary); } /* ◆ */
+
+/* Streaming cursor */
+.streaming-cursor::after {
+    content: "\2588"; /* █ */
+    animation: blink 0.8s infinite;
+    color: var(--accent-primary);
+}
+@keyframes blink { 0%, 100% { opacity: 1; } 50% { opacity: 0; } }
+
+/* Session list items */
+.session-item { transition: background 0.1s ease; }
+.session-item.active { background: var(--accent-primary) !important; color: #fff; }
+.session-item.active .session-preview { color: rgba(255,255,255,0.8); }

@@ -1,580 +1,330 @@
 <!DOCTYPE html>
-<html lang="vi">
+<html lang="en">
 <head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>AuraFactory — Dashboard</title>
-    <link rel="stylesheet" href="/static/style.css">
-    <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>AuraFactory</title>
+<link rel="stylesheet" href="/static/style.css">
+<script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+<style>
+body{animation:fadeIn .3s ease}
+@keyframes fadeIn{from{opacity:0}to{opacity:1}}
+.app-layout{display:flex;flex-direction:column;height:100vh}
+/* Navbar */
+.navbar{display:flex;align-items:center;justify-content:space-between;height:var(--navbar-height);padding:0 16px;background:var(--bg-secondary);border-bottom:1px solid var(--border-color)}
+.nav-left{display:flex;align-items:center;gap:12px}
+.nav-logo{width:32px;height:32px;border-radius:50%;background:var(--accent-primary);display:flex;align-items:center;justify-content:center;font-weight:700;font-size:14px;color:#fff}
+.nav-title{font-size:15px;font-weight:600;color:var(--text-primary)}
+.guild-select{background:var(--bg-input);border:1px solid var(--border-color);border-radius:var(--radius-sm);color:var(--text-primary);padding:5px 10px;font-size:13px;min-width:170px}
+.nav-right{display:flex;align-items:center;gap:10px}
+.nav-avatar{width:28px;height:28px;border-radius:50%}
+.nav-user{font-size:12px;color:var(--text-secondary)}
+.btn-sm{background:var(--bg-tertiary);border:1px solid var(--border-color);border-radius:var(--radius-sm);color:var(--text-secondary);padding:4px 10px;font-size:12px;cursor:pointer;transition:var(--transition)}
+.btn-sm:hover{background:var(--accent-primary);color:#fff}
+/* Content */
+.content-area{display:flex;flex:1;overflow:hidden}
+/* Sidebar */
+.sidebar{width:var(--sidebar-width);background:var(--bg-panel);border-right:1px solid var(--border-color);display:flex;flex-direction:column;overflow:hidden}
+.sidebar-hdr{padding:10px 12px;border-bottom:1px solid var(--border-subtle)}
+.btn-new{width:100%;padding:7px;background:var(--accent-primary);border:none;border-radius:var(--radius-sm);color:#fff;font-size:13px;cursor:pointer;font-weight:500;transition:var(--transition)}
+.btn-new:hover{background:var(--accent-hover)}
+.session-list{flex:1;overflow-y:auto;padding:6px 8px}
+.session-group{font-size:11px;color:var(--text-muted);text-transform:uppercase;padding:8px 4px 4px;letter-spacing:.4px}
+.session-item{padding:7px 10px;border-radius:var(--radius-sm);cursor:pointer;font-size:12px;color:var(--text-secondary);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;transition:background .12s}
+.session-item:hover{background:var(--bg-hover)}
+.session-item.active{background:var(--accent-primary);color:#fff}
+.sidebar-section{padding:10px 12px;border-top:1px solid var(--border-subtle)}
+.sidebar-section-title{font-size:11px;color:var(--text-muted);text-transform:uppercase;letter-spacing:.4px;margin-bottom:6px}
+.info-row{display:flex;justify-content:space-between;font-size:12px;padding:2px 0}
+.info-label{color:var(--text-secondary)}
+.info-value{color:var(--text-primary);font-weight:500}
+.admin-input{width:100%;background:var(--bg-input);border:1px solid var(--border-color);border-radius:var(--radius-sm);color:var(--text-primary);font-size:12px;padding:5px 8px;margin-top:4px}
+.btn-admin{width:100%;margin-top:6px;padding:6px;background:var(--accent-primary);border:none;border-radius:var(--radius-sm);color:#fff;font-size:12px;cursor:pointer}
+/* Chat */
+.chat-area{flex:1;display:flex;flex-direction:column;overflow:hidden}
+.chat-messages{flex:1;overflow-y:auto;padding:16px;transition:opacity .12s}
+.chat-messages.loading{opacity:.4}
+.msg{margin-bottom:12px;display:flex}
+.msg-user{justify-content:flex-end}
+.msg-bot{justify-content:flex-start}
+.msg-bubble{max-width:70%;padding:10px 14px;border-radius:var(--radius-md);font-size:13px;line-height:1.6}
+.msg-user .msg-bubble{background:var(--chat-user);color:#fff;border-bottom-right-radius:4px}
+.msg-bot .msg-bubble{background:var(--chat-bot);color:var(--text-primary);border-bottom-left-radius:4px}
+.msg-bot .msg-bubble p{margin:0 0 6px}
+.msg-bot .msg-bubble p:last-child{margin:0}
+.msg-bot .msg-bubble code{background:rgba(0,0,0,.3);padding:1px 4px;border-radius:3px;font-size:12px}
+.msg-bot .msg-bubble pre{background:rgba(0,0,0,.3);padding:8px;border-radius:var(--radius-sm);overflow-x:auto;margin:6px 0}
+/* Cards */
+.approval-card,.clarify-card{background:var(--bg-secondary);border:1px solid var(--border-color);border-radius:var(--radius-md);padding:12px;margin:8px 0}
+.card-title{font-size:12px;font-weight:600;color:var(--text-primary);margin-bottom:6px}
+.plan-step{font-size:12px;color:var(--text-secondary);padding:2px 0 2px 10px;border-left:2px solid var(--border-color)}
+.risk-badge{display:inline-block;font-size:10px;font-weight:600;padding:2px 8px;border-radius:10px;margin:6px 0}
+.risk-low{background:rgba(34,197,94,.15);color:var(--risk-low)}
+.risk-medium{background:rgba(234,179,8,.15);color:var(--risk-medium)}
+.risk-high{background:rgba(249,115,22,.15);color:var(--risk-high)}
+.risk-critical{background:rgba(239,68,68,.15);color:var(--risk-critical)}
+.card-actions{display:flex;gap:8px;margin-top:8px}
+.btn-approve{background:var(--success);color:#fff;border:none;border-radius:var(--radius-sm);padding:5px 14px;font-size:12px;font-weight:500;cursor:pointer;transition:var(--transition)}
+.btn-approve:hover{filter:brightness(1.1)}
+.btn-reject{background:var(--danger);color:#fff;border:none;border-radius:var(--radius-sm);padding:5px 14px;font-size:12px;font-weight:500;cursor:pointer;transition:var(--transition)}
+.btn-reject:hover{filter:brightness(1.1)}
+.clarify-list{margin:4px 0 0 16px;font-size:12px;color:var(--text-secondary);line-height:1.7}
+.status-indicator{font-size:12px;color:var(--text-muted);padding:6px 14px;font-style:italic}
+/* Input */
+.chat-input-bar{display:flex;gap:8px;padding:12px 16px;border-top:1px solid var(--border-color);background:var(--bg-secondary)}
+.chat-input{flex:1;background:var(--bg-input);border:1px solid var(--border-color);border-radius:var(--radius-sm);color:var(--text-primary);padding:9px 12px;font-size:13px;resize:none;min-height:38px;max-height:120px;font-family:inherit}
+.chat-input:focus{outline:none;border-color:var(--accent-primary)}
+.btn-send{background:var(--accent-primary);border:none;border-radius:var(--radius-sm);color:#fff;padding:0 16px;font-size:13px;font-weight:500;cursor:pointer;transition:var(--transition)}
+.btn-send:hover{background:var(--accent-hover)}
+/* Right Panel */
+.right-panel{width:300px;background:var(--bg-panel);border-left:1px solid var(--border-color);display:flex;flex-direction:column;overflow:hidden;transition:width .2s ease}
+.right-panel.collapsed{width:0;border:none}
+.panel-tabs{display:flex;border-bottom:1px solid var(--border-subtle)}
+.panel-tab{flex:1;padding:8px;text-align:center;font-size:12px;color:var(--text-muted);cursor:pointer;border-bottom:2px solid transparent;transition:var(--transition)}
+.panel-tab.active{color:var(--accent-primary);border-bottom-color:var(--accent-primary)}
+.panel-content{flex:1;overflow-y:auto;padding:10px}
+.panel-content[hidden]{display:none}
+.tree-item{font-size:12px;padding:3px 0 3px 8px;color:var(--text-secondary)}
+.tree-cat{font-weight:600;color:var(--text-primary);padding:5px 0 2px}
+.tree-icon{display:inline-block;width:16px;color:var(--text-muted);font-size:11px}
+.audit-entry{display:flex;align-items:center;gap:8px;padding:6px 0;font-size:12px;border-bottom:1px solid var(--border-subtle)}
+.audit-dot{width:8px;height:8px;border-radius:50%;flex-shrink:0}
+.audit-dot.ok{background:var(--success)}
+.audit-dot.fail{background:var(--danger)}
+.audit-tool{color:var(--text-primary);flex:1}
+.audit-time{color:var(--text-muted);font-size:11px}
+.empty-state{text-align:center;color:var(--text-muted);padding:40px 20px;font-size:13px}
+</style>
 </head>
 <body>
-    <div class="app-layout">
-        <!-- Navbar -->
-        <nav class="navbar">
-            <div class="navbar-brand">
-                <button class="hamburger" onclick="toggleSidebar()" aria-label="Menu">☰</button>
-                <div class="navbar-logo">A</div>
-                <span class="navbar-title">AuraFactory</span>
-            </div>
-            <div class="navbar-user">
-                <span class="user-name" id="navUsername">{{ user.username if user else '' }}</span>
-                <img class="user-avatar" id="navAvatar" src="" alt="Avatar" onerror="this.style.display='none'">
-                <button class="btn-lang" onclick="toggleLanguage()" id="langBtn" title="Đổi ngôn ngữ">🌐 VI</button>
-                <button class="btn-logout" onclick="logout()" data-i18n="logout">Đăng xuất</button>
-            </div>
-        </nav>
-
-        <!-- Main Content -->
-        <div class="main-content">
-            <!-- Sidebar -->
-            <aside class="sidebar" id="sidebar">
-                <div class="sidebar-section">
-                    <div class="sidebar-section-title">Server</div>
-                    <select class="guild-select" id="guildSelect" onchange="selectGuild(this.value)" data-i18n-placeholder="select_server">
-                        <option value="" data-i18n="select_server">Chọn server...</option>
-                    </select>
-                    <button class="btn-refresh" onclick="loadGuilds(true)" title="Refresh danh sách server">🔄</button>
-                </div>
-                <div class="sidebar-section">
-                    <div class="sidebar-section-title" data-i18n="server_info">Thông tin Server</div>
-                    <div class="server-info" id="serverInfo">
-                        <div class="info-item">
-                            <span class="label" data-i18n="channels">Kênh</span>
-                            <span class="value" id="channelCount">—</span>
-                        </div>
-                        <div class="info-item">
-                            <span class="label" data-i18n="roles">Vai trò</span>
-                            <span class="value" id="roleCount">—</span>
-                        </div>
-                        <div class="info-item">
-                            <span class="label" data-i18n="members">Thành viên</span>
-                            <span class="value" id="memberCount">—</span>
-                        </div>
-                    </div>
-                </div>
-                <div class="sidebar-section">
-                    <div class="sidebar-section-title" data-i18n="assistant_mode">Chế độ Assistant</div>
-                    <div class="toggle-wrapper">
-                        <label class="toggle-switch">
-                            <input type="checkbox" id="assistantToggle" onchange="toggleAssistant(this.checked)" checked>
-                            <span class="toggle-slider"></span>
-                        </label>
-                        <span class="toggle-label" id="assistantLabel">Bật</span>
-                    </div>
-                    <p style="font-size: 11px; color: var(--text-muted); margin-top: 4px;" data-i18n="assistant_desc">Cho phép thành viên hỏi thông tin server</p>
-                </div>
-                <div class="sidebar-section">
-                    <div class="sidebar-section-title" data-i18n="quick_guide">Hướng dẫn nhanh</div>
-                    <div style="font-size: 12px; color: var(--text-muted); line-height: 1.6;">
-                        <p>💬 Gõ lệnh bằng tiếng Việt hoặc tiếng Anh</p>
-                        <p style="margin-top: 6px;">📋 Xem phê duyệt ở panel bên phải</p>
-                        <p style="margin-top: 6px;">⚡ Ví dụ: "Tạo channel #general"</p>
-                    </div>
-                </div>
-                <!-- Admin panel — only visible to bot admins (BOT_ADMIN_IDS) -->
-                <div class="sidebar-section" id="adminSection" style="display:none;">
-                    <div class="sidebar-section-title" style="color: var(--risk-high, #f0a500);">⚙️ Bot Admin</div>
-                    <div style="font-size: 12px; color: var(--text-muted); margin-bottom: 8px;">Cập nhật Gemini API key cho toàn hệ thống</div>
-                    <div style="display:flex; flex-direction:column; gap:6px;">
-                        <input
-                            type="password"
-                            id="adminApiKeyInput"
-                            placeholder="AIza..."
-                            autocomplete="off"
-                            style="
-                                background: var(--bg-secondary, #2b2d31);
-                                border: 1px solid var(--border-color, #3a3c40);
-                                border-radius: 6px;
-                                color: var(--text-primary, #e0e0e0);
-                                font-size: 12px;
-                                padding: 6px 8px;
-                                width: 100%;
-                                box-sizing: border-box;
-                            "
-                        >
-                        <button
-                            onclick="updateGeminiKey()"
-                            style="
-                                background: var(--accent-color, #5865f2);
-                                border: none;
-                                border-radius: 6px;
-                                color: #fff;
-                                cursor: pointer;
-                                font-size: 12px;
-                                padding: 6px 10px;
-                                width: 100%;
-                            "
-                        >🔑 Cập nhật API Key</button>
-                    </div>
-                </div>
-            </aside>
-
-            <!-- Chat Area -->
-            <main class="chat-area">
-                <div class="chat-messages" id="chatMessages">
-                    <!-- Welcome message -->
-                    <div class="message bot">
-                        <div class="message-avatar">🤖</div>
-                        <div class="message-content">
-                            <p>Xin chào! Tôi là <strong>AuraFactory</strong> — trợ lý AI quản trị Discord server.</p>
-                            <p>Hãy chọn server ở sidebar và gửi lệnh cho tôi. Ví dụ:</p>
-                            <ul>
-                                <li>"Tạo channel #announcements với topic Thông báo chung"</li>
-                                <li>"Liệt kê tất cả role trong server"</li>
-                                <li>"Xóa channel #spam"</li>
-                            </ul>
-                        </div>
-                    </div>
-                </div>
-
-                <!-- Typing Indicator -->
-                <div class="typing-indicator" id="typingIndicator">
-                    <div class="typing-dot"></div>
-                    <div class="typing-dot"></div>
-                    <div class="typing-dot"></div>
-                </div>
-
-                <!-- Input Area -->
-                <div class="chat-input-area">
-                    <div class="chat-input-wrapper">
-                        <input
-                            type="text"
-                            class="chat-input"
-                            id="chatInput"
-                            placeholder="Nhập lệnh hoặc câu hỏi..."
-                            data-i18n-placeholder="send_placeholder"
-                            autocomplete="off"
-                            onkeydown="handleInputKey(event)"
-                        >
-                        <button class="btn-send" onclick="sendMessage()" aria-label="Gửi">
-                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                                <line x1="22" y1="2" x2="11" y2="13"></line>
-                                <polygon points="22 2 15 22 11 13 2 9 22 2"></polygon>
-                            </svg>
-                        </button>
-                    </div>
-                </div>
-            </main>
-
-            <!-- Approval Panel -->
-            <aside class="approval-panel" id="approvalPanel">
-                <div class="approval-header">
-                    <span class="approval-title" data-i18n="pending_approvals">Phê duyệt chờ xử lý</span>
-                    <span class="approval-badge" id="approvalCount">0</span>
-                </div>
-                <div class="approval-list" id="approvalList">
-                    <div class="empty-state" id="approvalEmpty">
-                        <div class="empty-state-icon">✅</div>
-                        <p class="empty-state-text" data-i18n="no_pending">Không có yêu cầu chờ duyệt</p>
-                    </div>
-                </div>
-            </aside>
-        </div>
+<div class="app-layout">
+<!-- Navbar -->
+<nav class="navbar">
+  <div class="nav-left">
+    <div class="nav-logo">A</div>
+    <span class="nav-title">AuraFactory</span>
+    <select class="guild-select" id="guildSelect" onchange="selectGuild(this.value)">
+      <option value="" data-i18n="select_server">Select server...</option>
+    </select>
+  </div>
+  <div class="nav-right">
+    <span class="nav-user" id="navUser">{{ user.username if user else '' }}</span>
+    <img class="nav-avatar" id="navAvatar" src="{{ user.avatar_url if user else '' }}" alt="" onerror="this.style.display='none'">
+    <button class="btn-sm" id="langBtn" onclick="toggleLang()">VI</button>
+    <button class="btn-sm" data-i18n="logout" onclick="logout()">Log out</button>
+  </div>
+</nav>
+<!-- Content -->
+<div class="content-area">
+  <!-- Sidebar -->
+  <aside class="sidebar">
+    <div class="sidebar-hdr">
+      <button class="btn-new" data-i18n="new_chat" onclick="newChat()">New Chat</button>
     </div>
+    <div class="session-list" id="sessionList">
+      <div class="empty-state" data-i18n="no_sessions">No conversations yet</div>
+    </div>
+    <!-- Server Info -->
+    <div class="sidebar-section">
+      <div class="sidebar-section-title" data-i18n="server_info">Server Info</div>
+      <div class="info-row"><span class="info-label" data-i18n="channels">Channels</span><span class="info-value" id="infoChannels">--</span></div>
+      <div class="info-row"><span class="info-label" data-i18n="roles">Roles</span><span class="info-value" id="infoRoles">--</span></div>
+      <div class="info-row"><span class="info-label" data-i18n="members">Members</span><span class="info-value" id="infoMembers">--</span></div>
+    </div>
+    <!-- Admin Panel -->
+    <div class="sidebar-section" id="adminSection" style="display:none">
+      <div class="sidebar-section-title" data-i18n="admin_panel">Admin Panel</div>
+      <input type="password" class="admin-input" id="adminKeyInput" placeholder="Gemini API Key..." autocomplete="off">
+      <button class="btn-admin" data-i18n="update_key" onclick="updateKey()">Update API Key</button>
+    </div>
+  </aside>
+  <!-- Chat Area -->
+  <main class="chat-area">
+    <div class="chat-messages" id="chatMessages">
+      <div class="empty-state" data-i18n="no_sessions">No conversations yet</div>
+    </div>
+    <div class="chat-input-bar">
+      <textarea class="chat-input" id="chatInput" data-i18n="type_message" placeholder="Type a message..." rows="1" onkeydown="handleKey(event)"></textarea>
+      <button class="btn-send" data-i18n="send" onclick="sendMessage()">Send</button>
+    </div>
+  </main>
+  <!-- Right Panel -->
+  <aside class="right-panel" id="rightPanel">
+    <div class="panel-tabs">
+      <div class="panel-tab active" data-i18n="structure" onclick="switchTab('structure')">Structure</div>
+      <div class="panel-tab" data-i18n="audit_log" onclick="switchTab('audit')">Audit Log</div>
+    </div>
+    <div class="panel-content" id="tabStructure">
+      <div class="empty-state" data-i18n="loading">Loading...</div>
+    </div>
+    <div class="panel-content" id="tabAudit" hidden>
+      <div class="empty-state" data-i18n="loading">Loading...</div>
+    </div>
+  </aside>
+</div>
+</div>
+<script>
+// === i18n ===
+const I18N={en:{new_chat:"New Chat",sessions:"Sessions",today:"Today",yesterday:"Yesterday",this_week:"This Week",earlier:"Earlier",server_info:"Server Info",channels:"Channels",roles:"Roles",members:"Members",structure:"Structure",audit_log:"Audit Log",send:"Send",approve:"Approve",reject:"Reject",logout:"Log out",select_server:"Select server...",admin_panel:"Admin Panel",update_key:"Update API Key",no_sessions:"No conversations yet",type_message:"Type a message...",pending_approval:"Pending Approval",plan_steps:"steps",risk_level:"Risk",clarify_title:"Need more information",loading:"Loading...",lang_toggle:"VI"},vi:{new_chat:"Cuộc trò chuyện mới",sessions:"Lịch sử",today:"Hôm nay",yesterday:"Hôm qua",this_week:"Tuần này",earlier:"Trước đó",server_info:"Thông tin Server",channels:"Kênh",roles:"Vai trò",members:"Thành viên",structure:"Cấu trúc",audit_log:"Nhật ký",send:"Gửi",approve:"Duyệt",reject:"Từ chối",logout:"Đăng xuất",select_server:"Chọn server...",admin_panel:"Quản trị",update_key:"Cập nhật API Key",no_sessions:"Chưa có cuộc trò chuyện nào",type_message:"Nhập tin nhắn...",pending_approval:"Chờ duyệt",plan_steps:"bước",risk_level:"Rủi ro",clarify_title:"Cần thêm thông tin",loading:"Đang tải...",lang_toggle:"EN"}};
+let currentLang=localStorage.getItem('lang')||'en';
+function setLang(l){currentLang=l;localStorage.setItem('lang',l);document.querySelectorAll('[data-i18n]').forEach(el=>{const k=el.getAttribute('data-i18n');if(I18N[l][k]){if(el.tagName==='INPUT'||el.tagName==='TEXTAREA')el.placeholder=I18N[l][k];else el.textContent=I18N[l][k]}});document.getElementById('langBtn').textContent=I18N[l].lang_toggle}
+function toggleLang(){setLang(currentLang==='en'?'vi':'en')}
 
-    <!-- Mobile Toggle Buttons -->
-    <button class="mobile-toggle toggle-sidebar" onclick="toggleSidebar()" aria-label="Sidebar">📋</button>
-    <button class="mobile-toggle toggle-approvals" onclick="toggleApprovals()" aria-label="Approvals">🔔</button>
+// === State ===
+let guildId='',userId='{{ user.id if user else "" }}';
+let activeSession=null;
 
-    <!-- Overlay for mobile panels -->
-    <div class="overlay" id="overlay" onclick="closeAllPanels()"></div>
+// === Guild ===
+async function loadGuilds(){
+  try{const r=await fetch('/api/auth/guilds');const d=await r.json();const sel=document.getElementById('guildSelect');
+  sel.innerHTML='<option value="" data-i18n="select_server">'+I18N[currentLang].select_server+'</option>';
+  (d.guilds||d||[]).forEach(g=>{const o=document.createElement('option');o.value=g.id;o.textContent=g.name;sel.appendChild(o)})}catch(e){console.error(e)}
+}
+function selectGuild(id){guildId=id;if(id){loadServerInfo();loadSessions();loadStructure();loadAudit()}}
+async function loadServerInfo(){
+  try{const r=await fetch(`/api/guild/${guildId}/info`);const d=await r.json();
+  document.getElementById('infoChannels').textContent=d.channel_count||d.channels||'--';
+  document.getElementById('infoRoles').textContent=d.role_count||d.roles||'--';
+  document.getElementById('infoMembers').textContent=d.member_count||d.members||'--'}catch(e){}
+}
 
-    <!-- Scripts -->
-    <script src="/static/app.js"></script>
-    <script>
-        // ===== State =====
-        let currentGuild = null;
-        let currentUser = null;
-        let isWaitingResponse = false;
+// === Sessions ===
+async function loadSessions(){
+  if(!guildId)return;
+  try{const r=await fetch(`/api/sessions?guild_id=${guildId}&user_id=${userId}`);const d=await r.json();
+  const list=document.getElementById('sessionList');
+  const sessions=d.sessions||[];
+  if(!sessions.length){list.innerHTML='<div class="empty-state" data-i18n="no_sessions">'+I18N[currentLang].no_sessions+'</div>';return}
+  const now=new Date(),groups={today:[],yesterday:[],week:[],earlier:[]};
+  sessions.forEach(s=>{const dt=new Date(s.last_active_at||s.created_at);const diff=Math.floor((now-dt)/864e5);
+    if(diff<1)groups.today.push(s);else if(diff<2)groups.yesterday.push(s);else if(diff<7)groups.week.push(s);else groups.earlier.push(s)});
+  let html='';
+  const render=(label,items)=>{if(!items.length)return;html+=`<div class="session-group" data-i18n="${label}">${I18N[currentLang][label]}</div>`;
+    items.forEach(s=>{const cls=s.id===activeSession?'session-item active':'session-item';html+=`<div class="${cls}" data-session="${s.id}" onclick="loadSession('${s.id}')">${s.first_message||'...'}</div>`})};
+  render('today',groups.today);render('yesterday',groups.yesterday);render('this_week',groups.week);render('earlier',groups.earlier);
+  list.innerHTML=html}catch(e){console.error(e)}
+}
+async function loadSession(id){
+  activeSession=id;const el=document.getElementById('chatMessages');el.classList.add('loading');
+  document.querySelectorAll('.session-item').forEach(e=>e.classList.remove('active'));
+  document.querySelector(`[data-session="${id}"]`)?.classList.add('active');
+  try{const r=await fetch(`/api/sessions/${id}/history`);const d=await r.json();
+  await new Promise(r=>setTimeout(r,80));renderMessages(d.history||[])}catch(e){el.innerHTML='<div class="empty-state">Error loading session</div>'}
+  el.classList.remove('loading');
+}
+async function newChat(){
+  if(!guildId)return;
+  try{const r=await fetch(`/api/sessions/new?guild_id=${guildId}&user_id=${userId}`,{method:'POST'});const d=await r.json();
+  activeSession=d.id;document.getElementById('chatMessages').innerHTML='';loadSessions()}catch(e){console.error(e)}
+}
 
-        // Configure marked.js
-        marked.setOptions({ breaks: true, gfm: true });
+// === Render Messages ===
+function renderMessages(history){
+  const el=document.getElementById('chatMessages');
+  if(!history||!history.length){el.innerHTML='<div class="empty-state" data-i18n="no_sessions">'+I18N[currentLang].no_sessions+'</div>';return}
+  let html='';history.forEach(m=>{
+    if(m.role==='user')html+=`<div class="msg msg-user"><div class="msg-bubble">${esc(m.content)}</div></div>`;
+    else html+=`<div class="msg msg-bot"><div class="msg-bubble">${marked.parse(m.content||'')}</div></div>`});
+  el.innerHTML=html;el.scrollTop=el.scrollHeight;
+}
+function esc(s){return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')}
 
-        // ===== Init =====
-        document.addEventListener('DOMContentLoaded', async () => {
-            // Check if user is logged in (token in localStorage)
-            currentUser = storageGet('user');
-            if (!currentUser) {
-                window.location.href = '/login';
-                return;
-            }
-            // Show user info
-            document.getElementById('navUsername').textContent = currentUser.username || '';
-            if (currentUser.avatar) {
-                const avatarUrl = `https://cdn.discordapp.com/avatars/${currentUser.id}/${currentUser.avatar}.png?size=32`;
-                document.getElementById('navAvatar').src = avatarUrl;
-            }
-            // Load guilds
-            await loadGuilds();
-            // Check if current user is a bot admin
-            await checkAdminStatus();
-        });
+// === Send Message (Streaming) ===
+function handleKey(e){if(e.key==='Enter'&&!e.shiftKey){e.preventDefault();sendMessage()}}
+async function sendMessage(){
+  const input=document.getElementById('chatInput');const text=input.value.trim();if(!text||!guildId)return;
+  input.value='';appendMsg('user',text);
+  const botDiv=appendMsg('bot','');botDiv._rawText='';
+  try{
+    const resp=await fetch('/api/chat/stream',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({message:text,guild_id:guildId,user_id:userId})});
+    if(!resp.ok){const fallback=await fetchFallback(text);botDiv.querySelector('.msg-bubble').innerHTML=marked.parse(fallback);return}
+    const reader=resp.body.getReader();const dec=new TextDecoder();let buf='';
+    while(true){const{done,value}=await reader.read();if(done)break;
+      buf+=dec.decode(value,{stream:true});const lines=buf.split('\n');buf=lines.pop();
+      for(const line of lines){if(!line.startsWith('data: '))continue;const raw=line.slice(6);if(raw==='[DONE]')break;
+        try{const chunk=JSON.parse(raw);handleChunk(chunk,botDiv)}catch(e){}}}
+  }catch(e){botDiv.querySelector('.msg-bubble').innerHTML='<span style="color:var(--danger)">Connection error</span>'}
+  document.getElementById('chatMessages').scrollTop=999999;
+}
+async function fetchFallback(text){
+  try{const r=await fetch('/api/chat',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({message:text,guild_id:guildId,user_id:userId})});
+  const d=await r.json();return d.response||d.message||JSON.stringify(d)}catch(e){return 'Error: '+e.message}
+}
+function handleChunk(chunk,botDiv){
+  const bubble=botDiv.querySelector('.msg-bubble');
+  if(chunk.type==='text'){botDiv._rawText+=chunk.content;bubble.innerHTML=marked.parse(botDiv._rawText)}
+  else if(chunk.type==='status'){bubble.innerHTML=`<div class="status-indicator">${esc(chunk.message||chunk.status)}</div>`+(botDiv._rawText?marked.parse(botDiv._rawText):'')}
+  else if(chunk.type==='approval'){bubble.innerHTML=renderApprovalCard(chunk)}
+  else if(chunk.type==='clarify'){bubble.innerHTML=renderClarifyCard(chunk)}
+  else if(chunk.type==='done'){if(chunk.final_message){botDiv._rawText+='\n\n'+chunk.final_message;bubble.innerHTML=marked.parse(botDiv._rawText)}}
+  else if(chunk.type==='error'){bubble.innerHTML=`<span style="color:var(--danger)">${esc(chunk.message)}</span>`}
+  document.getElementById('chatMessages').scrollTop=999999;
+}
+function renderApprovalCard(d){
+  const steps=(d.steps||[]).map((s,i)=>`<div class="plan-step">${i+1}. ${esc(s.tool_name||'')} - ${esc(s.description||'')}</div>`).join('');
+  const risk=d.risk||'MEDIUM';const rc=risk.toLowerCase();
+  return `<div class="approval-card"><div class="card-title" data-i18n="pending_approval">${I18N[currentLang].pending_approval}</div>
+  <div style="font-size:13px;margin:4px 0">${esc(d.summary||'')}</div>${steps}
+  <div class="risk-badge risk-${rc}">${risk}</div>
+  <div class="card-actions"><button class="btn-approve" data-i18n="approve" onclick="doApproval('${d.plan_id}','approve')">${I18N[currentLang].approve}</button>
+  <button class="btn-reject" data-i18n="reject" onclick="doApproval('${d.plan_id}','reject')">${I18N[currentLang].reject}</button></div></div>`;
+}
+function renderClarifyCard(d){
+  const qs=(d.questions||[]).map(q=>`<li>${esc(q)}</li>`).join('');
+  return `<div class="clarify-card"><div class="card-title" data-i18n="clarify_title">${I18N[currentLang].clarify_title}</div>
+  <div style="font-size:12px;color:var(--text-secondary);margin:2px 0">${esc(d.summary||'')}</div>
+  <ol class="clarify-list">${qs}</ol></div>`;
+}
+function appendMsg(role,content){
+  const el=document.getElementById('chatMessages');
+  if(el.querySelector('.empty-state'))el.innerHTML='';
+  const div=document.createElement('div');div.className=`msg msg-${role}`;
+  div.innerHTML=`<div class="msg-bubble">${role==='user'?esc(content):marked.parse(content)}</div>`;
+  el.appendChild(div);el.scrollTop=el.scrollHeight;return div;
+}
+async function doApproval(planId,action){
+  try{await fetch('/api/approval',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({plan_id:planId,action,user_id:userId})});
+  document.querySelectorAll('.approval-card .card-actions').forEach(el=>el.innerHTML=`<span style="font-size:12px;color:var(--text-muted)">${action==='approve'?'Approved':'Rejected'}</span>`)}catch(e){}
+}
 
-        // ===== Guild Loading (§5.1 steps 2-4) =====
-        async function loadGuilds(forceRefresh = false) {
-            try {
-                const refreshParam = forceRefresh ? '&refresh=true' : '';
-                const data = await api('GET', `/api/auth/guilds?user_id=${currentUser.id}${refreshParam}`);
-                if (!data) return;
+// === Right Panel ===
+function switchTab(tab){
+  document.querySelectorAll('.panel-tab').forEach(t=>t.classList.remove('active'));
+  document.querySelector(`.panel-tab[data-i18n="${tab==='structure'?'structure':'audit_log'}"]`).classList.add('active');
+  document.getElementById('tabStructure').hidden=tab!=='structure';
+  document.getElementById('tabAudit').hidden=tab!=='audit';
+}
+async function loadStructure(){
+  if(!guildId)return;const el=document.getElementById('tabStructure');
+  try{const r=await fetch(`/api/guild/${guildId}/info`);const d=await r.json();
+  let html='';const cats=d.categories||[];const roles=d.roles||[];
+  if(cats.length){cats.forEach(c=>{html+=`<div class="tree-cat"><span class="tree-icon">&#9656;</span> ${esc(c.name)}</div>`;
+    (c.channels||[]).forEach(ch=>{const icon=ch.type==='voice'?'&#9835;':'#';html+=`<div class="tree-item"><span class="tree-icon">${icon}</span> ${esc(ch.name)}</div>`})})}
+  if(roles.length){html+=`<div class="tree-cat" style="margin-top:10px"><span class="tree-icon">&#9656;</span> Roles</div>`;
+    roles.forEach(r=>{html+=`<div class="tree-item"><span class="tree-icon" style="color:${r.color||'inherit'}">&#9679;</span> ${esc(r.name)}</div>`})}
+  el.innerHTML=html||'<div class="empty-state">No data</div>'}catch(e){el.innerHTML='<div class="empty-state">Error</div>'}
+}
+async function loadAudit(){
+  if(!guildId)return;const el=document.getElementById('tabAudit');
+  try{const r=await fetch(`/api/audit?guild_id=${guildId}&limit=20`);const d=await r.json();
+  const entries=d.entries||[];if(!entries.length){el.innerHTML='<div class="empty-state">No entries</div>';return}
+  let html='';entries.forEach(e=>{const dot=e.success?'ok':'fail';const time=e.executed_at?timeAgo(e.executed_at):'';
+    html+=`<div class="audit-entry"><span class="audit-dot ${dot}"></span><span class="audit-tool">${esc(e.tool_name)}</span><span class="audit-time">${time}</span></div>`});
+  el.innerHTML=html}catch(e){el.innerHTML='<div class="empty-state">Error</div>'}
+}
+function timeAgo(iso){const s=Math.floor((Date.now()-new Date(iso))/1000);if(s<60)return s+'s';if(s<3600)return Math.floor(s/60)+'m';if(s<86400)return Math.floor(s/3600)+'h';return Math.floor(s/86400)+'d'}
 
-                // If no guilds found and haven't tried refresh yet, retry with refresh
-                if (!forceRefresh && data.total === 0 && !data.hint) {
-                    return await loadGuilds(true);
-                }
+// === Admin ===
+async function updateKey(){
+  const key=document.getElementById('adminKeyInput').value.trim();if(!key)return;
+  try{await fetch('/api/admin/update-gemini-key',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({api_key:key})});
+  document.getElementById('adminKeyInput').value='';alert('Updated')}catch(e){alert('Error')}
+}
+document.getElementById('adminSection').style.display='{{ "block" if user and user.is_admin else "none" }}';
 
-                // If still empty after refresh, show helpful message
-                if (data.total === 0) {
-                    showToast(data.message || 'Không tìm thấy server nào bạn quản lý', 'warning');
-                }
-
-                const select = document.getElementById('guildSelect');
-                select.innerHTML = '<option value="">Chọn server...</option>';
-
-                const ready = data.ready || [];
-                const pending = data.pending || [];
-
-                if (ready.length > 0) {
-                    const group1 = document.createElement('optgroup');
-                    group1.label = '✅ Server sẵn sàng';
-                    ready.forEach(g => {
-                        const opt = document.createElement('option');
-                        opt.value = g.guild_id;
-                        opt.textContent = g.guild_name;
-                        group1.appendChild(opt);
-                    });
-                    select.appendChild(group1);
-                }
-
-                if (pending.length > 0) {
-                    const group2 = document.createElement('optgroup');
-                    group2.label = '⚠️ Chưa cài bot';
-                    pending.forEach(g => {
-                        const opt = document.createElement('option');
-                        opt.value = `install_${g.guild_id}`;
-                        opt.textContent = `${g.guild_name} (cài bot →)`;
-                        group2.appendChild(opt);
-                    });
-                    select.appendChild(group2);
-                }
-
-                if (ready.length === 0 && pending.length === 0) {
-                    const opt = document.createElement('option');
-                    opt.value = '';
-                    opt.textContent = 'Không tìm thấy server nào bạn quản lý';
-                    opt.disabled = true;
-                    select.appendChild(opt);
-                }
-            } catch (e) {
-                console.error('Failed to load guilds:', e);
-            }
-        }
-
-        // ===== Guild Selection =====
-        async function selectGuild(value) {
-            if (!value) return;
-
-            // Handle "install bot" selection
-            if (value.startsWith('install_')) {
-                const guildId = value.replace('install_', '');
-                const data = await api('GET', `/api/auth/bot-invite?guild_id=${guildId}`);
-                if (data && data.url) {
-                    appendMessage('bot', '🔗 **Mời bot vào server**\n\nNhấn liên kết sau để thêm AuraFactory bot vào server của bạn:\n\n' +
-                        `[👉 Mời bot vào server](${data.url})\n\nSau khi mời xong, nhấn nút "🔄 Refresh" để cập nhật.`);
-                    window.open(data.url, '_blank');
-                }
-                document.getElementById('guildSelect').value = '';
-                return;
-            }
-
-            currentGuild = value;  // Keep as string to preserve snowflake precision
-            document.getElementById('channelCount').textContent = '⏳';
-            document.getElementById('roleCount').textContent = '⏳';
-            document.getElementById('memberCount').textContent = '⏳';
-
-            // Load server info for sidebar
-            try {
-                const info = await api('GET', `/api/guild/${currentGuild}/info`);
-                if (info && info.ok) {
-                    document.getElementById('channelCount').textContent = info.channels || 0;
-                    document.getElementById('roleCount').textContent = info.roles || 0;
-                    document.getElementById('memberCount').textContent = info.member_count || '?';
-                    showToast(`✅ ${info.server_name || 'Server'} đã sẵn sàng`, 'info');
-                } else {
-                    document.getElementById('channelCount').textContent = '—';
-                    document.getElementById('roleCount').textContent = '—';
-                    document.getElementById('memberCount').textContent = '—';
-                    showToast('Chọn server thành công', 'info');
-                }
-            } catch (e) {
-                showToast('Không thể tải thông tin server', 'warning');
-            }
-        }
-
-        // ===== Send Message (§5.3-5.6 Pipeline) =====
-        async function sendMessage() {
-            const input = document.getElementById('chatInput');
-            const message = input.value.trim();
-            if (!message || isWaitingResponse) return;
-            if (!currentGuild) {
-                showToast('Chọn server trước!', 'warning');
-                return;
-            }
-
-            input.value = '';
-            appendMessage('user', message);
-            setWaiting(true);
-
-            try {
-                const data = await api('POST', '/api/chat', {
-                    message: message,
-                    guild_id: currentGuild,
-                    user_id: currentUser.id,
-                });
-
-                if (!data) return;
-
-                if (!data.ok) {
-                    if (data.type === 'bot_not_installed') {
-                        appendMessage('bot', `⚠️ **Bot chưa được mời vào server này!**\n\n` +
-                            `Vui lòng mời bot trước khi sử dụng:\n\n` +
-                            `[👉 Mời bot vào server](${data.invite_url})\n\n` +
-                            `Sau khi mời bot xong, hãy refresh lại trang.`);
-                    } else {
-                        appendMessage('bot', `❌ ${data.error || 'Có lỗi xảy ra'}`);
-                    }
-                    return;
-                }
-
-                switch (data.type) {
-                    case 'answer':
-                    case 'clarify':
-                        appendMessage('bot', data.content);
-                        break;
-
-                    case 'approval_needed':
-                        showPlan(data.plan, true);
-                        break;
-
-                    case 'executing':
-                        appendMessage('bot', '⏳ Kế hoạch đang được thực thi...');
-                        pollExecutionStatus(data.plan_id);
-                        break;
-
-                    case 'executed':
-                        if (data.result && data.result.plan) {
-                            showPlan(data.result.plan, false);
-                        }
-                        const status = data.status === 'completed' ? '✅' : '⚠️';
-                        const steps = data.result ? `${data.result.completed_steps || 0}/${data.result.total_steps || 0}` : '';
-                        appendMessage('bot', `${status} Thực thi hoàn tất (${steps} bước thành công)`);
-                        break;
-
-                    default:
-                        appendMessage('bot', JSON.stringify(data));
-                }
-            } catch (e) {
-                appendMessage('bot', `❌ Lỗi: ${e.message}`);
-            } finally {
-                setWaiting(false);
-            }
-        }
-
-        // ===== Plan Display (§5.4 step 12) =====
-        function showPlan(plan, needsApproval) {
-            const planId = plan.plan_id || plan.id || '';
-
-            const riskColors = { LOW: 'var(--risk-low)', MEDIUM: 'var(--risk-medium)', HIGH: 'var(--risk-high)', CRITICAL: 'var(--risk-critical)' };
-            const riskEmoji = { LOW: '🟢', MEDIUM: '🟡', HIGH: '🟠', CRITICAL: '🔴' };
-
-            let html = `<div class="plan-card">`;
-            html += `<div class="plan-header"><strong>📋 Kế hoạch</strong> <span class="risk-badge" style="color:${riskColors[plan.risk_level] || '#fff'}">${riskEmoji[plan.risk_level] || '⚪'} ${plan.risk_level}</span></div>`;
-            html += `<p class="plan-desc">${escapeHtml(plan.description || '')}</p>`;
-            html += `<ol class="plan-steps">`;
-            (plan.steps || []).forEach(step => {
-                const emoji = riskEmoji[step.risk_level] || '⚪';
-                html += `<li>${emoji} <code>${step.tool_name}</code> — ${escapeHtml(step.description || '')}</li>`;
-            });
-            html += `</ol>`;
-
-            if (needsApproval) {
-                html += `<div class="plan-actions">`;
-                html += `<button class="btn-approve" onclick="approvePlan('${planId}')">✅ Duyệt</button>`;
-                html += `<button class="btn-reject" onclick="rejectPlan('${planId}')">❌ Từ chối</button>`;
-                html += `</div>`;
-            }
-            html += `</div>`;
-
-            appendMessage('bot', html, true);
-        }
-
-        // ===== Approval (§5.5) =====
-        async function approvePlan(planId) {
-            try {
-                const data = await api('POST', '/api/approval', {
-                    plan_id: planId,
-                    action: 'approve',
-                    user_id: currentUser.id,
-                });
-                if (data && data.ok) {
-                    appendMessage('bot', '✅ Đã duyệt! Đang thực thi...');
-                    // Poll for result since execution now runs in background
-                    await pollExecutionStatus(data.plan_id);
-                } else {
-                    appendMessage('bot', `❌ ${data?.error || 'Không thể duyệt'}`);
-                }
-            } catch (e) {
-                appendMessage('bot', `❌ Lỗi: ${e.message}`);
-            }
-        }
-
-        async function pollExecutionStatus(planId, maxAttempts = 60, intervalMs = 2000) {
-            if (!planId) return;
-            for (let i = 0; i < maxAttempts; i++) {
-                await new Promise(r => setTimeout(r, intervalMs));
-                try {
-                    const status = await api('GET', `/api/execution/${planId}/status`);
-                    if (!status) return;
-                    if (status.status === 'completed') {
-                        const done = status.completed_steps || 0;
-                        const total = status.total_steps || 0;
-                        appendMessage('bot', `✅ Hoàn thành! ${done}/${total} bước thành công.`);
-                        return;
-                    }
-                    if (status.status === 'failed' || status.status === 'partial') {
-                        const done = status.completed_steps || 0;
-                        const total = status.total_steps || 0;
-                        appendMessage('bot', `⚠️ Thực thi dừng tại bước ${done}/${total}: ${status.error || 'Lỗi không xác định'}`);
-                        return;
-                    }
-                    // Still executing — continue polling
-                } catch (e) {
-                    console.warn('Poll error:', e);
-                }
-            }
-            appendMessage('bot', '⏱️ Thực thi đang chạy nền. Kiểm tra lại sau.');
-        }
-
-        async function rejectPlan(planId) {
-            try {
-                const data = await api('POST', '/api/approval', {
-                    plan_id: planId,
-                    action: 'reject',
-                    reason: 'Rejected via web',
-                    user_id: currentUser.id,
-                });
-                if (data && data.ok) {
-                    appendMessage('bot', '❎ Đã từ chối. Kế hoạch bị hủy.');
-                }
-            } catch (e) {
-                appendMessage('bot', `❌ Lỗi: ${e.message}`);
-            }
-        }
-
-        // ===== UI Helpers =====
-        function appendMessage(role, content, isHtml = false) {
-            const container = document.getElementById('chatMessages');
-            const div = document.createElement('div');
-            div.className = `message ${role}`;
-
-            const avatar = role === 'user' ? '👤' : '🤖';
-            const rendered = isHtml ? content : marked.parse(content);
-
-            div.innerHTML = `
-                <div class="message-avatar">${avatar}</div>
-                <div class="message-content">${rendered}</div>
-            `;
-            container.appendChild(div);
-            container.scrollTop = container.scrollHeight;
-        }
-
-        function setWaiting(waiting) {
-            isWaitingResponse = waiting;
-            document.getElementById('typingIndicator').style.display = waiting ? 'flex' : 'none';
-        }
-
-        function handleInputKey(event) {
-            if (event.key === 'Enter' && !event.shiftKey) {
-                event.preventDefault();
-                sendMessage();
-            }
-        }
-
-        // ===== Panel toggles =====
-        function toggleSidebar() {
-            document.getElementById('sidebar').classList.toggle('open');
-            document.getElementById('overlay').classList.toggle('show');
-        }
-        function toggleApprovals() {
-            document.getElementById('approvalPanel').classList.toggle('open');
-            document.getElementById('overlay').classList.toggle('show');
-        }
-        function closeAllPanels() {
-            document.getElementById('sidebar').classList.remove('open');
-            document.getElementById('approvalPanel').classList.remove('open');
-            document.getElementById('overlay').classList.remove('show');
-        }
-
-        function logout() {
-            localStorage.removeItem('aura_user');
-            window.location.href = '/login';
-        }
-
-        function toggleLanguage() {
-            const btn = document.getElementById('langBtn');
-            const currentLang = storageGet('lang', 'vi');
-            const newLang = currentLang === 'vi' ? 'en' : 'vi';
-            storageSet('lang', newLang);
-            btn.textContent = `🌐 ${newLang.toUpperCase()}`;
-
-            // Update placeholder
-            const input = document.getElementById('chatInput');
-            input.placeholder = newLang === 'vi' ? 'Nhập lệnh hoặc câu hỏi...' : 'Type a command or question...';
-            showToast(newLang === 'vi' ? 'Đã chuyển sang Tiếng Việt' : 'Switched to English', 'info');
-        }
-
-        function toggleAssistant() { /* TODO - not in Phase 1 */ }
-
-        // ===== Admin: Update Gemini API Key =====
-        async function checkAdminStatus() {
-            if (!currentUser) return;
-            try {
-                const data = await api('GET', `/api/admin/status?user_id=${currentUser.id}`);
-                if (data && data.is_admin) {
-                    document.getElementById('adminSection').style.display = '';
-                }
-            } catch (e) {
-                // Not admin or endpoint unavailable — keep section hidden
-            }
-        }
-
-        async function updateGeminiKey() {
-            const input = document.getElementById('adminApiKeyInput');
-            const newKey = input.value.trim();
-
-            if (!newKey) {
-                showToast('Vui lòng nhập API key', 'warning');
-                return;
-            }
-            if (!newKey.startsWith('AIza')) {
-                showToast('API key không hợp lệ (phải bắt đầu bằng AIza)', 'error');
-                return;
-            }
-
-            try {
-                const data = await api('POST', '/api/admin/update-gemini-key', {
-                    api_key: newKey,
-                    user_id: currentUser.id,
-                });
-                if (data && data.ok) {
-                    showToast('✅ ' + (data.message || 'API key đã cập nhật'), 'info');
-                    input.value = '';
-                } else {
-                    showToast('❌ ' + (data?.detail || data?.error || 'Cập nhật thất bại'), 'error');
-                }
-            } catch (e) {
-                showToast('❌ Lỗi: ' + e.message, 'error');
-            }
-        }
-    </script>
+// === Init ===
+function logout(){window.location.href='/api/auth/login'}
+window.addEventListener('DOMContentLoaded',()=>{setLang(currentLang);loadGuilds()});
+</script>
 </body>
 </html>

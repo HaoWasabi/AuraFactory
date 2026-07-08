@@ -1,6 +1,6 @@
-"""
-Discord Connector Facade — Aggregates all sub-connectors and provides unified dispatch.
+"""Discord Connector Facade — SPEC v2 rewrite.
 
+Aggregates all sub-connectors and provides unified dispatch.
 This is the main entry point for all Discord operations.
 The DiscordMCPServer uses this to register tools and route requests.
 """
@@ -12,20 +12,20 @@ from typing import Any, Dict, List
 
 import nextcord
 
-from app.connectors.discord.automod import AutomodConnector
+from app.connectors.discord.audit import AuditConnector
 from app.connectors.discord.backup import BackupConnector
 from app.connectors.discord.categories import CategoriesConnector
 from app.connectors.discord.channels import ChannelsConnector
-from app.connectors.discord.emojis import EmojisConnector
+from app.connectors.discord.events import EventsConnector
 from app.connectors.discord.features import FeaturesConnector
 from app.connectors.discord.guild import GuildConnector
-from app.connectors.discord.invites import InvitesConnector
+from app.connectors.discord.integrations import IntegrationsConnector
 from app.connectors.discord.members import MembersConnector
-from app.connectors.discord.onboarding import OnboardingConnector
-from app.connectors.discord.permissions import PermissionsConnector
 from app.connectors.discord.roles import RolesConnector
+from app.connectors.discord.safety import SafetyConnector
+from app.connectors.discord.soundboard import SoundboardConnector
+from app.connectors.discord.stickers import StickersConnector
 from app.connectors.discord.templates import TemplatesConnector
-from app.connectors.discord.threads import ThreadsConnector
 from app.connectors.discord.webhooks import WebhooksConnector
 from app.mcp.protocol import ToolDefinition
 
@@ -47,23 +47,24 @@ class DiscordConnector:
             "channels": ChannelsConnector(bot),
             "categories": CategoriesConnector(bot),
             "roles": RolesConnector(bot),
-            "permissions": PermissionsConnector(bot),
             "members": MembersConnector(bot),
-            "webhooks": WebhooksConnector(bot),
-            "emojis": EmojisConnector(bot),
-            "invites": InvitesConnector(bot),
-            "threads": ThreadsConnector(bot),
             "guild": GuildConnector(bot),
-            "onboarding": OnboardingConnector(bot),
-            "backup": BackupConnector(bot),
-            "automod": AutomodConnector(bot),
-            "features": FeaturesConnector(bot),
+            "safety": SafetyConnector(bot),
+            "audit": AuditConnector(bot),
+            "events": EventsConnector(bot),
+            "webhooks": WebhooksConnector(bot),
             "templates": TemplatesConnector(bot),
+            "stickers": StickersConnector(bot),
+            "soundboard": SoundboardConnector(bot),
+            "integrations": IntegrationsConnector(bot),
+            "backup": BackupConnector(bot),
+            "features": FeaturesConnector(bot),
         }
 
         logger.info(
-            "DiscordConnector initialized with %d sub-connectors",
+            "DiscordConnector initialized with %d sub-connectors: %s",
             len(self._connectors),
+            list(self._connectors.keys()),
         )
 
     # ------------------------------------------------------------------
@@ -79,7 +80,7 @@ class DiscordConnector:
         """Execute a tool by its fully-qualified name.
 
         Parses the tool name (discord.{module}.{action}) and routes
-        to the correct sub-connector.
+        to the correct sub-connector method.
 
         Args:
             tool_name: Full tool name (e.g. 'discord.channels.create').
@@ -109,7 +110,18 @@ class DiscordConnector:
                 f"Available: {list(self._connectors.keys())}"
             )
 
-        return await connector.execute(action=action_name, guild=guild, **params)
+        # Look for the action method directly on the connector
+        method = getattr(connector, action_name, None)
+        if method is None:
+            # Fallback: try connector.execute() if it has one
+            if hasattr(connector, "execute"):
+                return await connector.execute(action=action_name, guild=guild, **params)
+            raise ValueError(
+                f"Action '{action_name}' not found on module '{module_name}'"
+            )
+
+        # Call the action method directly with guild + kwargs
+        return await method(guild=guild, **params)
 
     # ------------------------------------------------------------------
     # Tool Discovery
@@ -122,8 +134,22 @@ class DiscordConnector:
             Complete list of ToolDefinitions across all modules.
         """
         all_tools: List[ToolDefinition] = []
-        for connector in self._connectors.values():
-            all_tools.extend(connector.get_tool_definitions())
+        for name, connector in self._connectors.items():
+            if hasattr(connector, "get_tool_definitions"):
+                all_tools.extend(connector.get_tool_definitions())
+            else:
+                # Auto-generate tool definitions from public methods
+                for attr_name in dir(connector):
+                    if attr_name.startswith("_"):
+                        continue
+                    attr = getattr(connector, attr_name)
+                    if callable(attr) and attr_name not in ("get_tool_definitions", "execute"):
+                        tool_def = ToolDefinition(
+                            name=f"discord.{name}.{attr_name}",
+                            description=attr.__doc__.split("\n")[0] if attr.__doc__ else f"{name}.{attr_name}",
+                            parameters={},
+                        )
+                        all_tools.append(tool_def)
         return all_tools
 
     def get_tool_definitions_for_module(self, module: str) -> List[ToolDefinition]:
@@ -138,7 +164,9 @@ class DiscordConnector:
         connector = self._connectors.get(module)
         if connector is None:
             raise ValueError(f"Unknown module '{module}'")
-        return connector.get_tool_definitions()
+        if hasattr(connector, "get_tool_definitions"):
+            return connector.get_tool_definitions()
+        return []
 
     @property
     def modules(self) -> List[str]:
@@ -148,6 +176,4 @@ class DiscordConnector:
     @property
     def tool_count(self) -> int:
         """Total number of registered tools across all modules."""
-        return sum(
-            len(c.get_tool_definitions()) for c in self._connectors.values()
-        )
+        return len(self.get_all_tool_definitions())
