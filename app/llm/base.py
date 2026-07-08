@@ -56,7 +56,20 @@ class BaseLLM(ABC):
         Args:
             messages: Chat messages [{role, content}].
             system_prompt: Optional system instruction.
-            tools: Optional tool definitions for function calling.
+            tools: Optional tool definitions in standard JSON Schema format:
+                [
+                    {
+                        "name": "tool_name",
+                        "description": "What it does",
+                        "parameters": {
+                            "properties": {"param": {"type": "string", "description": "..."}},
+                            "required": ["param"]
+                        }
+                    }
+                ]
+                Each provider converts this to its native format internally.
+                Supported types: string, number, integer, boolean, array, object.
+                Array type MUST include "items": {"type": "..."}.
             temperature: Sampling temperature.
             max_tokens: Max tokens to generate.
 

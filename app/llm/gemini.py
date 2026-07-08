@@ -55,49 +55,73 @@ class GeminiLLM(BaseLLM):
         genai.configure(api_key=new_api_key)
         logger.info("Gemini API key updated at runtime")
 
-    def _convert_tools_to_gemini(self, tools: List[Dict[str, Any]]) -> List[Any]:
-        """Convert tool definitions to Gemini FunctionDeclaration format.
-        
-        Args:
-            tools: List of tool definitions with name, description, parameters.
-            
-        Returns:
-            List of Gemini Tool objects with FunctionDeclarations.
+    # ------------------------------------------------------------------
+    # JSON Schema → Gemini Proto conversion
+    # ------------------------------------------------------------------
+
+    def _json_schema_to_proto(self, schema: Dict[str, Any]) -> "genai.protos.Schema":
+        """Recursively convert a JSON Schema dict to a Gemini proto Schema.
+
+        Handles: string, number, integer, boolean, array (with items), object (with properties).
+        This is the ONLY Gemini-specific conversion layer. Tool definitions stay as standard
+        JSON Schema everywhere else — making Bedrock swap trivial (Bedrock accepts JSON Schema directly).
         """
+        json_type = schema.get("type", "string")
+        proto_type = self._map_type(json_type)
+        description = schema.get("description", "")
+
+        kwargs: Dict[str, Any] = {
+            "type": proto_type,
+            "description": description,
+        }
+
+        # Array → must have "items"
+        if json_type == "array":
+            items_schema = schema.get("items", {"type": "string"})
+            kwargs["items"] = self._json_schema_to_proto(items_schema)
+
+        # Object → has "properties" and optionally "required"
+        elif json_type == "object":
+            props = schema.get("properties", {})
+            if props:
+                kwargs["properties"] = {
+                    k: self._json_schema_to_proto(v) for k, v in props.items()
+                }
+                required = schema.get("required", [])
+                if required:
+                    kwargs["required"] = required
+
+        return genai.protos.Schema(**kwargs)
+
+    def _convert_tools_to_gemini(self, tools: List[Dict[str, Any]]) -> List[Any]:
+        """Convert standard JSON Schema tool definitions to Gemini proto format."""
         function_declarations = []
-        
+
         for tool in tools:
             params = tool.get("parameters", {})
             gemini_params = None
-            
+
             if params and params.get("properties"):
-                # Build Schema using protos (always available)
-                schema_properties = {}
-                for prop_name, prop_def in params.get("properties", {}).items():
-                    prop_type = self._map_type(prop_def.get("type", "string"))
-                    schema_properties[prop_name] = genai.protos.Schema(
-                        type=prop_type,
-                        description=prop_def.get("description", ""),
-                    )
-                
-                gemini_params = genai.protos.Schema(
-                    type=genai.protos.Type.OBJECT,
-                    properties=schema_properties,
-                    required=params.get("required", []),
-                )
-            
+                # Wrap in object schema for recursive conversion
+                obj_schema = {
+                    "type": "object",
+                    "properties": params["properties"],
+                    "required": params.get("required", []),
+                }
+                gemini_params = self._json_schema_to_proto(obj_schema)
+
             func_decl = genai.protos.FunctionDeclaration(
                 name=tool.get("name", ""),
                 description=tool.get("description", ""),
                 parameters=gemini_params,
             )
             function_declarations.append(func_decl)
-        
+
         return [genai.protos.Tool(function_declarations=function_declarations)]
 
     @staticmethod
     def _map_type(json_type: str) -> int:
-        """Map JSON Schema type string to Gemini proto Type enum."""
+        """Map JSON Schema type string to Gemini proto Type enum value."""
         type_map = {
             "string": genai.protos.Type.STRING,
             "number": genai.protos.Type.NUMBER,
