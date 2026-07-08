@@ -29,34 +29,180 @@ CRITICAL RULES:
 1. Only use tools from the provided tool list — never invent tool names
 2. guild_id MUST be included in every step's tool_params (use the guild_id from the context header)
 3. Resolve all IDs from the context — never guess or make up IDs
-4. Steps must be in correct execution order (e.g. create category before channels inside it)
+4. Steps must be in correct execution order (e.g. create category before channels inside it, create role before assigning it)
 5. If you need to delete/modify something by name, find its ID in the context first
-6. Assign risk_level per step: LOW (read/create), MEDIUM (edit/move/rename), HIGH (delete channel/role/kick), CRITICAL (ban/bulk delete/server settings)
+6. Assign risk_level per step: LOW (read/inspect), MEDIUM (create/edit/move/rename), HIGH (delete/bulk ops/batch assign), CRITICAL (ban/bulk delete/server settings)
 7. Write step descriptions in the SAME language as the user request
+
+ROLE MANAGEMENT TOOL SELECTION GUIDE:
+- Creating ONE role with basic settings → discord.roles.create
+- Creating MULTIPLE roles at once → discord.roles.bulk_create (one step, pass "roles" list)
+- Editing ANY attribute of a role (name, color, permissions, hoist, position at once) → discord.roles.modify (preferred)
+  * modify() MERGES permissions — only supplied keys change, others stay intact
+  * set_permissions() OVERWRITES all perms — use only when replacing the full permission set
+- Clone an existing role to a new name → discord.roles.clone
+- Inspect role details + who holds it → discord.roles.get_info
+- Assign role to ONE member → discord.roles.assign
+- Assign/remove role to MANY members at once → discord.roles.batch_assign (pass member_ids list + action)
+- Move a role up/down in the hierarchy → discord.roles.set_position
+- Delete a role → discord.roles.delete
+
+COMMON PERMISSIONS (for permissions dict):
+  administrator, manage_guild, manage_roles, manage_channels, manage_messages,
+  kick_members, ban_members, moderate_members, send_messages, read_messages,
+  view_channel, connect, speak, mute_members, deafen_members, move_members,
+  attach_files, embed_links, add_reactions, use_external_emojis,
+  create_instant_invite, change_nickname, manage_nicknames, mention_everyone
+
+EXAMPLE — Create a full moderator role:
+User: "tạo role Moderator màu xanh, có quyền kick, ban, xóa tin nhắn, hiển thị riêng"
+→ discord.roles.create with color="#3498db", hoist=true,
+  permissions={"kick_members":true,"ban_members":true,"manage_messages":true}
+
+EXAMPLE — Setup nhiều role cùng lúc:
+User: "tạo 3 role: Admin (đỏ, admin), Mod (xanh, kick+ban), Member (trắng, chỉ chat)"
+→ discord.roles.bulk_create with roles=[
+    {"name":"Admin","color":"#e74c3c","permissions":{"administrator":true},"hoist":true},
+    {"name":"Mod","color":"#3498db","permissions":{"kick_members":true,"ban_members":true},"hoist":true},
+    {"name":"Member","color":"#ecf0f1","permissions":{"send_messages":true,"view_channel":true}}
+  ]
+
+EXAMPLE — Chỉnh sửa role giữ nguyên quyền cũ:
+User: "đổi màu role Mod thành tím và bật mentionable"
+Context: roles include {"id": "444555666", "name": "Mod", ...}
+→ discord.roles.modify with role_id="444555666", color="#9b59b6", mentionable=true
+  (other permissions and attributes are PRESERVED automatically)
+
+EXAMPLE — Gán role cho nhiều người:
+User: "gán role Member cho @alice, @bob, @carol"
+Context: roles={"id":"555","name":"Member"}, members=[alice=id:1, bob=id:2, carol=id:3]
+→ discord.roles.batch_assign with member_ids=["1","2","3"], role_id="555", action="add"
+
+EXAMPLE — Clone role:
+User: "tạo role Mod2 giống hệt role Mod"
+Context: roles include {"id": "444555666", "name": "Mod"}
+→ discord.roles.clone with source_role_id="444555666", new_name="Mod2"
 
 EXAMPLE — Delete a channel:
 User: "xóa channel #spam"
 Context shows: channels include {"id": "987654321", "name": "spam", ...}
-→ Use channel_id "987654321" in tool_params
+→ discord.channels.delete with channel_id="987654321"
 
 EXAMPLE — Create channel in category:
 User: "tạo channel #general trong category THÔNG BÁO"
 Context shows: categories include {"id": "111222333", "name": "THÔNG BÁO", ...}
-→ Use category_id "111222333" in tool_params
+→ discord.channels.create with category_id="111222333"
 
-EXAMPLE — Assign role to member:
-User: "gán role Moderator cho @username"
-Context shows: roles include {"id": "444555666", "name": "Moderator"}, members include {"id": "777888999", "name": "username"}
-→ Use role_id "444555666" and member_id "777888999"
+CHANNEL MANAGEMENT TOOL SELECTION GUIDE:
+- Create text channel with topic/slowmode/nsfw → discord.channels.create (type="text")
+- Create voice channel with bitrate/user_limit → discord.channels.create (type="voice")
+- Create stage channel (requires Community) → discord.channels.create (type="stage")
+- Create forum channel → discord.channels.create (type="forum")
+- Create announcement/news channel (requires Community) → discord.channels.create (type="news")
+- Create PRIVATE channel visible only to certain roles/members → discord.channels.create with is_private=true + allowed_role_ids/allowed_user_ids
+- Create channel with custom permission flags (e.g. read-only) → discord.channels.create with advanced_permissions={"send_messages": false}
+- Edit topic, nsfw, slowmode, bitrate, user_limit → discord.channels.edit
+- Update one role/member's permission in a channel → discord.channels.edit with update_permissions={"target_id": "...", "permissions": {...}}
+- Sync channel permissions to parent category → discord.channels.edit or discord.channels.move with sync_permissions=true
+- List channels filtered by type → discord.channels.list with type_filter="voice"
+
+EXAMPLE — Create private staff channel:
+User: "tạo kênh #staff-chat ẩn với mọi người, chỉ role Mod thấy được"
+Context: roles include {"id": "777888999", "name": "Mod"}
+→ discord.channels.create with name="staff-chat", type="text", is_private=true, allowed_role_ids=["777888999"]
+
+EXAMPLE — Create read-only announcement channel:
+User: "tạo kênh #quy-tac ai cũng thấy nhưng không được gửi tin"
+→ discord.channels.create with name="quy-tac", type="text",
+  advanced_permissions={"send_messages": false, "view_channel": true}
+
+EXAMPLE — Create voice channel with limit:
+User: "tạo kênh voice Gaming giới hạn 5 người, bitrate 96000"
+→ discord.channels.create with name="Gaming", type="voice", user_limit=5, bitrate=96000
+
+EXAMPLE — Create forum channel:
+User: "tạo kênh forum hỏi-đáp với slowmode 60 giây"
+→ discord.channels.create with name="hoi-dap", type="forum", slowmode_delay=60
+
+EXAMPLE — Create stage channel:
+User: "tạo stage channel Buổi phát sóng với topic AMA hàng tuần"
+→ discord.channels.create with name="Buoi-phat-song", type="stage", topic="AMA hàng tuần"
+
+EXAMPLE — Update channel permissions for one role:
+User: "tắt quyền gửi tin nhắn của role Member trong kênh #thông-báo"
+Context: channels={"id":"555666777","name":"thông-báo"}, roles={"id":"111222333","name":"Member"}
+→ discord.channels.edit with channel_id="555666777",
+  update_permissions={"target_id": "111222333", "permissions": {"send_messages": false}}
+
+SERVER SETTINGS TOOL SELECTION GUIDE:
+- Read full server state (name, channels count, boost tier, features, AFK, locale, etc.) → discord.guild.get_info
+- Change server name → discord.guild.edit_profile with new_name="..."
+- Change server icon → discord.guild.edit_profile with icon_url="..."
+- Change server banner (Boost Lv2+) → discord.guild.edit_profile with banner_url="..."
+- Change server description → discord.guild.edit_profile with description="..."
+- Change verification level + other fields together → discord.guild.edit_profile (batch, one call)
+- Change ONLY verification level → discord.guild.set_verification with level="..."
+- Enable Community feature → discord.guild.set_community with enable=true
+- Disable Community feature → discord.guild.set_community with enable=false
+- Configure system messages channel / toggle join-boost-tips messages → discord.guild.set_system_channels
+- Set default notification level for all members → discord.guild.set_default_notifications
+- Set AFK voice channel and timeout → discord.guild.set_afk
+- Change server language/locale → discord.guild.set_preferred_locale
+
+VERIFICATION LEVELS (for set_verification or edit_profile):
+  none=no restriction, low=email verified, medium=registered 5+ min,
+  high=member 10+ min, highest=phone verified
+
+EXAMPLE — Get full server info before setup:
+User: "cho tôi xem thông tin server"
+→ discord.guild.get_info (risk: LOW)
+
+EXAMPLE — Rename server + change icon in one call:
+User: "đổi tên server thành 'AuraHQ' và đổi icon bằng https://example.com/logo.png"
+→ discord.guild.edit_profile with new_name="AuraHQ", icon_url="https://example.com/logo.png"
+
+EXAMPLE — Full profile update (name + banner + description):
+User: "đổi tên thành 'Aura Community', cập nhật banner từ https://example.com/banner.jpg và đặt description"
+→ discord.guild.edit_profile with new_name="Aura Community", banner_url="https://...", description="..."
+
+EXAMPLE — Enable Community with specific channels:
+User: "bật tính năng Community, dùng kênh #quy-tac làm rules channel"
+Context: channels include {"id": "123456789", "name": "quy-tac"}
+→ discord.guild.set_community with enable=true, rules_channel_id="123456789"
+
+EXAMPLE — Tighten server security:
+User: "tăng bảo mật server lên mức high"
+→ discord.guild.set_verification with level="high"
+
+EXAMPLE — Configure system messages:
+User: "tắt thông báo chào mừng và thông báo boost trong server"
+→ discord.guild.set_system_channels with disable_join_messages=true, disable_boost_messages=true
+
+EXAMPLE — Set AFK channel:
+User: "đặt kênh AFK là kênh voice 'AFK Room', timeout 15 phút"
+Context: channels include {"id": "987654321", "name": "AFK Room", "type": "voice"}
+→ discord.guild.set_afk with afk_channel_id="987654321", afk_timeout=900
+
+EXAMPLE — Change server language:
+User: "đổi ngôn ngữ server sang tiếng Việt"
+→ discord.guild.set_preferred_locale with locale="vi"
+
+EXAMPLE — Full server setup (multi-step):
+User: "setup server: đổi tên 'Gaming Hub', bật Community, bảo mật medium, tắt thông báo join, ngôn ngữ Việt"
+→ Step 1: discord.guild.edit_profile (new_name, risk: HIGH)
+   Step 2: discord.guild.set_community (enable=true, risk: HIGH)
+   Step 3: discord.guild.set_verification (level="medium", risk: MEDIUM)
+   Step 4: discord.guild.set_system_channels (disable_join_messages=true, risk: MEDIUM)
+   Step 5: discord.guild.set_preferred_locale (locale="vi", risk: LOW)
 
 Respond with ONLY valid JSON, no markdown fences:
 {
   "description": "Human-readable summary of what will be done",
   "steps": [
     {
-      "tool_name": "discord.channels.delete",
-      "tool_params": {"guild_id": "123456789", "channel_id": "987654321"},
-      "description": "Xóa channel #spam",
+      "tool_name": "discord.roles.bulk_create",
+      "tool_params": {"guild_id": "123456789", "roles": [{"name": "Admin", "color": "#e74c3c", "permissions": {"administrator": true}, "hoist": true}]},
+      "description": "Tạo role Admin màu đỏ với quyền admin",
       "risk_level": "HIGH"
     }
   ]
@@ -368,7 +514,7 @@ class PlannerService:
             id_fields = [
                 "channel_id", "category_id", "role_id", "member_id",
                 "user_id", "webhook_id", "message_id", "thread_id",
-                "emoji_id", "invite_id", "target_id",
+                "emoji_id", "invite_id", "target_id", "source_role_id",
             ]
             for field in id_fields:
                 if field in params and params[field] is not None:
@@ -386,9 +532,18 @@ class PlannerService:
                             i + 1, tool_name, field, val,
                         )
 
-            # Fix 4: Validate category_ids list (for categories.reorder)
+            # Fix 4: Validate list fields for bulk/batch operations
             if "category_ids" in params and isinstance(params["category_ids"], list):
                 params["category_ids"] = [str(x) for x in params["category_ids"]]
+
+            if "member_ids" in params and isinstance(params["member_ids"], list):
+                params["member_ids"] = [str(x) for x in params["member_ids"]]
+
+            # Fix 5: Normalize bulk_create roles list — ensure colors are strings
+            if "roles" in params and isinstance(params["roles"], list):
+                for role_def in params["roles"]:
+                    if isinstance(role_def, dict) and "color" in role_def:
+                        role_def["color"] = str(role_def["color"])
 
             step["tool_params"] = params
             valid_steps.append(step)

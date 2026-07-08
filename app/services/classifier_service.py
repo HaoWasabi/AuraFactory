@@ -10,11 +10,14 @@ logger = logging.getLogger(__name__)
 
 # Intent categories from spec §7
 INTENTS = {
-    "setup": "Create categories, channels, roles, permissions from scratch",
-    "manage": "Move, rename, edit, delete channels/roles/categories",
+    "setup": "Create categories, channels (text/voice/stage/forum/news), roles, permissions from scratch",
+    "manage": "Move, rename, edit, delete channels/roles/categories; change channel permissions",
     "moderate": "Kick, ban, timeout, unban members",
     "query": "Read-only questions about server state",
-    "server_settings": "Edit server profile, verification level, invites, emojis, webhooks",
+    "server_settings": (
+        "Edit server profile (name/icon/banner/description), verification level, Community feature, "
+        "system channels, notification level, AFK config, preferred locale, content filter"
+    ),
     "automod": "Create/delete automod rules, events",
     "clarify": "User message is too vague to determine intent",
     "out_of_scope": "Request is outside what AuraFactory can do",
@@ -22,18 +25,40 @@ INTENTS = {
 
 CLASSIFIER_SYSTEM_PROMPT = """You are an intent classifier for a Discord server management AI.
 Given a user message, classify it into ONE of these intents:
-- setup: Creating new categories, channels, roles, permissions
-- manage: Moving, renaming, editing, deleting existing channels/roles
-- moderate: Kick/ban/timeout/unban members
-- query: Read-only questions about server state (list channels, roles, etc.)
-- server_settings: Server profile, verification level, invites, emojis, webhooks
+
+- setup: Creating NEW categories, channels (text/voice/stage/forum/news), roles, permissions from scratch
+- manage: Moving, renaming, editing, deleting EXISTING channels/roles/categories;
+          also includes changing channel permissions (is_private, allowed_roles, slowmode, nsfw, bitrate, user_limit)
+- moderate: Kick/ban/timeout/unban/warn members
+- query: Read-only questions — "list channels", "what roles exist", "server info", "thông tin server"
+- server_settings: Any change to the server (guild) itself:
+    * Server name, icon, banner, description
+    * Verification level / security level
+    * Enable/disable Community feature
+    * System messages channel, join/boost/tips notifications
+    * Default notification level (all messages vs only mentions)
+    * AFK channel and timeout
+    * Server language / preferred locale
+    * Explicit content filter
 - automod: Automod rules, scheduled events
-- clarify: Message is too vague, need more info
+- clarify: Message is too vague or missing required details
 - out_of_scope: Not related to Discord server management
+
+CLASSIFICATION HINTS:
+- "đổi tên server", "đổi icon", "đổi banner" → server_settings
+- "bật/tắt Community", "bật community" → server_settings
+- "tăng bảo mật", "verification level" → server_settings
+- "tắt thông báo join", "thông báo boost" → server_settings
+- "đặt kênh AFK", "AFK timeout" → server_settings
+- "đổi ngôn ngữ server" → server_settings
+- "thông tin server", "xem server info" → query
+- "tạo kênh private", "kênh ẩn", "kênh chỉ cho role X" → setup
+- "tạo kênh forum/stage/news/announcement" → setup
+- "sửa quyền kênh", "tắt quyền gửi tin" → manage
 
 Also determine:
 - tool_mode: "action" (setup/manage/moderate/server_settings/automod), "read_only" (query), "none" (clarify/out_of_scope)
-- lang: detect the language of the user message — "vi" for Vietnamese, "en" for English
+- lang: "vi" for Vietnamese, "en" for English
 
 Respond in JSON only: {"intent": "...", "tool_mode": "...", "confidence": 0.0-1.0, "lang": "vi"|"en"}"""
 
