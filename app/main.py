@@ -208,7 +208,10 @@ async def serve_login():
 
 @app.get("/dashboard")
 async def serve_dashboard():
-    return FileResponse("frontend/templates/dashboard.html")
+    return FileResponse(
+        "frontend/templates/dashboard.html",
+        headers={"Cache-Control": "no-cache, no-store, must-revalidate"}
+    )
 
 
 @app.get("/auth/callback")
