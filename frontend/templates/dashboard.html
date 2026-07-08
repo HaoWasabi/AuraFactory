@@ -108,8 +108,8 @@ body{animation:fadeIn .3s ease}
     </select>
   </div>
   <div class="nav-right">
-    <span class="nav-user" id="navUser">{{ user.username if user else '' }}</span>
-    <img class="nav-avatar" id="navAvatar" src="{{ user.avatar_url if user else '' }}" alt="" onerror="this.style.display='none'">
+    <span class="nav-user" id="navUser"></span>
+    <img class="nav-avatar" id="navAvatar" src="" alt="" onerror="this.style.display='none'">
     <button class="btn-sm" id="langBtn" onclick="toggleLang()">VI</button>
     <button class="btn-sm" data-i18n="logout" onclick="logout()">Log out</button>
   </div>
@@ -171,7 +171,7 @@ function setLang(l){currentLang=l;localStorage.setItem('lang',l);document.queryS
 function toggleLang(){setLang(currentLang==='en'?'vi':'en')}
 
 // === State ===
-let guildId='',userId='{{ user.id if user else "" }}';
+let guildId='',userId='';
 let activeSession=null;
 
 // === Guild ===
@@ -320,11 +320,24 @@ async function updateKey(){
   try{await fetch('/api/admin/update-gemini-key',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({api_key:key})});
   document.getElementById('adminKeyInput').value='';alert('Updated')}catch(e){alert('Error')}
 }
-document.getElementById('adminSection').style.display='{{ "block" if user and user.is_admin else "none" }}';
+document.getElementById('adminSection').style.display='none';
 
 // === Init ===
 function logout(){window.location.href='/api/auth/login'}
-window.addEventListener('DOMContentLoaded',()=>{setLang(currentLang);loadGuilds()});
+window.addEventListener('DOMContentLoaded',()=>{
+  // Auth check — load user from localStorage
+  const stored=localStorage.getItem('user');
+  if(!stored||!localStorage.getItem('token')){window.location.href='/login';return;}
+  try{
+    const u=JSON.parse(stored);
+    userId=u.id||'';
+    document.getElementById('navUser').textContent=u.username||'';
+    if(u.avatar_url)document.getElementById('navAvatar').src=u.avatar_url;
+    if(u.is_admin)document.getElementById('adminSection').style.display='block';
+  }catch(e){window.location.href='/login';return;}
+  setLang(currentLang);
+  loadGuilds();
+});
 </script>
 </body>
 </html>
