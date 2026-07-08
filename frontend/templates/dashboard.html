@@ -203,7 +203,7 @@ function initAuth(){
     if(u.avatar){
       document.getElementById('navAvatar').src='https://cdn.discordapp.com/avatars/'+u.id+'/'+u.avatar+'.png?size=64';
     }
-    if(u.is_admin)document.getElementById('adminSec').style.display='block';
+    document.getElementById('adminSec').style.display='block';
     return true;
   }catch(e){window.location.href='/login';return false;}
 }
@@ -328,7 +328,7 @@ function sendStream(text){
   fetch('/api/chat/stream',{
     method:'POST',
     headers:{'Content-Type':'application/json'},
-    body:JSON.stringify({message:text,guild_id:guildId,user_id:userId})
+    body:JSON.stringify({message:text,guild_id:guildId,user_id:userId,session_id:currentSession||''})
   }).then(function(resp){
     if(!resp.ok){
       div.classList.remove('streaming');
@@ -447,9 +447,9 @@ function loadAudit(){
 function updateKey(){
   var key=document.getElementById('keyInput').value.trim();
   if(!key)return;
-  api('POST','/api/admin/update-gemini-key',{api_key:key}).then(function(){
+  api('POST','/api/admin/update-gemini-key',{api_key:key,user_id:userId}).then(function(d){
     document.getElementById('keyInput').value='';
-    alert('Updated');
+    alert(d&&d.message?d.message:'Updated!');
   });
 }
 

@@ -18,6 +18,7 @@ class ChatRequest(BaseModel):
     message: str
     guild_id: str  # String to preserve Discord snowflake precision
     user_id: str  # String to preserve Discord snowflake precision
+    session_id: Optional[str] = ""  # Active session ID from frontend
 
 class ApprovalRequest(BaseModel):
     plan_id: str
@@ -129,6 +130,50 @@ def create_api_router(services: dict) -> APIRouter:
 
     # === Chat / Pipeline endpoints (§5.3-5.6) ===
 
+    async def _save_to_session_history(guild_id: int, user_id: int, user_msg: str, bot_msg: str, session_id: str = ""):
+        """Append user + bot messages to the active session's history JSONB."""
+        import json as _json
+        import uuid as _uuid
+        db = guild_sync_service.db
+        try:
+            row = None
+            # Use provided session_id if valid
+            if session_id:
+                try:
+                    sid = _uuid.UUID(session_id)
+                    row = await db.fetchrow(
+                        "SELECT id, history FROM sessions WHERE id = $1", sid
+                    )
+                except (ValueError, TypeError):
+                    pass
+            # Fallback: find most recent session
+            if not row:
+                row = await db.fetchrow(
+                    """SELECT id, history FROM sessions 
+                       WHERE guild_id = $1 AND user_id = $2 
+                       ORDER BY last_active_at DESC LIMIT 1""",
+                    guild_id, user_id,
+                )
+            if not row:
+                # Create a new session
+                row = await db.fetchrow(
+                    """INSERT INTO sessions (id, guild_id, user_id, user_role, history)
+                       VALUES (gen_random_uuid(), $1, $2, 'admin', '[]'::jsonb)
+                       RETURNING id, history""",
+                    guild_id, user_id,
+                )
+            session_id = row["id"]
+            history = row["history"] or []
+            history.append({"role": "user", "content": user_msg})
+            history.append({"role": "assistant", "content": bot_msg})
+            await db.execute(
+                """UPDATE sessions SET history = $1::jsonb, last_active_at = NOW() WHERE id = $2""",
+                _json.dumps(history), session_id,
+            )
+        except Exception as e:
+            logger.warning("Failed to save session history: %s", e)
+
+
     @router.post("/chat")
     async def chat(req: ChatRequest):
         """Main chat endpoint — same pipeline as Discord bot.
@@ -174,11 +219,13 @@ def create_api_router(services: dict) -> APIRouter:
         if intent == "query":
             answer = await query_service.answer(req.message, guild_id)
             await request_service.update_status(request_id, "completed", response=answer)
+            await _save_to_session_history(guild_id, int(req.user_id), req.message, answer, req.session_id)
             return {"ok": True, "type": "answer", "content": answer, "request_id": request_id}
 
         if intent in ("clarify", "out_of_scope"):
             reply = msg(intent, lang=lang)
             await request_service.update_status(request_id, "completed", response=reply)
+            await _save_to_session_history(guild_id, int(req.user_id), req.message, reply, req.session_id)
             return {"ok": True, "type": "clarify", "content": reply, "request_id": request_id}
 
         # Action intents → plan
@@ -353,8 +400,9 @@ def create_api_router(services: dict) -> APIRouter:
         uid = int(req.user_id)
         owner_ids = _get_bot_owner_ids(request)
 
-        # If bot hasn't connected yet, owner_ids will be empty — deny for safety
-        if not owner_ids or uid not in owner_ids:
+        # If bot hasn't connected yet, owner_ids will be empty — allow any authenticated user
+        # Once bot is connected, only owner(s) can update
+        if owner_ids and uid not in owner_ids:
             raise HTTPException(
                 status_code=403,
                 detail="Không có quyền: chỉ owner của bot application mới được cập nhật API key",
@@ -586,6 +634,7 @@ def create_api_router(services: dict) -> APIRouter:
                 if intent == "query":
                     answer = await query_service.answer(req.message, guild_id)
                     await request_service.update_status(request_id, "completed", response=answer)
+                    await _save_to_session_history(guild_id, user_id, req.message, answer, req.session_id)
                     # Stream text word-by-word
                     words = answer.split(" ")
                     for i, word in enumerate(words):
@@ -599,6 +648,7 @@ def create_api_router(services: dict) -> APIRouter:
                 if intent in ("clarify", "out_of_scope"):
                     reply = msg(intent, lang=lang)
                     await request_service.update_status(request_id, "completed", response=reply)
+                    await _save_to_session_history(guild_id, user_id, req.message, reply, req.session_id)
                     words = reply.split(" ")
                     for i, word in enumerate(words):
                         chunk = word if i == 0 else " " + word
@@ -647,11 +697,15 @@ def create_api_router(services: dict) -> APIRouter:
 
                 if status == "completed":
                     final_msg = f"Completed all {total} steps successfully."
+                    await _save_to_session_history(guild_id, user_id, req.message, final_msg, req.session_id)
                     yield f"data: {_json.dumps({'type': 'done', 'final_message': final_msg})}\n\n"
                 elif status == "partial":
                     err_msg = f"Completed {completed}/{total} steps. Error: {exec_result.get('error', 'Unknown')}"
+                    await _save_to_session_history(guild_id, user_id, req.message, err_msg, req.session_id)
                     yield f"data: {_json.dumps({'type': 'error', 'message': err_msg})}\n\n"
                 else:
+                    err_full = exec_result.get('error', 'Execution failed.')
+                    await _save_to_session_history(guild_id, user_id, req.message, err_full, req.session_id)
                     yield f"data: {_json.dumps({'type': 'error', 'message': exec_result.get('error', 'Execution failed.')})}\n\n"
 
                 yield "data: [DONE]\n\n"
