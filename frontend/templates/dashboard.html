@@ -91,6 +91,7 @@
 .input-bar{display:flex;gap:8px;padding:12px 16px;border-top:1px solid var(--border-color);background:var(--bg-secondary)}
 .input-bar input{flex:1;background:var(--bg-input);border:1px solid var(--border-color);border-radius:8px;color:var(--text-primary);padding:10px 14px;font-size:14px;outline:none}
 .input-bar input:focus{border-color:var(--accent-primary)}
+.input-bar.locked input,.input-bar.locked button{opacity:.5;pointer-events:none}
 .input-bar button{background:var(--accent-primary);border:none;border-radius:8px;color:#fff;padding:10px 18px;font-size:14px;cursor:pointer;font-weight:500}
 .input-bar button:hover{background:var(--accent-hover)}
 
@@ -161,8 +162,8 @@
     <!-- Main chat -->
     <main class="main">
       <div class="msgs" id="msgs"></div>
-      <div class="input-bar">
-        <input type="text" id="chatInput" placeholder="Type a message..." onkeydown="if(event.key==='Enter')sendMsg()">
+      <div class="input-bar locked" id="inputBar">
+        <input type="text" id="chatInput" placeholder="Select a server to start chatting..." onkeydown="if(event.key==='Enter')sendMsg()">
         <button onclick="sendMsg()" id="sendBtn">Send</button>
       </div>
     </main>
@@ -285,7 +286,10 @@ function renderGuildMenu(d){
   }
 }
 function toggleGuildMenu(){
-  document.getElementById('guildMenu').classList.toggle('hidden');
+  var menu=document.getElementById('guildMenu');
+  var isHidden=menu.classList.contains('hidden');
+  if(isHidden){loadGuilds();}  // Always refresh list when opening
+  menu.classList.toggle('hidden');
 }
 function inviteBot(url,name){
   if(confirm('Invite AuraFactory bot to "'+name+'"?')){
@@ -298,6 +302,9 @@ function selectGuild(id){
   guildId=id;
   document.getElementById('guildMenu').classList.add('hidden');
   if(!id)return;
+  // Unlock chat input
+  document.getElementById('inputBar').classList.remove('locked');
+  document.getElementById('chatInput').placeholder=T[lang].type_msg;
   // Update button text
   if(_guildsData){
     var cur=(_guildsData.ready||[]).find(function(g){return g.guild_id===id;});
@@ -331,7 +338,7 @@ function loadSessions(){
     var html='';
     d.sessions.forEach(function(s){
       var cls=s.id===currentSession?'sess-item active':'sess-item';
-      html+='<div class="'+cls+'" onclick="loadSession(\''+s.id+'\')">'+escHtml(s.first_message||'...')+'</div>';
+      html+='<div class="'+cls+'" data-sid="'+s.id+'" onclick="loadSession(\''+s.id+'\')">'+escHtml(s.first_message||'...')+'</div>';
     });
     el.innerHTML=html;
   });
@@ -341,12 +348,19 @@ function loadSession(sid){
   api('GET','/api/sessions/'+sid+'/history').then(function(d){
     if(!d)return;
     var el=document.getElementById('msgs');el.innerHTML='';
-    (d.history||[]).forEach(function(m){
+    var history=d.history||[];
+    if(typeof history==='string'){try{history=JSON.parse(history);}catch(e){history=[];}}
+    history.forEach(function(m){
       if(m.role==='user')appendUserMsg(m.content);
       else appendBotMsg(m.content);
     });
     el.scrollTop=el.scrollHeight;
-    loadSessions(); // refresh active highlight
+    // Update active highlight without re-fetching from server
+    var items=document.querySelectorAll('.sess-item');
+    items.forEach(function(item){
+      item.classList.remove('active');
+      if(item.getAttribute('data-sid')===sid)item.classList.add('active');
+    });
   });
 }
 function newChat(){

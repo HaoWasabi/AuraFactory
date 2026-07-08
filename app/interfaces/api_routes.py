@@ -545,10 +545,16 @@ def create_api_router(services: dict) -> APIRouter:
         )
         if not row:
             raise HTTPException(status_code=404, detail="Session not found")
+        import json as _json
+        history = row["history"] or []
+        if isinstance(history, str):
+            history = _json.loads(history) if history.strip() else []
+        if not isinstance(history, list):
+            history = []
         return {
             "id": str(row["id"]),
             "guild_id": str(row["guild_id"]),
-            "history": row["history"] or [],
+            "history": history,
             "created_at": row["created_at"].isoformat() if row["created_at"] else None,
             "last_active_at": row["last_active_at"].isoformat() if row["last_active_at"] else None,
         }
