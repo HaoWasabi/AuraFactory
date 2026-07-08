@@ -193,7 +193,7 @@ app.mount("/static", StaticFiles(directory="frontend/static"), name="static")
 
 @app.get("/")
 async def serve_index():
-    return FileResponse("frontend/index.html")
+    return FileResponse("frontend/index.html", headers={"Cache-Control": "no-cache, no-store"})
 
 @app.head("/")
 async def head_index():
@@ -203,7 +203,7 @@ async def head_index():
 
 @app.get("/login")
 async def serve_login():
-    return FileResponse("frontend/templates/login.html")
+    return FileResponse("frontend/templates/login.html", headers={"Cache-Control": "no-cache, no-store"})
 
 
 @app.get("/dashboard")
@@ -216,7 +216,7 @@ async def serve_dashboard():
 
 @app.get("/auth/callback")
 async def serve_callback():
-    return FileResponse("frontend/templates/callback.html")
+    return FileResponse("frontend/templates/callback.html", headers={"Cache-Control": "no-cache, no-store"})
 
 
 @app.get("/health")
