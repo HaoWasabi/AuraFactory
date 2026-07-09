@@ -1,17 +1,24 @@
-"""UnifiedAgent v3 — Agentic Architecture (Plan → Execute → Reflect → Adapt).
+"""UnifiedAgent v3.1 — Spec-Driven Agentic Architecture.
 
-Agentic Loop:
+Architecture:
     Request → LLM Planning → [Approval Gate] → Execute All Tools
            → Observe Results → Reflect (goal achieved?)
-           → If not: Replan → Execute → Reflect (max 5 iterations)
+           → If not: Replan → Execute → Reflect (max N iterations)
            → Assemble friendly response
 
-Key design decisions:
+Design principles:
+  - ZERO hard-coded tool lists — everything derived from SpecRegistry
+  - Tunable via env vars OR tools_spec.yaml (env vars override YAML defaults)
   - Approval is PRE-FLIGHT: check ALL tools before executing ANY
-  - Batch approval: one confirm for all high-risk ops (not per-tool)
+  - Batch approval: one confirm for all high-risk ops
   - remaining_tools stored as serializable dicts (not objects)
   - Reflect uses fast-path for simple requests (≤2 tools, all success)
-  - Recursive _execute_tools avoided — single loop with clean state
+  - Single clean loop — no recursion
+
+Sources of truth:
+  - tools_spec.yaml → SpecRegistry → tool schemas, risk levels, name maps
+  - app/config.py → env var overrides for runtime tuning
+  - app/prompts/ → LLM personality (kept separate, no logic)
 """
 
 from __future__ import annotations
@@ -19,7 +26,7 @@ from __future__ import annotations
 import json
 import logging
 import time
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, FrozenSet, List, Optional, Set
 
 from app.config import settings
 from app.llm.base import BaseLLM, LLMResponse
@@ -42,27 +49,125 @@ from app.core.middleware import (
 # Safety (supporting)
 from app.core.safety import AuditLogger, GuildLock, ConversationMemory
 
+# Prompts (personality — no logic here)
+from app.prompts.system_prompt import UNIFIED_SYSTEM_PROMPT, ASSEMBLE_PROMPT, REFLECT_PROMPT
+
+# Registry (the single source of truth)
+from app.core.spec_loader import SpecRegistry
+
 logger = logging.getLogger(__name__)
 
+
 # ═══════════════════════════════════════════════════════════════════════════
-# Prompt & Tool Definitions (separated for maintainability)
+# Config Resolver — env vars override YAML defaults
 # ═══════════════════════════════════════════════════════════════════════════
 
-from app.prompts.system_prompt import UNIFIED_SYSTEM_PROMPT, ASSEMBLE_PROMPT, REFLECT_PROMPT, PLANNER_PROMPT
-from app.core.tool_definitions import TOOL_DEFINITIONS, TOOL_NAME_MAP, HIGH_RISK_TOOLS
+class AgentConfig:
+    """Resolves configuration: env var → YAML default → hardcoded fallback.
 
-# Backward-compatible alias
-_HIGH_RISK_TOOLS = HIGH_RISK_TOOLS
+    Priority chain: settings.X (env var) > registry.get_default(key) > fallback
+    All magic numbers live in tools_spec.yaml; env vars override for runtime tuning.
+    """
 
-# Agentic Loop config
-MAX_AGENTIC_ITERATIONS = 5
+    def __init__(self, registry: Optional[SpecRegistry] = None) -> None:
+        self._registry = registry
+
+    def _resolve(self, env_value: Any, yaml_key: str, fallback: Any) -> Any:
+        """Resolve value with priority: env > yaml > fallback."""
+        # If env var is set (non-zero/non-empty), use it
+        if env_value:
+            return env_value
+        # Try YAML defaults
+        if self._registry:
+            yaml_val = self._registry.get_default(yaml_key)
+            if yaml_val is not None:
+                return type(fallback)(yaml_val) if yaml_val != fallback else fallback
+        return fallback
+
+    # ── Agentic Loop ──
+    @property
+    def max_iterations(self) -> int:
+        return self._resolve(settings.AGENTIC_MAX_ITERATIONS, "max_iterations", 5)
+
+    @property
+    def temp_planning(self) -> float:
+        return self._resolve(settings.LLM_TEMP_PLANNING, "temperature_planning", 0.2)
+
+    @property
+    def temp_reflect(self) -> float:
+        return self._resolve(settings.LLM_TEMP_REFLECT, "temperature_reflect", 0.1)
+
+    @property
+    def temp_assemble(self) -> float:
+        return self._resolve(settings.LLM_TEMP_ASSEMBLE, "temperature_assemble", 0.7)
+
+    @property
+    def max_tokens_planning(self) -> int:
+        return self._resolve(settings.LLM_MAX_TOKENS_PLANNING, "max_tokens_planning", 2048)
+
+    @property
+    def max_tokens_reflect(self) -> int:
+        return self._resolve(0, "max_tokens_reflect", 256)
+
+    @property
+    def max_tokens_assemble(self) -> int:
+        return self._resolve(0, "max_tokens_assemble", 512)
+
+    # ── Context Limits ──
+    @property
+    def context_max_categories(self) -> int:
+        return self._resolve(settings.CONTEXT_MAX_CATEGORIES, "context_max_categories", 20)
+
+    @property
+    def context_max_channels(self) -> int:
+        return self._resolve(settings.CONTEXT_MAX_CHANNELS, "context_max_channels", 40)
+
+    @property
+    def context_max_roles(self) -> int:
+        return self._resolve(settings.CONTEXT_MAX_ROLES, "context_max_roles", 20)
+
+    @property
+    def context_history_turns(self) -> int:
+        return self._resolve(settings.CONTEXT_HISTORY_TURNS, "context_history_turns", 6)
+
+    # ── Safety ──
+    @property
+    def approval_ttl(self) -> float:
+        return float(self._resolve(settings.APPROVAL_TTL, "approval_ttl_seconds", 300))
+
+    @property
+    def rate_limit_burst(self) -> int:
+        return self._resolve(settings.RATE_LIMIT_BURST, "rate_limit_burst", 5)
+
+    @property
+    def rate_limit_delay(self) -> float:
+        return float(self._resolve(0, "rate_limit_min_delay", 0.5))
+
+    @property
+    def retry_max(self) -> int:
+        return self._resolve(settings.RETRY_MAX, "retry_max_attempts", 3)
+
+    @property
+    def retry_base_delay(self) -> float:
+        return float(self._resolve(0, "retry_base_delay", 1.0))
+
+    @property
+    def confirmation_words(self) -> List[str]:
+        env_val = settings.CONFIRMATION_WORDS
+        if env_val:
+            return [w.strip() for w in env_val.split(",") if w.strip()]
+        if self._registry:
+            yaml_val = self._registry.get_default("confirmation_words", "")
+            if yaml_val:
+                return [w.strip() for w in str(yaml_val).split(",") if w.strip()]
+        return ["có", "yes", "y", "ok", "đồng ý", "xác nhận", "confirm", "1"]
 
 
 # ═══════════════════════════════════════════════════════════════════════════
 # Context Builder
 # ═══════════════════════════════════════════════════════════════════════════
 
-def build_server_context_block(server_context: dict) -> str:
+def build_server_context_block(server_context: dict, cfg: AgentConfig) -> str:
     """Build compact server context string for LLM prompt."""
     if not server_context:
         return "No server data available yet."
@@ -88,12 +193,13 @@ def build_server_context_block(server_context: dict) -> str:
         parts.append(f"Server: {name} ({members} members)")
 
     if categories:
-        cat_lines = [f"  {c.get('id', '?')}: {c.get('name', '?')}" for c in categories[:20]]
+        cat_lines = [f"  {c.get('id', '?')}: {c.get('name', '?')}"
+                     for c in categories[:cfg.context_max_categories]]
         parts.append("Categories:\n" + "\n".join(cat_lines))
 
     if channels:
         ch_lines = []
-        for ch in channels[:40]:
+        for ch in channels[:cfg.context_max_channels]:
             ch_type = ch.get("type", "text")
             cat_id = ch.get("category_id", "none")
             ch_lines.append(f"  {ch.get('id', '?')}: #{ch.get('name', '?')} ({ch_type}) [cat:{cat_id}]")
@@ -101,7 +207,7 @@ def build_server_context_block(server_context: dict) -> str:
 
     if roles:
         role_lines = [f"  {r.get('id', '?')}: @{r.get('name', '?')} (pos:{r.get('position', 0)})"
-                      for r in roles[:20] if r.get("name") != "@everyone"]
+                      for r in roles[:cfg.context_max_roles] if r.get("name") != "@everyone"]
         parts.append("Roles:\n" + "\n".join(role_lines))
 
     return "\n\n".join(parts) if parts else "Server is empty or bot has no cached data."
@@ -132,7 +238,7 @@ def _deserialize_tool_calls(data: List[Dict[str, Any]]) -> List[NormalizedToolCa
 # ═══════════════════════════════════════════════════════════════════════════
 
 class UnifiedAgent:
-    """Agentic AI assistant with Plan → Execute → Reflect loop."""
+    """Spec-driven Agentic AI assistant with Plan → Execute → Reflect loop."""
 
     def __init__(
         self,
@@ -140,41 +246,67 @@ class UnifiedAgent:
         mcp_client: MCPClient,
         context_service: ContextService,
         db=None,
-        registry=None,
+        registry: Optional[SpecRegistry] = None,
     ) -> None:
         self._llm = llm
         self._mcp_client = mcp_client
         self._context_service = context_service
+        self._registry = registry
 
-        # Pattern 1: Normalizer
-        self._normalizer = LLMResponseNormalizer(tool_name_map=TOOL_NAME_MAP)
+        # ── Config (env vars > YAML defaults > hardcoded fallback) ──
+        self._cfg = AgentConfig(registry)
 
-        # Pattern 2: Request Store
-        self._requests = RequestStore(default_ttl=300.0)
+        # ── Derived from SpecRegistry (zero hard-code) ──
+        if registry:
+            self._tool_definitions = registry.get_llm_definitions()
+            self._tool_name_map = registry.get_tool_name_map()
+            self._high_risk_tools = registry.get_high_risk_tools()
+        else:
+            # Fallback: import from legacy file (graceful degradation)
+            from app.core.tool_definitions import TOOL_DEFINITIONS, TOOL_NAME_MAP, HIGH_RISK_TOOLS
+            self._tool_definitions = TOOL_DEFINITIONS
+            self._tool_name_map = TOOL_NAME_MAP
+            self._high_risk_tools = HIGH_RISK_TOOLS
+            logger.warning("SpecRegistry not available — using legacy tool_definitions.py")
 
-        # Pattern 3: Middleware Pipeline
+        # ── Pattern 1: Normalizer ──
+        self._normalizer = LLMResponseNormalizer(tool_name_map=self._tool_name_map)
+
+        # ── Pattern 2: Request Store ──
+        self._requests = RequestStore(default_ttl=self._cfg.approval_ttl)
+
+        # ── Pattern 3: Middleware Pipeline ──
         self._memory = ConversationMemory()
         self._audit = AuditLogger(db=db)
         self._pipeline = ExecutionPipeline(
             middlewares=[
                 ErrorBoundaryMiddleware(),
                 AuditMiddleware(self._audit),
-                RateLimitMiddleware(min_delay=0.5, burst_limit=5),
-                RetryMiddleware(max_retries=3, base_delay=1.0),
+                RateLimitMiddleware(
+                    min_delay=self._cfg.rate_limit_delay,
+                    burst_limit=self._cfg.rate_limit_burst,
+                ),
+                RetryMiddleware(
+                    max_retries=self._cfg.retry_max,
+                    base_delay=self._cfg.retry_base_delay,
+                ),
                 MemoryMiddleware(self._memory),
             ],
             executor=self._mcp_execute,
         )
 
-        # Guild Lock
+        # ── Guild Lock ──
         self._guild_lock = GuildLock(
             mode=getattr(settings, "GUILD_LOCK_MODE", "open"),
             allowed_ids=set(int(x) for x in getattr(settings, "ALLOWED_GUILD_IDS", []) if x),
         )
 
         logger.info(
-            "UnifiedAgent v3 (Agentic) initialized: pipeline=%d middlewares, guild_lock=%s",
-            self._pipeline.middleware_count,
+            "UnifiedAgent v3.1 (Spec-Driven) initialized: %d tools visible, %d high-risk, "
+            "max_iter=%d, guild_lock=%s",
+            len(self._tool_definitions),
+            len(self._high_risk_tools),
+            self._cfg.max_iterations,
             self._guild_lock.mode,
         )
 
@@ -206,7 +338,7 @@ class UnifiedAgent:
 
         # === Build context ===
         server_context = await self._context_service.get_server_context(guild_id)
-        context_block = build_server_context_block(server_context)
+        context_block = build_server_context_block(server_context, self._cfg)
         memory_block = self._memory.build_context_block(guild_id)
 
         # === LLM Planning Call ===
@@ -216,9 +348,9 @@ class UnifiedAgent:
             raw_response: LLMResponse = await self._llm.generate(
                 messages=messages,
                 system_prompt=UNIFIED_SYSTEM_PROMPT,
-                tools=TOOL_DEFINITIONS,
-                temperature=0.2,
-                max_tokens=2048,
+                tools=self._tool_definitions,
+                temperature=self._cfg.temp_planning,
+                max_tokens=self._cfg.max_tokens_planning,
             )
         except Exception as e:
             logger.error("LLM call failed: %s", e, exc_info=True)
@@ -257,27 +389,24 @@ class UnifiedAgent:
         guild_id: int,
         user_id: int,
     ) -> Dict[str, Any]:
-        """Core agentic loop: Pre-flight → Execute → Observe → Reflect → Adapt.
-
-        This method handles the ENTIRE lifecycle from tool calls to final response.
-        It NEVER calls itself recursively. Instead it loops cleanly.
-        """
+        """Core agentic loop: Pre-flight → Execute → Observe → Reflect → Adapt."""
         all_results: List[Dict[str, Any]] = []
         current_tool_calls = tool_calls
         original_message = req.get_payload("original_message", "")
 
-        for iteration in range(1, MAX_AGENTIC_ITERATIONS + 1):
+        for iteration in range(1, self._cfg.max_iterations + 1):
             logger.info("Agentic iteration %d/%d (guild=%d, tools=%d)",
-                        iteration, MAX_AGENTIC_ITERATIONS, guild_id, len(current_tool_calls))
+                        iteration, self._cfg.max_iterations, guild_id, len(current_tool_calls))
 
             # ┌─────────────────────────────────────────────────────┐
             # │ PHASE 1: PRE-FLIGHT APPROVAL CHECK                  │
-            # │ Scan all tools BEFORE executing any.                │
-            # │ If high-risk found → batch confirm, pause here.     │
             # └─────────────────────────────────────────────────────┘
-            has_high_risk = any(tc.mcp_name in _HIGH_RISK_TOOLS for tc in current_tool_calls)
+            high_risk_in_batch = [
+                tc for tc in current_tool_calls
+                if tc.mcp_name in self._high_risk_tools
+            ]
 
-            if has_high_risk:
+            if high_risk_in_batch:
                 req.transition(RequestState.AWAITING_APPROVAL)
                 req.set_payload("pending_batch", {
                     "tool_calls": _serialize_tool_calls(current_tool_calls),
@@ -285,17 +414,16 @@ class UnifiedAgent:
                     "iteration": iteration,
                 })
 
-                # Build description of ALL high-risk actions
-                desc_lines = []
-                for tc in current_tool_calls:
-                    if tc.mcp_name in _HIGH_RISK_TOOLS:
-                        desc_lines.append(f"• {self._describe_action(tc.name, tc.arguments)}")
+                # Build description using registry labels
+                desc_lines = [
+                    f"• {self._get_action_label(tc.mcp_name, tc.arguments)}"
+                    for tc in high_risk_in_batch
+                ]
                 desc = "\n".join(desc_lines)
-                count = len(desc_lines)
 
                 return self._response(
                     "confirm_needed",
-                    f"🔒 **Cần xác nhận {count} hành động nguy hiểm:**\n{desc}\n\n"
+                    f"🔒 **Cần xác nhận {len(desc_lines)} hành động nguy hiểm:**\n{desc}\n\n"
                     f"❓ **Xác nhận thực hiện TẤT CẢ?** (reply `có` / `yes` để tiếp tục, `không` / `no` để hủy)",
                     all_results,
                 )
@@ -322,7 +450,7 @@ class UnifiedAgent:
             reflection = await self._reflect(original_message, all_results)
 
             if reflection["status"] != "continue":
-                break  # Done or failed → exit loop
+                break
 
             # ┌─────────────────────────────────────────────────────┐
             # │ PHASE 5: ADAPT — Replan with fresh context          │
@@ -332,7 +460,7 @@ class UnifiedAgent:
 
             next_tool_calls = await self._replan(original_message, all_results, next_steps, guild_id)
             if not next_tool_calls:
-                break  # Cannot plan more → exit
+                break
 
             current_tool_calls = next_tool_calls
 
@@ -344,7 +472,7 @@ class UnifiedAgent:
         return self._response("action", content, all_results)
 
     # ─────────────────────────────────────────────────────────────────────
-    # Confirmation Handler (resumes agentic loop after approval)
+    # Confirmation Handler
     # ─────────────────────────────────────────────────────────────────────
 
     async def _handle_confirmation(
@@ -354,7 +482,7 @@ class UnifiedAgent:
     ) -> Dict[str, Any]:
         """Handle user's yes/no reply. On approval, resumes execution of ALL pending tools."""
         msg_lower = message.lower().strip()
-        affirmative = msg_lower in ("có", "yes", "y", "ok", "đồng ý", "xác nhận", "confirm", "1")
+        affirmative = msg_lower in self._cfg.confirmation_words
 
         pending = req.get_payload("pending_batch", {})
         guild_id = req.guild_id
@@ -373,7 +501,7 @@ class UnifiedAgent:
         original_message = req.get_payload("original_message", "")
         iteration = pending.get("iteration", 1)
 
-        # Deserialize and execute all tools (including high-risk — already approved)
+        # Deserialize and execute all tools
         tool_calls = _deserialize_tool_calls(tool_calls_data)
         batch_results = await self._run_tool_batch(tool_calls, guild_id, user_id, req)
         all_results.extend(batch_results)
@@ -386,30 +514,33 @@ class UnifiedAgent:
             pass
 
         # === Continue agentic loop (reflect → adapt) ===
-        for loop_iter in range(iteration + 1, MAX_AGENTIC_ITERATIONS + 1):
+        for loop_iter in range(iteration + 1, self._cfg.max_iterations + 1):
             reflection = await self._reflect(original_message, all_results)
 
             if reflection["status"] != "continue":
                 break
 
             next_steps = reflection.get("next_steps", [])
-            logger.info("Post-approval agentic continue (iter %d): %s", loop_iter, next_steps)
-
             next_tool_calls = await self._replan(original_message, all_results, next_steps, guild_id)
             if not next_tool_calls:
                 break
 
-            # Check if new batch has high-risk (need another approval)
-            has_high_risk = any(tc.mcp_name in _HIGH_RISK_TOOLS for tc in next_tool_calls)
-            if has_high_risk:
+            # Check if new batch has high-risk
+            high_risk_in_batch = [
+                tc for tc in next_tool_calls
+                if tc.mcp_name in self._high_risk_tools
+            ]
+            if high_risk_in_batch:
                 req.transition(RequestState.AWAITING_APPROVAL)
                 req.set_payload("pending_batch", {
                     "tool_calls": _serialize_tool_calls(next_tool_calls),
                     "results_so_far": all_results,
                     "iteration": loop_iter,
                 })
-                desc_lines = [f"• {self._describe_action(tc.name, tc.arguments)}"
-                              for tc in next_tool_calls if tc.mcp_name in _HIGH_RISK_TOOLS]
+                desc_lines = [
+                    f"• {self._get_action_label(tc.mcp_name, tc.arguments)}"
+                    for tc in high_risk_in_batch
+                ]
                 return self._response(
                     "confirm_needed",
                     f"🔒 **Tiếp tục cần xác nhận {len(desc_lines)} hành động:**\n"
@@ -444,7 +575,7 @@ class UnifiedAgent:
         user_id: int,
         req: RequestLifecycle,
     ) -> List[Dict[str, Any]]:
-        """Execute a batch of tool calls sequentially. No approval checks here."""
+        """Execute a batch of tool calls sequentially."""
         results = []
         for tc in tool_calls:
             params = dict(tc.arguments)
@@ -455,7 +586,7 @@ class UnifiedAgent:
                 params=params,
                 guild_id=guild_id,
                 user_id=user_id,
-                risk_level="high" if tc.mcp_name in _HIGH_RISK_TOOLS else "medium",
+                risk_level="high" if tc.mcp_name in self._high_risk_tools else "medium",
                 request_id=req.id,
             )
             result = await self._pipeline.execute(ctx)
@@ -464,7 +595,7 @@ class UnifiedAgent:
         return results
 
     # ─────────────────────────────────────────────────────────────────────
-    # Reflect (is goal achieved?)
+    # Reflect
     # ─────────────────────────────────────────────────────────────────────
 
     async def _reflect(
@@ -473,18 +604,19 @@ class UnifiedAgent:
         results: List[Dict[str, Any]],
     ) -> Dict[str, Any]:
         """Determine if the user's goal has been fully achieved."""
-        # Fast path: simple request + all success → skip LLM call
         all_success = all(r["success"] for r in results)
+
+        # Fast path: simple + all success → skip LLM
         if all_success and len(results) <= 2:
             return {"status": "done"}
 
-        # Any failure → don't loop (report to user)
+        # Any failure → report to user (don't loop)
         if not all_success:
-            return {"status": "done"}  # Let assemble explain the failures
+            return {"status": "done"}
 
-        # Complex success (3+ tools) → ask LLM
+        # Complex success → ask LLM
         result_summary = "\n".join(
-            f"{'✓' if r['success'] else '✗'} {r.get('tool','?')}: success"
+            f"{'✓' if r['success'] else '✗'} {r.get('tool', '?')}: success"
             for r in results
         )
         reflect_input = f"Original goal: {original_message}\nExecution results:\n{result_summary}"
@@ -494,23 +626,21 @@ class UnifiedAgent:
                 messages=[{"role": "user", "content": reflect_input}],
                 system_prompt=REFLECT_PROMPT,
                 tools=None,
-                temperature=0.1,
-                max_tokens=256,
+                temperature=self._cfg.temp_reflect,
+                max_tokens=self._cfg.max_tokens_reflect,
             )
             if response and response.content:
                 text = response.content.strip()
-                # Handle markdown code blocks
                 if text.startswith("```"):
                     text = text.split("\n", 1)[-1].rsplit("```", 1)[0].strip()
                 return json.loads(text)
         except (json.JSONDecodeError, Exception) as e:
             logger.warning("Reflection failed: %s", e)
 
-        # Fallback: assume done
         return {"status": "done"}
 
     # ─────────────────────────────────────────────────────────────────────
-    # Replan (get next tool calls for remaining steps)
+    # Replan
     # ─────────────────────────────────────────────────────────────────────
 
     async def _replan(
@@ -522,11 +652,11 @@ class UnifiedAgent:
     ) -> Optional[List[NormalizedToolCall]]:
         """Ask LLM for next tool calls based on what's done and what's needed."""
         server_context = await self._context_service.get_server_context(guild_id, force_refresh=True)
-        context_block = build_server_context_block(server_context)
+        context_block = build_server_context_block(server_context, self._cfg)
 
         result_summary = "\n".join(
-            f"{'✓' if r['success'] else '✗'} {r.get('tool','?')}: "
-            f"{r.get('result', {}).get('name', '') if r['success'] else r.get('error','')}"
+            f"{'✓' if r['success'] else '✗'} {r.get('tool', '?')}: "
+            f"{r.get('result', {}).get('name', '') if r['success'] else r.get('error', '')}"
             for r in results_so_far
         )
 
@@ -542,9 +672,9 @@ class UnifiedAgent:
             response = await self._llm.generate(
                 messages=[{"role": "user", "content": replan_input}],
                 system_prompt=UNIFIED_SYSTEM_PROMPT,
-                tools=TOOL_DEFINITIONS,
-                temperature=0.2,
-                max_tokens=2048,
+                tools=self._tool_definitions,
+                temperature=self._cfg.temp_planning,
+                max_tokens=self._cfg.max_tokens_planning,
             )
             if response:
                 normalized = self._normalizer.normalize(response)
@@ -556,7 +686,7 @@ class UnifiedAgent:
         return None
 
     # ─────────────────────────────────────────────────────────────────────
-    # Assemble (natural language response)
+    # Assemble
     # ─────────────────────────────────────────────────────────────────────
 
     async def _assemble_response(
@@ -569,10 +699,12 @@ class UnifiedAgent:
         for r in results:
             if r["success"]:
                 data = r.get("result") or {}
-                name = data.get("name") or data.get("channel_name") or data.get("role_name") or ""
-                result_lines.append(f"✓ {r.get('tool','action')}: {name} (success)")
+                # Generic name extraction — works for any tool
+                name = (data.get("name") or data.get("channel_name") or
+                        data.get("role_name") or data.get("id") or "")
+                result_lines.append(f"✓ {r.get('tool', 'action')}: {name} (success)")
             else:
-                result_lines.append(f"✗ {r.get('tool','action')}: FAILED — {r.get('error','unknown')}")
+                result_lines.append(f"✗ {r.get('tool', 'action')}: FAILED — {r.get('error', 'unknown')}")
 
         assemble_input = f"User request: {user_message}\nTool results:\n" + "\n".join(result_lines)
 
@@ -581,15 +713,14 @@ class UnifiedAgent:
                 messages=[{"role": "user", "content": assemble_input}],
                 system_prompt=ASSEMBLE_PROMPT,
                 tools=None,
-                temperature=0.7,
-                max_tokens=512,
+                temperature=self._cfg.temp_assemble,
+                max_tokens=self._cfg.max_tokens_assemble,
             )
             if response and response.content:
                 return response.content.strip()
         except Exception as e:
             logger.warning("Assemble failed, using fallback: %s", e)
 
-        # Fallback
         return self._format_results_fallback(results)
 
     # ─────────────────────────────────────────────────────────────────────
@@ -626,7 +757,7 @@ class UnifiedAgent:
         messages.append({"role": "assistant", "content": "I have the server state. How can I help?"})
 
         if history:
-            for turn in history[-6:]:
+            for turn in history[-self._cfg.context_history_turns:]:
                 role = turn.get("role", "user")
                 content = turn.get("content", "")
                 if role in ("user", "assistant") and content:
@@ -635,9 +766,24 @@ class UnifiedAgent:
         messages.append({"role": "user", "content": user_message})
         return messages
 
+    def _get_action_label(self, mcp_name: str, params: Dict[str, Any]) -> str:
+        """Human-readable label for confirmation prompts — derived from registry."""
+        if self._registry:
+            label = self._registry.get_human_label(mcp_name)
+        else:
+            label = f"⚠️ **{mcp_name}**"
+
+        # Append target info
+        target = (params.get("channel_id") or params.get("role_id") or
+                  params.get("member_id") or params.get("category_id") or
+                  params.get("name") or "")
+        if target:
+            label += f" `{target}`"
+        return label
+
     @staticmethod
     def _result_to_dict(result: ExecutionResult, mcp_name: str) -> Dict[str, Any]:
-        """Convert ExecutionResult to dict for storage/response."""
+        """Convert ExecutionResult to dict."""
         return {
             "tool": mcp_name.split(".")[-1] if "." in mcp_name else mcp_name,
             "mcp_name": mcp_name,
@@ -647,7 +793,8 @@ class UnifiedAgent:
             "duration_ms": result.duration_ms,
         }
 
-    def _format_results_fallback(self, results: List[Dict]) -> str:
+    @staticmethod
+    def _format_results_fallback(results: List[Dict]) -> str:
         """Mechanical formatting fallback when LLM assemble fails."""
         lines = []
         for r in results:
@@ -657,26 +804,8 @@ class UnifiedAgent:
                 action = r.get("tool", "action")
                 lines.append(f"✅ {action}: {name}" if name else f"✅ {action}")
             else:
-                lines.append(f"❌ {r.get('tool','action')}: {r.get('error','failed')}")
+                lines.append(f"❌ {r.get('tool', 'action')}: {r.get('error', 'failed')}")
         return "\n".join(lines) or "Done."
-
-    def _describe_action(self, tool_name: str, params: Dict[str, Any]) -> str:
-        """Human-readable description for confirmation prompts."""
-        descriptions = {
-            "delete_channel": "🗑️ **Xóa kênh**",
-            "delete_category": "🗑️ **Xóa danh mục**",
-            "delete_role": "🗑️ **Xóa role**",
-            "kick_member": "👢 **Kick thành viên**",
-            "ban_member": "🔨 **Ban thành viên**",
-            "timeout_member": "🔇 **Timeout thành viên**",
-        }
-        desc = descriptions.get(tool_name, f"⚠️ **{tool_name}**")
-        target = (params.get("channel_id") or params.get("role_id") or
-                  params.get("member_id") or params.get("category_id") or
-                  params.get("name") or "")
-        if target:
-            desc += f" `{target}`"
-        return desc
 
     @staticmethod
     def _response(type_: str, content: str, tool_results: Optional[List] = None) -> Dict[str, Any]:

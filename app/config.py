@@ -62,6 +62,21 @@ class Config:
         self.ENABLE_BEDROCK_LLM: bool = os.environ.get('ENABLE_BEDROCK_LLM', 'False').lower() == 'true'
         self.AWS_REGION: str = os.environ.get('AWS_REGION', 'us-east-1')
         self.BEDROCK_MODEL_ID: str = os.environ.get('BEDROCK_MODEL_ID', '')
+
+        # Agentic Loop Configuration (override YAML defaults via env vars)
+        self.AGENTIC_MAX_ITERATIONS: int = int(os.environ.get('AGENTIC_MAX_ITERATIONS', '0'))
+        self.LLM_TEMP_PLANNING: float = float(os.environ.get('LLM_TEMP_PLANNING', '0'))
+        self.LLM_TEMP_REFLECT: float = float(os.environ.get('LLM_TEMP_REFLECT', '0'))
+        self.LLM_TEMP_ASSEMBLE: float = float(os.environ.get('LLM_TEMP_ASSEMBLE', '0'))
+        self.LLM_MAX_TOKENS_PLANNING: int = int(os.environ.get('LLM_MAX_TOKENS_PLANNING', '0'))
+        self.CONTEXT_MAX_CATEGORIES: int = int(os.environ.get('CONTEXT_MAX_CATEGORIES', '0'))
+        self.CONTEXT_MAX_CHANNELS: int = int(os.environ.get('CONTEXT_MAX_CHANNELS', '0'))
+        self.CONTEXT_MAX_ROLES: int = int(os.environ.get('CONTEXT_MAX_ROLES', '0'))
+        self.CONTEXT_HISTORY_TURNS: int = int(os.environ.get('CONTEXT_HISTORY_TURNS', '0'))
+        self.APPROVAL_TTL: int = int(os.environ.get('APPROVAL_TTL', '0'))
+        self.RATE_LIMIT_BURST: int = int(os.environ.get('RATE_LIMIT_BURST', '0'))
+        self.RETRY_MAX: int = int(os.environ.get('RETRY_MAX', '0'))
+        self.CONFIRMATION_WORDS: str = os.environ.get('CONFIRMATION_WORDS', '')
         
         self._initialized = True
     

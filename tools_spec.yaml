@@ -38,6 +38,69 @@ metadata:
     - audit
     - templates
 
+  # ──────────────────────────────────────────────────────────────────────────
+  # LLM Configuration — controls what the agent can "see" and use
+  # Adding a new tool to the agent? Just add it here + define it below.
+  # ──────────────────────────────────────────────────────────────────────────
+  llm_config:
+    # Tools the LLM can call via function calling.
+    # Format: { short_name: full_mcp_name }
+    # short_name = what Gemini sees as function name (concise, no dots)
+    # full_mcp_name = actual MCP routing target
+    visible_tools:
+      create_channel: discord.channels.create
+      edit_channel: discord.channels.edit
+      delete_channel: discord.channels.delete
+      move_channel: discord.channels.move
+      create_category: discord.categories.create
+      edit_category: discord.categories.edit
+      delete_category: discord.categories.delete
+      create_role: discord.roles.create
+      edit_role: discord.roles.modify
+      delete_role: discord.roles.delete
+      assign_role: discord.roles.assign
+      remove_role: discord.roles.remove
+      kick_member: discord.members.kick
+      ban_member: discord.members.ban
+      timeout_member: discord.members.timeout
+      setup_verification: discord.features.setup_verification
+      create_poll: discord.features.create_poll
+
+    # Human-readable labels for confirmation prompts (only high-risk tools need this)
+    # If not listed here, auto-generates from description field.
+    human_labels:
+      discord.channels.delete: "🗑️ Xóa kênh"
+      discord.categories.delete: "🗑️ Xóa danh mục"
+      discord.roles.delete: "🗑️ Xóa role"
+      discord.members.kick: "👢 Kick thành viên"
+      discord.members.ban: "🔨 Ban thành viên"
+      discord.members.bulk_ban: "🔨 Ban hàng loạt"
+      discord.members.timeout: "🔇 Timeout thành viên"
+      discord.members.purge: "🗑️ Xóa tin nhắn hàng loạt"
+      discord.backup.restore: "⚠️ Khôi phục backup toàn server"
+      discord.community.toggle: "⚠️ Bật/tắt Community"
+      discord.safety.set_mfa: "⚠️ Thay đổi yêu cầu 2FA"
+
+    # Agentic loop settings (overridable via env vars)
+    defaults:
+      max_iterations: 5
+      temperature_planning: 0.2
+      temperature_reflect: 0.1
+      temperature_assemble: 0.7
+      max_tokens_planning: 2048
+      max_tokens_reflect: 256
+      max_tokens_assemble: 512
+      context_max_categories: 20
+      context_max_channels: 40
+      context_max_roles: 20
+      context_history_turns: 6
+      approval_ttl_seconds: 300
+      rate_limit_burst: 5
+      rate_limit_min_delay: 0.5
+      retry_max_attempts: 3
+      retry_base_delay: 1.0
+      confirmation_words: "có,yes,y,ok,đồng ý,xác nhận,confirm,1"
+
 # ============================================================================
 # CHANNELS
 # ============================================================================

@@ -1,4 +1,4 @@
-"""Spec Loader — Reads tools_spec.yaml and provides structured access.
+"""Spec Loader — Reads tools_spec.yaml and provides structured access (v3).
 
 This is the central registry. All other components (graph, schema generator,
 runtime filter, MCP tool definitions) derive from this single source of truth.
@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import logging
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Set
+from typing import Any, Dict, FrozenSet, List, Optional, Set
 
 import yaml
 
@@ -91,6 +91,10 @@ class SpecRegistry:
         self._tools: Dict[str, ToolSpec] = {}
         self._metadata: Dict[str, Any] = raw.get("metadata", {})
         self._global_edges: List[Dict[str, str]] = raw.get("graph_global_edges", [])
+        self._llm_config: Dict[str, Any] = self._metadata.get("llm_config", {})
+        self._visible_tools: Dict[str, str] = self._llm_config.get("visible_tools", {})
+        self._human_labels: Dict[str, str] = self._llm_config.get("human_labels", {})
+        self._defaults: Dict[str, Any] = self._llm_config.get("defaults", {})
         self._parse_tools()
 
     def _parse_tools(self) -> None:
@@ -142,6 +146,97 @@ class SpecRegistry:
     def get_global_edges(self) -> List[Dict[str, str]]:
         """Get cross-module graph edges."""
         return self._global_edges
+
+    # ------------------------------------------------------------------
+    # LLM Integration (v3 — derive everything from spec)
+    # ------------------------------------------------------------------
+
+    def get_tool_name_map(self) -> Dict[str, str]:
+        """Get LLM short name → MCP full name mapping.
+
+        Derived from metadata.llm_config.visible_tools.
+        Example: {"create_channel": "discord.channels.create"}
+        """
+        return dict(self._visible_tools)
+
+    def get_high_risk_tools(self) -> FrozenSet[str]:
+        """Auto-derive high-risk tools from risk_level field.
+
+        Returns frozenset of MCP tool names where risk_level is 'high' or 'critical'.
+        No manual maintenance needed — add a tool with risk_level: high in YAML
+        and it automatically requires approval.
+        """
+        return frozenset(
+            name for name, spec in self._tools.items()
+            if spec.risk_level in ("high", "critical")
+        )
+
+    def get_llm_definitions(self) -> List[Dict[str, Any]]:
+        """Generate TOOL_DEFINITIONS list for LLM function calling.
+
+        Only includes tools listed in metadata.llm_config.visible_tools.
+        Schema is optimized for Gemini (no guild_id in schema — injected at runtime).
+        """
+        definitions = []
+        for short_name, mcp_name in self._visible_tools.items():
+            tool = self.get_tool(mcp_name)
+            if tool is None:
+                logger.warning("LLM visible tool '%s' → '%s' not found in spec", short_name, mcp_name)
+                continue
+            definitions.append(self._build_llm_schema(short_name, tool))
+        return definitions
+
+    def get_human_label(self, mcp_name: str) -> str:
+        """Get human-readable label for confirmation prompts.
+
+        Falls back to tool description if no explicit label defined.
+        """
+        if mcp_name in self._human_labels:
+            return self._human_labels[mcp_name]
+        tool = self.get_tool(mcp_name)
+        if tool:
+            return f"⚠️ {tool.description}"
+        return f"⚠️ {mcp_name}"
+
+    def get_default(self, key: str, fallback: Any = None) -> Any:
+        """Get a default value from llm_config.defaults.
+
+        Used by UnifiedAgent for tunable parameters (temperature, limits, etc).
+        """
+        return self._defaults.get(key, fallback)
+
+    def _build_llm_schema(self, short_name: str, tool: ToolSpec) -> Dict[str, Any]:
+        """Build a single LLM-compatible tool definition from ToolSpec.
+
+        Format matches Gemini function_declarations format:
+        {name, description, parameters: {properties: {...}, required: [...]}}
+        """
+        properties: Dict[str, Any] = {}
+        required: List[str] = []
+
+        # Required params
+        for param_name, param_def in tool.required_params.items():
+            if isinstance(param_def, dict):
+                properties[param_name] = self._param_to_json_schema(param_def)
+                required.append(param_name)
+
+        # Shared params (optional)
+        for param_name, param_def in tool.shared_params.items():
+            if isinstance(param_def, dict):
+                properties[param_name] = self._param_to_json_schema(param_def)
+
+        # Context params — flattened (Gemini can't handle conditional schemas)
+        for ctx_name, ctx_params in tool.context_params.items():
+            for param_name, param_def in ctx_params.items():
+                if param_name not in properties and isinstance(param_def, dict):
+                    schema = self._param_to_json_schema(param_def)
+                    properties[param_name] = schema
+
+        return {
+            "name": short_name,
+            "description": tool.description,
+            "parameters": {"properties": properties, "required": required},
+        }
 
     # ------------------------------------------------------------------
     # Schema generation (for MCP / LLM)
