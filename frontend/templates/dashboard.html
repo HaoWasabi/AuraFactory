@@ -101,6 +101,13 @@
 .audit-entry{padding:6px 0;border-bottom:1px solid var(--border-subtle);font-size:12px}
 .audit-ok{color:var(--success)}
 .audit-fail{color:var(--danger)}
+/* Confirm buttons */
+.confirm-btns{display:flex;gap:8px;margin-top:10px}
+.confirm-btns button{padding:6px 16px;border-radius:6px;border:none;font-size:13px;font-weight:500;cursor:pointer;transition:0.2s}
+.btn-yes{background:var(--success);color:#fff}
+.btn-yes:hover{background:#16a34a}
+.btn-no{background:var(--danger);color:#fff}
+.btn-no:hover{background:#dc2626}
 
 /* Responsive */
 @media(max-width:768px){.side{display:none}.rpanel{display:none}}
@@ -268,7 +275,7 @@ function renderGuildMenu(d){
   if(pendingList.length){
     pHtml='<div class="guild-section-title">+ Invite Bot</div>';
     pendingList.forEach(function(g){
-      pHtml+='<div class="guild-item" onclick="inviteBot(\''+g.invite_url+'\',\''+escHtml(g.guild_name)+'\')">'
+      pHtml+='<div class="guild-item guild-invite-item" data-url="'+(g.invite_url||'')+'" data-name="'+escHtml(g.guild_name)+'">'
         +escHtml(g.guild_name)+'<span class="badge badge-invite">invite</span></div>';
     });
   }
@@ -288,7 +295,7 @@ function toggleGuildMenu(){
   menu.classList.toggle('hidden');
 }
 function inviteBot(url,name){
-  if(!url){
+  if(!url||url==='undefined'||url==='null'||!url.startsWith('http')){
     alert('Không tìm thấy link invite. Vui lòng thử lại.');
     return;
   }
@@ -413,6 +420,15 @@ function deleteSession(sid){
     loadSessions();
   });
 }
+function confirmAction(yes,btn){
+  // Disable buttons after click
+  var btns=btn.parentElement;
+  btns.querySelectorAll('button').forEach(function(b){b.disabled=true;b.style.opacity='0.5';});
+  // Send confirmation message
+  var msg=yes?(lang==='vi'?'có':'yes'):(lang==='vi'?'không':'no');
+  appendUserMsg(msg);
+  sendStream(msg);
+}
 
 // === Chat ===
 function sendMsg(){
@@ -454,7 +470,15 @@ function sendStream(text){
     div.classList.remove('streaming');
     if(!d){div.innerHTML='<span style="color:var(--danger)">No response</span>';return;}
     if(d.ok&&d.content){
-      div.innerHTML=marked.parse(d.content);
+      if(d.type==='confirm_needed'){
+        div.innerHTML=marked.parse(d.content)
+          +'<div class="confirm-btns">'
+          +'<button class="btn-yes" onclick="confirmAction(true,this)">✓ '+(lang==='vi'?'Có':'Yes')+'</button>'
+          +'<button class="btn-no" onclick="confirmAction(false,this)">✗ '+(lang==='vi'?'Không':'No')+'</button>'
+          +'</div>';
+      }else{
+        div.innerHTML=marked.parse(d.content);
+      }
     }else if(d.error){
       div.innerHTML='<span style="color:var(--danger)">'+marked.parse(d.error)+'</span>';
     }else{
@@ -542,6 +566,13 @@ if(initAuth()){setLang(lang);loadGuilds();}
 // === Close guild menu on outside click ===
 document.addEventListener('click',function(e){
   if(!e.target.closest('.guild-picker'))document.getElementById('guildMenu').classList.add('hidden');
+  // Invite bot via event delegation (avoids inline onclick escaping issues)
+  var inviteEl=e.target.closest('.guild-invite-item');
+  if(inviteEl){
+    var url=inviteEl.getAttribute('data-url');
+    var name=inviteEl.getAttribute('data-name');
+    inviteBot(url,name);
+  }
 });
 </script>
 </body>

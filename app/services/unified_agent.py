@@ -47,7 +47,7 @@ logger = logging.getLogger(__name__)
 # Prompt & Tool Definitions (separated for maintainability)
 # ═══════════════════════════════════════════════════════════════════════════
 
-from app.prompts.system_prompt import UNIFIED_SYSTEM_PROMPT
+from app.prompts.system_prompt import UNIFIED_SYSTEM_PROMPT, ASSEMBLE_PROMPT
 from app.core.tool_definitions import TOOL_DEFINITIONS, TOOL_NAME_MAP, HIGH_RISK_TOOLS
 
 # Backward-compatible alias
@@ -186,6 +186,7 @@ class UnifiedAgent:
 
         # === Create new request lifecycle ===
         req = self._requests.create(guild_id, user_id, message)
+        req.set_payload("original_message", message)
         req.transition(RequestState.PLANNING)
 
         # === Build context ===
@@ -295,7 +296,12 @@ class UnifiedAgent:
         except Exception as e:
             logger.warning("Context invalidation failed (non-fatal): %s", e)
 
-        content = self._format_results(results, normalized.text)
+        # Assemble natural language response via second LLM call
+        content = await self._assemble_response(
+            user_message=req.get_payload("original_message", ""),
+            results=results,
+            llm_text=normalized.text,
+        )
         return self._response("action", content, results)
 
     # ─────────────────────────────────────────────────────────────────────
@@ -348,8 +354,59 @@ class UnifiedAgent:
         except Exception:
             pass
 
-        content = self._format_results(results, pending.get("llm_text", ""))
+        content = await self._assemble_response(
+            user_message=req.get_payload("original_message", ""),
+            results=results,
+            llm_text=pending.get("llm_text", ""),
+        )
         return self._response("action", content, results)
+
+    # ─────────────────────────────────────────────────────────────────────
+    # Assemble Response (2nd LLM call — natural language formatting)
+    # ─────────────────────────────────────────────────────────────────────
+
+    async def _assemble_response(
+        self,
+        user_message: str,
+        results: List[Dict[str, Any]],
+        llm_text: str,
+    ) -> str:
+        """Call LLM a second time to assemble a friendly, natural response.
+
+        Falls back to _format_results() if the second LLM call fails.
+        """
+        # Build a compact summary of results for the assembler
+        result_lines = []
+        for r in results:
+            if r["success"]:
+                data = r.get("result") or {}
+                name = data.get("name") or data.get("channel_name") or data.get("role_name") or ""
+                result_lines.append(f"✓ {r.get('tool','action')}: {name} (success)")
+            else:
+                result_lines.append(f"✗ {r.get('tool','action')}: FAILED — {r.get('error','unknown')}")
+
+        assemble_input = (
+            f"User request: {user_message}\n"
+            f"Tool results:\n" + "\n".join(result_lines)
+        )
+        if llm_text:
+            assemble_input += f"\nLLM planning text: {llm_text}"
+
+        try:
+            response = await self._llm.generate(
+                messages=[{"role": "user", "content": assemble_input}],
+                system_prompt=ASSEMBLE_PROMPT,
+                tools=None,
+                temperature=0.7,
+                max_tokens=512,
+            )
+            if response and response.text:
+                return response.text
+        except Exception as e:
+            logger.warning("Assemble LLM call failed, falling back: %s", e)
+
+        # Fallback to mechanical formatting
+        return self._format_results(results, llm_text)
 
     # ─────────────────────────────────────────────────────────────────────
     # Pipeline Executor (innermost — actual MCP call)
