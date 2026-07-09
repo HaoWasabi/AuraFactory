@@ -290,8 +290,23 @@ class GeminiLLM(BaseLLM):
         content = ""
         tool_calls = []
         
-        if response.parts:
-            for part in response.parts:
+        # Access parts via candidates (more reliable than response.parts convenience property)
+        parts = None
+        try:
+            parts = response.parts  # Try convenience property first
+        except (ValueError, IndexError, AttributeError):
+            pass
+        if not parts:
+            # Fallback: access directly via candidates
+            try:
+                parts = response.candidates[0].content.parts if response.candidates else None
+                if parts:
+                    logger.debug("Used candidates[0].content.parts fallback (response.parts was empty)")
+            except (AttributeError, IndexError):
+                parts = None
+
+        if parts:
+            for part in parts:
                 if hasattr(part, "text"):
                     content = part.text
                 
