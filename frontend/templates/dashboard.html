@@ -282,7 +282,13 @@ function toggleGuildMenu(){
   menu.classList.toggle('hidden');
 }
 function inviteBot(url,name){
-  window.open(url,'_blank');
+  if(!url){
+    alert('Không tìm thấy link invite. Vui lòng thử lại.');
+    return;
+  }
+  // Use a link click to avoid popup blocker
+  var a=document.createElement('a');a.href=url;a.target='_blank';a.rel='noopener';
+  document.body.appendChild(a);a.click();document.body.removeChild(a);
   document.getElementById('guildMenu').classList.add('hidden');
   // Show polling notification
   var el=document.getElementById('msgs');
@@ -484,8 +490,9 @@ function renderStructure(d){
   if(d.categories_detail&&d.categories_detail.length){d.categories_detail.forEach(function(cat){
     html+='<div class="tree-cat">\u25BC '+escHtml(cat.name)+'</div>';
     (cat.channels||[]).forEach(function(ch){
-      var icon=ch.type==='voice'?'\ud83d\udd0a ':'# ';
-      html+='<div class="tree-ch">'+icon+escHtml(ch.name)+'</div>';
+      var icon=ch.type==='voice'?'\ud83d\udd0a ':ch.type==='stage'?'\ud83d\udce2 ':ch.type==='forum'?'\ud83d\udcac ':'# ';
+      var priv=ch.is_private?' <span style="color:var(--text-muted);font-size:11px">\ud83d\udd12</span>':'';
+      html+='<div class="tree-ch">'+icon+escHtml(ch.name)+priv+'</div>';
     });
   });}
   if(d.roles_detail&&d.roles_detail.length){html+='<div class="tree-cat" style="margin-top:12px">\ud83d\udc51 Roles</div>';

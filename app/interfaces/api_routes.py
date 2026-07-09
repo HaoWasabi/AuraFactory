@@ -343,7 +343,7 @@ def create_api_router(services: dict) -> APIRouter:
                     cat_name = cat_id_to_name.get(cat_id, "Uncategorized")
                     if cat_name not in grouped:
                         grouped[cat_name] = []
-                    grouped[cat_name].append({"name": ch.get("name", "unknown"), "type": ch_type})
+                    grouped[cat_name].append({"name": ch.get("name", "unknown"), "type": ch_type, "is_private": ch.get("is_private", False)})
 
             categories_structured = []
             for cat_name in cat_id_to_name.values():

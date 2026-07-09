@@ -138,6 +138,7 @@ def role_to_dict(role: nextcord.Role) -> Dict[str, Any]:
 
 def channel_to_dict(channel: nextcord.abc.GuildChannel) -> Dict[str, Any]:
     """Serialize channel to JSON-safe dict."""
+    import nextcord as _nc
     result = {
         "id": str(channel.id),
         "name": channel.name,
@@ -147,6 +148,13 @@ def channel_to_dict(channel: nextcord.abc.GuildChannel) -> Dict[str, Any]:
     }
     if hasattr(channel, "topic") and channel.topic:
         result["topic"] = channel.topic
+    # Detect private: if @everyone role has explicit deny on view_channel
+    try:
+        everyone_role = channel.guild.default_role
+        overwrites = channel.overwrites_for(everyone_role)
+        result["is_private"] = overwrites.view_channel == False
+    except Exception:
+        result["is_private"] = False
     return result
 
 
