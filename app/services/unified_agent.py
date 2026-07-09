@@ -47,11 +47,14 @@ logger = logging.getLogger(__name__)
 # Prompt & Tool Definitions (separated for maintainability)
 # ═══════════════════════════════════════════════════════════════════════════
 
-from app.prompts.system_prompt import UNIFIED_SYSTEM_PROMPT, ASSEMBLE_PROMPT
+from app.prompts.system_prompt import UNIFIED_SYSTEM_PROMPT, ASSEMBLE_PROMPT, REFLECT_PROMPT, PLANNER_PROMPT
 from app.core.tool_definitions import TOOL_DEFINITIONS, TOOL_NAME_MAP, HIGH_RISK_TOOLS
 
 # Backward-compatible alias
 _HIGH_RISK_TOOLS = HIGH_RISK_TOOLS
+
+# Agentic Loop config
+MAX_AGENTIC_ITERATIONS = 5  # Max plan→execute→reflect cycles
 
 # ═══════════════════════════════════════════════════════════════════════════
 # Context Builder
@@ -244,61 +247,90 @@ class UnifiedAgent:
         guild_id: int,
         user_id: int,
     ) -> Dict[str, Any]:
-        """Execute normalized tool calls via middleware pipeline."""
+        """Agentic Loop: Execute → Observe → Reflect → (Continue or Done).
+
+        For simple requests (1-2 tools): executes once, reflects, assembles.
+        For complex requests: may loop up to MAX_AGENTIC_ITERATIONS times.
+        """
         results: List[Dict[str, Any]] = []
+        iteration = 0
+        current_tool_calls = normalized.tool_calls
+        original_message = req.get_payload("original_message", "")
 
-        for tool_call in normalized.tool_calls:
-            params = dict(tool_call.arguments)
-            params["guild_id"] = guild_id
-            mcp_name = tool_call.mcp_name
+        while iteration < MAX_AGENTIC_ITERATIONS:
+            iteration += 1
+            logger.info("Agentic loop iteration %d (guild=%d)", iteration, guild_id)
 
-            # === Approval Gate (risk check) ===
-            if mcp_name in _HIGH_RISK_TOOLS:
-                # Store state and ask user
-                req.transition(RequestState.AWAITING_APPROVAL)
-                req.set_payload("pending_tool", {
-                    "mcp_name": mcp_name,
-                    "display_name": tool_call.name,
-                    "params": params,
-                    "remaining_tools": normalized.tool_calls[normalized.tool_calls.index(tool_call) + 1:],
-                    "llm_text": normalized.text,
-                    "results_so_far": results,
-                })
+            # === EXECUTE: Run current tool calls ===
+            for tool_call in current_tool_calls:
+                params = dict(tool_call.arguments)
+                params["guild_id"] = guild_id
+                mcp_name = tool_call.mcp_name
 
-                desc = self._describe_action(tool_call.name, params)
-                return self._response(
-                    "confirm_needed",
-                    f"{desc}\n\n❓ **Xác nhận thực hiện?** (reply `có` / `yes` để tiếp tục, `không` / `no` để hủy)",
-                    results,
+                # Approval Gate (risk check)
+                if mcp_name in _HIGH_RISK_TOOLS:
+                    req.transition(RequestState.AWAITING_APPROVAL)
+                    req.set_payload("pending_tool", {
+                        "mcp_name": mcp_name,
+                        "display_name": tool_call.name,
+                        "params": params,
+                        "remaining_tools": current_tool_calls[current_tool_calls.index(tool_call) + 1:],
+                        "llm_text": normalized.text,
+                        "results_so_far": results,
+                    })
+                    desc = self._describe_action(tool_call.name, params)
+                    return self._response(
+                        "confirm_needed",
+                        f"{desc}\n\n❓ **Xác nhận thực hiện?** (reply `có` / `yes` để tiếp tục, `không` / `no` để hủy)",
+                        results,
+                    )
+
+                # Execute via Pipeline
+                req.transition(RequestState.EXECUTING)
+                ctx = ExecutionContext(
+                    tool_name=mcp_name,
+                    params=params,
+                    guild_id=guild_id,
+                    user_id=user_id,
+                    risk_level="high" if mcp_name in _HIGH_RISK_TOOLS else "medium",
+                    request_id=req.id,
                 )
+                result = await self._pipeline.execute(ctx)
+                results.append(self._result_to_dict(result, mcp_name))
 
-            # === Execute via Pipeline ===
-            req.transition(RequestState.EXECUTING)
-            ctx = ExecutionContext(
-                tool_name=mcp_name,
-                params=params,
-                guild_id=guild_id,
-                user_id=user_id,
-                risk_level="high" if mcp_name in _HIGH_RISK_TOOLS else "medium",
-                request_id=req.id,
-            )
+            # === OBSERVE: Invalidate cache after changes ===
+            try:
+                if any(r["success"] for r in results):
+                    await self._context_service.invalidate(guild_id)
+            except Exception as e:
+                logger.warning("Context invalidation failed (non-fatal): %s", e)
 
-            result = await self._pipeline.execute(ctx)
-            results.append(self._result_to_dict(result, mcp_name))
+            # === REFLECT: Ask LLM if goal is achieved ===
+            reflection = await self._reflect(original_message, results, guild_id)
 
-        # === Done executing all tools ===
+            if reflection.get("status") == "done" or reflection.get("status") == "failed":
+                break  # Goal achieved or cannot continue
+
+            if reflection.get("status") == "continue":
+                # Re-plan: get next actions from LLM
+                next_steps = reflection.get("next_steps", [])
+                logger.info("Agentic loop continuing: %s", next_steps)
+
+                # Get fresh server context and ask LLM for next tool calls
+                next_tool_calls = await self._replan(
+                    original_message, results, next_steps, guild_id
+                )
+                if not next_tool_calls:
+                    break  # No more actions possible
+                current_tool_calls = next_tool_calls
+            else:
+                break  # Unknown status, stop
+
+        # === ASSEMBLE: Natural language response ===
         req.transition(RequestState.COMPLETED)
 
-        # Invalidate context cache (best-effort)
-        try:
-            if any(r["success"] for r in results):
-                await self._context_service.invalidate(guild_id)
-        except Exception as e:
-            logger.warning("Context invalidation failed (non-fatal): %s", e)
-
-        # Assemble natural language response via second LLM call
         content = await self._assemble_response(
-            user_message=req.get_payload("original_message", ""),
+            user_message=original_message,
             results=results,
             llm_text=normalized.text,
         )
@@ -360,6 +392,99 @@ class UnifiedAgent:
             llm_text=pending.get("llm_text", ""),
         )
         return self._response("action", content, results)
+
+    # ─────────────────────────────────────────────────────────────────────
+    # Agentic Loop: Reflect + Replan
+    # ─────────────────────────────────────────────────────────────────────
+
+    async def _reflect(
+        self,
+        original_message: str,
+        results: List[Dict[str, Any]],
+        guild_id: int,
+    ) -> Dict[str, Any]:
+        """Reflect on execution results — is the goal achieved?
+
+        Returns: {"status": "done"|"continue"|"failed", ...}
+        """
+        # Fast path: if all tools succeeded and it's a simple request (≤2 tools)
+        # skip reflection LLM call to save tokens
+        all_success = all(r["success"] for r in results)
+        if all_success and len(results) <= 2:
+            return {"status": "done"}
+
+        # Build reflection input
+        result_summary = "\n".join(
+            f"{'✓' if r['success'] else '✗'} {r.get('tool','?')}: "
+            f"{'success' if r['success'] else r.get('error','failed')}"
+            for r in results
+        )
+        reflect_input = (
+            f"Original goal: {original_message}\n"
+            f"Execution results:\n{result_summary}"
+        )
+
+        try:
+            response = await self._llm.generate(
+                messages=[{"role": "user", "content": reflect_input}],
+                system_prompt=REFLECT_PROMPT,
+                tools=None,
+                temperature=0.1,
+                max_tokens=256,
+            )
+            if response and response.content:
+                return json.loads(response.content.strip())
+        except (json.JSONDecodeError, Exception) as e:
+            logger.warning("Reflection LLM failed or invalid JSON: %s", e)
+
+        # Fallback: assume done if most succeeded
+        return {"status": "done"} if all_success else {"status": "failed", "reason": "Tool execution errors"}
+
+    async def _replan(
+        self,
+        original_message: str,
+        results_so_far: List[Dict[str, Any]],
+        next_steps_hints: List[str],
+        guild_id: int,
+    ) -> Optional[List[NormalizedToolCall]]:
+        """Re-plan: ask LLM for next tool calls based on reflection hints.
+
+        Returns list of NormalizedToolCalls, or None if no more actions.
+        """
+        # Get fresh server context
+        server_context = await self._context_service.get_server_context(guild_id, force_refresh=True)
+        context_block = build_server_context_block(server_context)
+
+        result_summary = "\n".join(
+            f"{'✓' if r['success'] else '✗'} {r.get('tool','?')}: "
+            f"{r.get('result', {}).get('name', '') if r['success'] else r.get('error','')}"
+            for r in results_so_far
+        )
+
+        replan_input = (
+            f"Original request: {original_message}\n\n"
+            f"Already completed:\n{result_summary}\n\n"
+            f"Still needed:\n" + "\n".join(f"- {s}" for s in next_steps_hints) + "\n\n"
+            f"Current server state:\n{context_block}\n\n"
+            f"Call the appropriate tools for the remaining steps."
+        )
+
+        try:
+            response = await self._llm.generate(
+                messages=[{"role": "user", "content": replan_input}],
+                system_prompt=UNIFIED_SYSTEM_PROMPT,
+                tools=TOOL_DEFINITIONS,
+                temperature=0.2,
+                max_tokens=2048,
+            )
+            if response:
+                normalized = self._normalizer.normalize(response)
+                if normalized.usable and normalized.has_tool_calls:
+                    return normalized.tool_calls
+        except Exception as e:
+            logger.warning("Replan LLM failed: %s", e)
+
+        return None
 
     # ─────────────────────────────────────────────────────────────────────
     # Assemble Response (2nd LLM call — natural language formatting)

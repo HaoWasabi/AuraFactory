@@ -186,6 +186,10 @@ class GeminiLLM(BaseLLM):
         
         if hasattr(response_content, "function_call"):
             func_call = response_content.function_call
+            # Skip empty/malformed function calls (Gemini sometimes returns name="")
+            if not func_call.name:
+                logger.debug("Skipping empty function_call (no name)")
+                return tool_calls
             # func_call.args is a MapComposite (proto struct), convert to dict
             if func_call.args:
                 try:
@@ -293,6 +297,15 @@ class GeminiLLM(BaseLLM):
                 
                 if hasattr(part, "function_call"):
                     tool_calls.extend(self._extract_tool_calls(part))
+        else:
+            # No parts at all — log detailed reason
+            try:
+                candidate = response.candidates[0] if response.candidates else None
+                fr = candidate.finish_reason if candidate else "no_candidates"
+                logger.warning("Gemini returned empty parts. finish_reason=%s, prompt_feedback=%s",
+                               fr, getattr(response, 'prompt_feedback', None))
+            except Exception:
+                logger.warning("Gemini returned empty parts (could not inspect reason)")
         
         # Extract usage stats
         try:
