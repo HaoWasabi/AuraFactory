@@ -267,6 +267,23 @@ def create_api_router(services: dict) -> APIRouter:
         )
         return {"id": str(row["id"]), "created_at": row["created_at"].isoformat()}
 
+    @router.delete("/sessions/{session_id}")
+    async def delete_session(session_id: str, user_id: str):
+        """Delete a chat session (only if owned by user)."""
+        try:
+            sid = uuid.UUID(session_id)
+        except (ValueError, TypeError):
+            raise HTTPException(status_code=400, detail="Invalid session ID")
+        # Verify ownership
+        row = await db.fetchrow(
+            "SELECT id FROM sessions WHERE id = $1 AND user_id = $2",
+            sid, int(user_id),
+        )
+        if not row:
+            raise HTTPException(status_code=404, detail="Session not found or not owned by user")
+        await db.execute("DELETE FROM sessions WHERE id = $1", sid)
+        return {"ok": True, "deleted": session_id}
+
     # ══════════════════════════════════════════════════════════════════
     # Guild Info (right panel)
     # ══════════════════════════════════════════════════════════════════

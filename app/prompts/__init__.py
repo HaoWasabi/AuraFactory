@@ -1,0 +1,4 @@
+"""Prompt templates for AuraFactory AI agents."""
+from app.prompts.system_prompt import UNIFIED_SYSTEM_PROMPT
+
+__all__ = ["UNIFIED_SYSTEM_PROMPT"]

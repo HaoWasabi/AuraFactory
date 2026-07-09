@@ -47,6 +47,10 @@
 .sess-item{padding:8px 10px;border-radius:6px;cursor:pointer;margin-bottom:2px;font-size:13px;color:var(--text-secondary);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .sess-item:hover{background:var(--bg-hover)}
 .sess-item.active{background:var(--accent-primary);color:#fff}
+.sess-item{position:relative;padding-right:30px}
+.sess-del{position:absolute;right:6px;top:50%;transform:translateY(-50%);width:20px;height:20px;border-radius:50%;background:transparent;border:none;color:var(--text-muted);font-size:14px;cursor:pointer;display:none;align-items:center;justify-content:center;line-height:1}
+.sess-item:hover .sess-del{display:flex}
+.sess-del:hover{background:var(--danger);color:#fff}
 .side-info{padding:12px;border-top:1px solid var(--border-subtle);font-size:12px;color:var(--text-muted)}
 .side-info .row{display:flex;justify-content:space-between;padding:3px 0}
 .side-info .val{color:var(--text-secondary)}
@@ -278,11 +282,32 @@ function toggleGuildMenu(){
   menu.classList.toggle('hidden');
 }
 function inviteBot(url,name){
-  if(confirm('Invite AuraFactory bot to "'+name+'"?')){
-    window.open(url,'_blank');
-    setTimeout(function(){loadGuilds();},5000);
-  }
+  window.open(url,'_blank');
   document.getElementById('guildMenu').classList.add('hidden');
+  // Show polling notification
+  var el=document.getElementById('msgs');
+  var notice=document.createElement('div');
+  notice.className='msg msg-bot';
+  notice.innerHTML='<em>⏳ Đang chờ bot được thêm vào "'+escHtml(name)+'"... (tự động kiểm tra)</em>';
+  el.appendChild(notice);el.scrollTop=el.scrollHeight;
+  // Poll every 3s for up to 60s
+  var attempts=0,maxAttempts=20;
+  var pollTimer=setInterval(function(){
+    attempts++;
+    api('GET','/api/auth/guilds?user_id='+userId+'&refresh=true').then(function(d){
+      if(!d)return;
+      var found=(d.ready||[]).find(function(g){return g.guild_name===name;});
+      if(found){
+        clearInterval(pollTimer);
+        notice.innerHTML='✅ Bot đã được thêm vào <strong>'+escHtml(name)+'</strong>! Đang chuyển...';
+        _guildsData=d;renderGuildMenu(d);
+        setTimeout(function(){selectGuild(found.guild_id);},800);
+      }else if(attempts>=maxAttempts){
+        clearInterval(pollTimer);
+        notice.innerHTML='⚠️ Chưa phát hiện bot trong "'+escHtml(name)+'". Hãy thử <a href="#" onclick="loadGuilds();return false;" style="color:var(--accent-primary)">refresh</a>.';
+      }
+    });
+  },3000);
 }
 function selectGuild(id){
   guildId=id;
@@ -324,7 +349,10 @@ function loadSessions(){
     var html='';
     d.sessions.forEach(function(s){
       var cls=s.id===currentSession?'sess-item active':'sess-item';
-      html+='<div class="'+cls+'" data-sid="'+s.id+'" onclick="loadSession(\''+s.id+'\')">'+escHtml(s.first_message||'...')+'</div>';
+      html+='<div class="'+cls+'" data-sid="'+s.id+'" onclick="loadSession(\''+s.id+'\')">'
+        +escHtml(s.first_message||'...')
+        +'<button class="sess-del" onclick="event.stopPropagation();deleteSession(\''+s.id+'\')" title="Delete">×</button>'
+        +'</div>';
     });
     el.innerHTML=html;
   });
@@ -355,6 +383,18 @@ function newChat(){
     if(!d)return;
     currentSession=d.id;
     document.getElementById('msgs').innerHTML='';
+    loadSessions();
+  });
+}
+function deleteSession(sid){
+  if(!confirm(lang==='vi'?'Xóa cuộc trò chuyện này?':'Delete this conversation?'))return;
+  api('DELETE','/api/sessions/'+sid+'?user_id='+userId).then(function(d){
+    if(!d||!d.ok)return;
+    // If deleted the active session, clear chat area
+    if(sid===currentSession){
+      currentSession='';
+      document.getElementById('msgs').innerHTML='';
+    }
     loadSessions();
   });
 }
@@ -407,7 +447,11 @@ function sendStream(text){
     }
     el.scrollTop=el.scrollHeight;
     // Refresh structure after actions
-    if(d.type==='action')loadGuildData();
+    if(d.type==='action'){
+      loadGuildData();   // Refresh structure panel + server info counts
+      loadSessions();    // Refresh session list (new title from conversation)
+      if(activeTab==='audit') loadAudit(); // Refresh audit log if viewing it
+    }
   });
 }
 

@@ -1,7 +1,7 @@
 """Discord MCP Server — routes discord.* tool calls to DiscordConnector.
 
 The new connector uses pure **kwargs pattern — no ToolDefinition objects needed.
-UnifiedAgent already has TOOL_DEFINITIONS hardcoded for Gemini function calling.
+UnifiedAgent imports TOOL_DEFINITIONS from app.core.tool_definitions.
 This server just needs to:
   1. Hold bot reference
   2. Resolve guild from guild_id
@@ -21,7 +21,7 @@ from app.mcp.protocol import MCPRequest, MCPResponse, ToolDefinition, RiskLevel
 logger = logging.getLogger(__name__)
 
 # All supported tool names — used for MCP client routing index
-# These match TOOL_NAME_MAP in services/unified_agent.py
+# These match TOOL_NAME_MAP in app/core/tool_definitions.py
 _ALL_TOOL_NAMES = [
     "discord.channels.create", "discord.channels.edit", "discord.channels.delete",
     "discord.channels.move", "discord.channels.list",
@@ -75,7 +75,7 @@ class DiscordMCPServer(MCPServer):
         """Register all known tool names with a universal handler.
 
         Each tool gets a minimal ToolDefinition (name only) for MCPClient routing.
-        The actual schema lives in TOOL_DEFINITIONS (unified_agent.py) and tools_spec.yaml.
+        The actual schema lives in TOOL_DEFINITIONS (app/core/tool_definitions.py) and tools_spec.yaml.
         """
         for tool_name in _ALL_TOOL_NAMES:
             tool_def = ToolDefinition(
