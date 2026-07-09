@@ -385,6 +385,41 @@ def create_api_router(services: dict) -> APIRouter:
             "updated_services": updated_services,
         }
 
+    class UpdateDiscordTokenRequest(BaseModel):
+        token: str
+        user_id: str  # Discord user ID of the requester
+
+    @router.post("/admin/update-discord-token")
+    async def update_discord_token(req: UpdateDiscordTokenRequest, request: Request):
+        """Update Discord Bot Token at runtime.
+
+        Only callable by the Discord application owner(s). The new token is applied
+        to the settings singleton; a full bot restart is required to reconnect the
+        WebSocket with the new token.
+        """
+        from app.config import settings as _settings
+
+        uid = int(req.user_id)
+        owner_ids = _get_bot_owner_ids(request)
+
+        if not owner_ids or uid not in owner_ids:
+            raise HTTPException(
+                status_code=403,
+                detail="Không có quyền: chỉ owner của bot application mới được cập nhật Discord Token",
+            )
+
+        new_token = req.token.strip()
+        if not new_token:
+            raise HTTPException(status_code=400, detail="Discord Token không được để trống")
+
+        _settings.DISCORD_TOKEN = new_token
+
+        logger.info("Discord Token updated by user %d", uid)
+        return {
+            "ok": True,
+            "message": "Discord Token đã được cập nhật. Khởi động lại bot để áp dụng.",
+        }
+
     @router.get("/admin/status")
     async def admin_status(user_id: str, request: Request):
         """Check if a user is the bot application owner."""

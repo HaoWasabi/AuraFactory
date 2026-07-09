@@ -106,6 +106,38 @@
                             "
                         >🔑 Cập nhật API Key</button>
                     </div>
+                    <div style="font-size: 12px; color: var(--text-muted); margin-top: 12px; margin-bottom: 8px;">Cập nhật Discord Bot Token cho toàn hệ thống</div>
+                    <div style="display:flex; flex-direction:column; gap:6px;">
+                        <input
+                            type="password"
+                            id="adminDiscordTokenInput"
+                            placeholder="MT..."
+                            autocomplete="off"
+                            style="
+                                background: var(--bg-secondary, #2b2d31);
+                                border: 1px solid var(--border-color, #3a3c40);
+                                border-radius: 6px;
+                                color: var(--text-primary, #e0e0e0);
+                                font-size: 12px;
+                                padding: 6px 8px;
+                                width: 100%;
+                                box-sizing: border-box;
+                            "
+                        >
+                        <button
+                            onclick="updateDiscordToken()"
+                            style="
+                                background: var(--accent-color, #5865f2);
+                                border: none;
+                                border-radius: 6px;
+                                color: #fff;
+                                cursor: pointer;
+                                font-size: 12px;
+                                padding: 6px 10px;
+                                width: 100%;
+                            "
+                        >🤖 Cập nhật Discord Token</button>
+                    </div>
                 </div>
             </aside>
 
@@ -562,6 +594,30 @@
                 });
                 if (data && data.ok) {
                     showToast('✅ ' + (data.message || 'API key đã cập nhật'), 'info');
+                    input.value = '';
+                } else {
+                    showToast('❌ ' + (data?.detail || data?.error || 'Cập nhật thất bại'), 'error');
+                }
+            } catch (e) {
+                showToast('❌ Lỗi: ' + e.message, 'error');
+            }
+        }
+
+        async function updateDiscordToken() {
+            const input = document.getElementById('adminDiscordTokenInput');
+            const newToken = input.value.trim();
+
+            if (!newToken) {
+                showToast('Vui lòng nhập Discord Token', 'warning');
+                return;
+            }
+            try {
+                const data = await api('POST', '/api/admin/update-discord-token', {
+                    token: newToken,
+                    user_id: currentUser.id,
+                });
+                if (data && data.ok) {
+                    showToast('✅ ' + (data.message || 'Discord Token đã cập nhật'), 'info');
                     input.value = '';
                 } else {
                     showToast('❌ ' + (data?.detail || data?.error || 'Cập nhật thất bại'), 'error');
