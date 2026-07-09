@@ -57,6 +57,7 @@ CLASSIFICATION HINTS:
 - "đặt kênh AFK", "AFK timeout" → server_settings
 - "đổi ngôn ngữ server" → server_settings
 - "thông tin server", "xem server info" → query
+- "chống raid", "chống tấn công", "khóa server", "lockdown", "emergency", "khẩn cấp bảo mật" → server_settings (verification + content filter) or automod (nếu liên quan rules)
 - "tạo kênh private", "kênh ẩn", "kênh chỉ cho role X" → setup
 - "tạo kênh forum/stage/news/announcement" → setup
 - "sửa quyền kênh", "tắt quyền gửi tin" → manage
@@ -123,3 +124,56 @@ class ClassifierService:
         if any(c in viet_chars for c in text_lower):
             return "vi"
         return "en"
+
+    async def generate_clarify(self, message: str, lang: str = "vi", db=None, request_id: str = None) -> str:
+        """Generate a context-aware clarification question using LLM.
+
+        Instead of a generic fixed template, asks a follow-up that is specific
+        to what the user actually requested.
+
+        Args:
+            message: The original user message that was too vague.
+            lang: Language code ('vi' or 'en').
+            db: Optional database for token tracking.
+            request_id: Optional request ID for token tracking.
+
+        Returns:
+            A natural-language clarification question string.
+        """
+        if self.llm is None:
+            return self._fallback_clarify(lang)
+
+        system_prompt = (
+            "You are AuraFactory, a Discord server management assistant. "
+            "The user sent a message that is too vague to act on. "
+            "Ask ONE concise, specific follow-up question in the same language as the user's message "
+            "to understand what they want. "
+            "Focus on what is missing or ambiguous — do NOT ask for things already clear. "
+            "Keep it under 2 sentences. Do NOT use bullet points or lists. "
+            "Do NOT explain what you can do — just ask what you need to know."
+        )
+
+        try:
+            response = await self.llm.generate(
+                messages=[{"role": "user", "content": message}],
+                system_prompt=system_prompt,
+                temperature=0.4,
+                max_tokens=150,
+            )
+            if db and request_id:
+                await record_token_usage(
+                    db, request_id, response.usage,
+                    getattr(self.llm, 'provider_name', 'unknown')
+                )
+            content = response.content.strip() if response.content else ""
+            return f"🤔 {content}" if content else self._fallback_clarify(lang)
+        except Exception as e:
+            logger.warning("generate_clarify LLM call failed: %s", e)
+            return self._fallback_clarify(lang)
+
+    @staticmethod
+    def _fallback_clarify(lang: str) -> str:
+        """Static fallback when LLM is unavailable."""
+        if lang == "en":
+            return "🤔 Could you be more specific about what you'd like me to do?"
+        return "🤔 Bạn có thể mô tả cụ thể hơn yêu cầu của mình không?"

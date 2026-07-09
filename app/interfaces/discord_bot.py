@@ -210,7 +210,12 @@ class DiscordBot(commands.Bot):
             return
 
         if intent in ("clarify", "out_of_scope"):
-            reply = msg(intent, lang=lang)
+            if intent == "clarify":
+                reply = await self.classifier_service.generate_clarify(
+                    content, lang=lang, db=self._db, request_id=request_id
+                )
+            else:
+                reply = msg("out_of_scope", lang=lang)
             await message.reply(reply)
             await self.request_service.update_status(request_id, "completed", response=reply)
             return

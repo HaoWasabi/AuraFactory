@@ -419,6 +419,19 @@ class PlannerService:
                     lines.append(f"Server Name: {name}")
                 if member_count:
                     lines.append(f"Member Count: {member_count}")
+                # Security settings — helps planner avoid redundant steps
+                verification = server_info.get("verification_level")
+                content_filter = server_info.get("explicit_content_filter")
+                mfa_level = server_info.get("mfa_level")
+                if verification:
+                    lines.append(f"Current Verification Level: {verification}")
+                if content_filter:
+                    lines.append(f"Current Content Filter: {content_filter}")
+                if mfa_level is not None:
+                    lines.append(f"2FA Requirement: {'enabled' if mfa_level else 'disabled'}")
+                features = server_info.get("features", [])
+                if features:
+                    lines.append(f"Server Features: {', '.join(features)}")
         except Exception:
             pass
 
@@ -475,6 +488,22 @@ class PlannerService:
                     lines.append(f"  - @{rname} → id: {rid} (members: {members})")
         except Exception:
             lines.append("\nRoles: (unable to parse)")
+
+        # --- AutoMod Rules ---
+        try:
+            automod_rules = server_context.get("automod_rules", [])
+            if isinstance(automod_rules, str):
+                automod_rules = json.loads(automod_rules) if automod_rules.strip() else []
+            if isinstance(automod_rules, list) and automod_rules:
+                lines.append("\nExisting AutoMod Rules (do NOT recreate these):")
+                for rule in automod_rules:
+                    rid = rule.get("id", "?")
+                    rname = rule.get("name", "?")
+                    trigger = rule.get("trigger_type", "?")
+                    enabled = "enabled" if rule.get("enabled") else "disabled"
+                    lines.append(f"  - \"{rname}\" → id: {rid}, trigger: {trigger}, {enabled}")
+        except Exception:
+            pass
 
         return "\n".join(lines)
 

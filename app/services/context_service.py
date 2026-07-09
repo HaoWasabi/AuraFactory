@@ -24,7 +24,9 @@ class ContextService:
     async def get_server_context(self, guild_id: int, force_refresh: bool = False) -> dict:
         """Get current server state. Uses cache if fresh (<60s), else refreshes.
 
-        Returns dict with keys: categories, channels, roles, server_info
+        Returns dict with keys: categories (list), channels (list), roles (list),
+        server_info (dict), automod_rules (list).
+        All values are always native Python objects (never JSON strings).
         """
         if not force_refresh:
             # Check memory cache first
@@ -38,42 +40,70 @@ class ContextService:
                 return cached
 
         # Refresh from Discord via MCP tools
-        context = await self._fetch_from_discord(guild_id)
+        raw = await self._fetch_from_discord(guild_id)
 
-        # Upsert into server_snapshots
+        # Upsert into server_snapshots (store as JSON strings for DB)
         await self.db.execute(
-            """INSERT INTO server_snapshots (guild_id, categories, channels, roles, server_info, snapshot_at, stale_after)
-               VALUES ($1, $2::jsonb, $3::jsonb, $4::jsonb, $5::jsonb, NOW(), NOW() + INTERVAL '60 seconds')
+            """INSERT INTO server_snapshots (guild_id, categories, channels, roles, server_info, automod_rules, snapshot_at, stale_after)
+               VALUES ($1, $2::jsonb, $3::jsonb, $4::jsonb, $5::jsonb, $6::jsonb, NOW(), NOW() + INTERVAL '60 seconds')
                ON CONFLICT (guild_id) DO UPDATE SET
                    categories = EXCLUDED.categories,
                    channels = EXCLUDED.channels,
                    roles = EXCLUDED.roles,
                    server_info = EXCLUDED.server_info,
+                   automod_rules = EXCLUDED.automod_rules,
                    snapshot_at = NOW(),
                    stale_after = NOW() + INTERVAL '60 seconds'""",
             guild_id,
-            context.get("categories", "[]"),
-            context.get("channels", "[]"),
-            context.get("roles", "[]"),
-            context.get("server_info", "{}"),
+            raw.get("categories", "[]"),
+            raw.get("channels", "[]"),
+            raw.get("roles", "[]"),
+            raw.get("server_info", "{}"),
+            raw.get("automod_rules", "[]"),
         )
+
+        # Deserialize to native objects before caching/returning
+        context = self._deserialize(raw)
         self._memory_cache[guild_id] = (context, time.monotonic() + self.TTL_SECONDS)
         return context
 
     async def _get_cached(self, guild_id: int) -> Optional[dict]:
-        """Return cached snapshot if still fresh."""
+        """Return cached snapshot if still fresh, with all values as native Python objects."""
         row = await self.db.fetchrow(
             "SELECT * FROM server_snapshots WHERE guild_id = $1 AND stale_after > NOW()",
             guild_id,
         )
         if row:
-            return {
+            raw = {
                 "categories": row["categories"],
                 "channels": row["channels"],
                 "roles": row["roles"],
                 "server_info": row["server_info"],
+                "automod_rules": row.get("automod_rules", []),
             }
+            return self._deserialize(raw)
         return None
+
+    @staticmethod
+    def _deserialize(raw: dict) -> dict:
+        """Ensure all context values are native Python objects (list/dict), not JSON strings."""
+        import json
+
+        def _parse(value, fallback):
+            if isinstance(value, str):
+                try:
+                    return json.loads(value) if value.strip() else fallback
+                except (json.JSONDecodeError, ValueError):
+                    return fallback
+            return value if value is not None else fallback
+
+        return {
+            "categories": _parse(raw.get("categories"), []),
+            "channels": _parse(raw.get("channels"), []),
+            "roles": _parse(raw.get("roles"), []),
+            "server_info": _parse(raw.get("server_info"), {}),
+            "automod_rules": _parse(raw.get("automod_rules"), []),
+        }
 
     async def _fetch_from_discord(self, guild_id: int) -> dict:
         """Fetch live server state via MCP tools."""
@@ -113,11 +143,20 @@ class ContextService:
         except Exception as e:
             logger.warning("Failed to fetch guild info for guild %d: %s", guild_id, e)
 
+        automod_rules = []
+        try:
+            resp = await self.mcp_client.call_tool("discord.automod.list_rules", {"guild_id": guild_id})
+            if resp.success and resp.result:
+                automod_rules = resp.result.get("rules", []) if isinstance(resp.result, dict) else []
+        except Exception as e:
+            logger.warning("Failed to fetch automod rules for guild %d: %s", guild_id, e)
+
         return {
             "categories": json.dumps(categories, default=str),
             "channels": json.dumps(channels, default=str),
             "roles": json.dumps(roles, default=str),
             "server_info": json.dumps(server_info, default=str),
+            "automod_rules": json.dumps(automod_rules, default=str),
         }
 
     async def invalidate(self, guild_id: int) -> None:

@@ -201,7 +201,10 @@ def create_api_router(services: dict) -> APIRouter:
             return {"ok": True, "type": "answer", "content": answer, "request_id": request_id}
 
         if intent in ("clarify", "out_of_scope"):
-            reply = msg(intent, lang=lang)
+            if intent == "clarify":
+                reply = await classifier_service.generate_clarify(req.message, lang=lang)
+            else:
+                reply = msg("out_of_scope", lang=lang)
             await request_service.update_status(request_id, "completed", response=reply)
             return {"ok": True, "type": "clarify", "content": reply, "request_id": request_id}
 

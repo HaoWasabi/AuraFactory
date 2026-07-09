@@ -182,20 +182,53 @@ class QueryService:
 
         lines: List[str] = []
 
-        # Server info
-        if "server" in server_context:
-            server = server_context["server"]
+        # Server info — key is "server_info" from ContextService
+        server = server_context.get("server_info") or server_context.get("server") or {}
+        if isinstance(server, dict) and server:
             lines.append(f"**Server**: {server.get('name', 'Unknown')}")
             if "member_count" in server:
                 lines.append(f"**Members**: {server['member_count']}")
             if "owner_id" in server:
                 lines.append(f"**Owner ID**: {server['owner_id']}")
+            if "premium_tier" in server:
+                lines.append(f"**Boost Level**: {server['premium_tier']}")
+
+            # Security settings
+            security_lines = []
+            if "verification_level" in server:
+                security_lines.append(f"Verification: {server['verification_level']}")
+            if "explicit_content_filter" in server:
+                security_lines.append(f"Explicit Content Filter: {server['explicit_content_filter']}")
+            if "default_notifications" in server:
+                security_lines.append(f"Default Notifications: {server['default_notifications']}")
+            if "mfa_level" in server:
+                security_lines.append(f"2FA Requirement: {'enabled' if server['mfa_level'] else 'disabled'}")
+            if security_lines:
+                lines.append(f"\n**Security Settings**:")
+                for s in security_lines:
+                    lines.append(f"  - {s}")
+
+            # Active features
+            features = server.get("features", [])
+            if features:
+                lines.append(f"\n**Server Features**: {', '.join(features)}")
+
+        # Top-level features fallback (legacy layout)
+        elif "features" in server_context:
+            features = server_context["features"]
+            if features:
+                lines.append(f"\n**Server Features**: {', '.join(features)}")
+
+        if "boost_level" in server_context:
+            lines.append(f"**Boost Level**: {server_context['boost_level']}")
 
         # Channels
         if "channels" in server_context:
             channels = server_context["channels"]
             lines.append(f"\n**Channels** ({len(channels)} total):")
             for ch in channels[:50]:  # Cap display to 50
+                if not isinstance(ch, dict):
+                    continue
                 ch_type = ch.get("type", "text")
                 category = ch.get("category", "")
                 cat_str = f" [{category}]" if category else ""
@@ -206,6 +239,8 @@ class QueryService:
             roles = server_context["roles"]
             lines.append(f"\n**Roles** ({len(roles)} total):")
             for role in roles[:50]:  # Cap display to 50
+                if not isinstance(role, dict):
+                    continue
                 member_count = role.get("member_count", "?")
                 lines.append(
                     f"  - @{role.get('name', '?')} "
@@ -217,15 +252,22 @@ class QueryService:
             categories = server_context["categories"]
             lines.append(f"\n**Categories** ({len(categories)} total):")
             for cat in categories:
+                if not isinstance(cat, dict):
+                    continue
                 lines.append(f"  - {cat.get('name', '?')}")
 
-        # Additional info (permissions, features, etc.)
-        if "features" in server_context:
-            features = server_context["features"]
-            if features:
-                lines.append(f"\n**Server Features**: {', '.join(features)}")
-
-        if "boost_level" in server_context:
-            lines.append(f"**Boost Level**: {server_context['boost_level']}")
+        # AutoMod rules
+        if "automod_rules" in server_context:
+            rules = server_context["automod_rules"]
+            if isinstance(rules, list) and rules:
+                lines.append(f"\n**AutoMod Rules** ({len(rules)} total):")
+                for rule in rules:
+                    if not isinstance(rule, dict):
+                        continue
+                    status = "✅ enabled" if rule.get("enabled") else "❌ disabled"
+                    lines.append(
+                        f"  - {rule.get('name', '?')} "
+                        f"[trigger: {rule.get('trigger_type', '?')}] {status}"
+                    )
 
         return "\n".join(lines) if lines else str(server_context)
