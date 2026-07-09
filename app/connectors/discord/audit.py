@@ -1,61 +1,43 @@
-"""Discord Audit Log Connector — SPEC v2 new module (schema §6).
-
-Read-only audit log queries for debugging and transparency.
-
-Actions: query
-"""
+"""Discord Audit Connector — kwargs pattern. Actions: query"""
 
 from __future__ import annotations
-
 import logging
-from typing import Any, Dict, Optional
-
+from typing import Any, Dict
 import nextcord
-
 from app.connectors.base import BaseConnector
-from app.connectors.discord._permissions import check_bot_permissions
-from app.connectors.discord._validation import validate_kwargs
 
 logger = logging.getLogger(__name__)
 
 
 class AuditConnector(BaseConnector):
-    """Queries Discord audit log. Read-only, LOW risk."""
-
     def __init__(self, bot: nextcord.Bot) -> None:
         self._bot = bot
 
+    async def execute(self, action: str, guild: nextcord.Guild, **kwargs) -> Dict[str, Any]:
+        actions = {"query": self.query}
+        handler = actions.get(action)
+        if handler is None:
+            raise ValueError(f"Unknown action '{action}'")
+        return await handler(guild, **kwargs)
+
     async def query(self, guild: nextcord.Guild, **kwargs) -> Dict[str, Any]:
-        """Query the server's audit log.
+        """Query audit log. kwargs: action_type, user_id, limit"""
+        limit = kwargs.pop("limit", 50)
+        user_id = kwargs.pop("user_id", None)
+        action_type = kwargs.pop("action_type", None)
 
-        Optional kwargs: action_type (int), user_id (int), limit (int, max 100), before (snowflake)
-
-        Returns recent audit log entries for inspection.
-        """
-        perm_error = check_bot_permissions(guild, "discord.audit.query")
-        if perm_error:
-            raise PermissionError(perm_error)
-
-        clean = validate_kwargs("discord.audit.query", kwargs)
-
-        limit = min(int(clean.get("limit", 25)), 100)
-        action_type = clean.get("action_type")
-        user_id = clean.get("user_id")
-
-        fetch_kwargs: Dict[str, Any] = {"limit": limit}
+        query_kwargs: Dict[str, Any] = {"limit": int(limit)}
         if action_type is not None:
             try:
-                fetch_kwargs["action"] = nextcord.AuditLogAction(int(action_type))
+                query_kwargs["action"] = nextcord.AuditLogAction(int(action_type))
             except (ValueError, KeyError):
-                pass  # Skip invalid action type filter
-        if user_id is not None:
-            user = guild.get_member(int(user_id))
-            if user:
-                fetch_kwargs["user"] = user
+                pass
 
         try:
             entries = []
-            async for entry in guild.audit_logs(**fetch_kwargs):
+            async for entry in guild.audit_logs(**query_kwargs):
+                if user_id and entry.user and entry.user.id != int(user_id):
+                    continue
                 entries.append({
                     "id": str(entry.id),
                     "action": str(entry.action),
@@ -65,7 +47,7 @@ class AuditConnector(BaseConnector):
                     "created_at": entry.created_at.isoformat() if entry.created_at else None,
                 })
             return {"entries": entries, "count": len(entries)}
-        except nextcord.errors.Forbidden:
-            raise PermissionError("Bot lacks 'View Audit Log' permission.")
-        except nextcord.errors.HTTPException as exc:
-            raise RuntimeError(f"Failed to query audit log: {exc}")
+        except nextcord.Forbidden:
+            raise PermissionError("view_audit_log")
+        except nextcord.HTTPException as exc:
+            raise RuntimeError(f"Failed: {exc}")

@@ -38,14 +38,6 @@ async def lifespan(app: FastAPI):
             await db.connect()
             await db.run_migrations("migrations")
             logger.info("✅ Database connected + migrations applied")
-
-            # Cleanup stuck requests from previous crash/restart
-            cleaned = await db.execute(
-                """UPDATE requests SET status = 'failed', error_message = 'Server restarted', completed_at = NOW()
-                   WHERE status IN ('planned', 'awaiting_approval', 'executing')"""
-            )
-            if cleaned and 'UPDATE' in cleaned and cleaned != 'UPDATE 0':
-                logger.info("🧹 Cleaned up stuck requests: %s", cleaned)
             break
         except Exception as e:
             if attempt < 4:
@@ -88,7 +80,18 @@ async def lifespan(app: FastAPI):
     context_service = ContextService(db, mcp_client)
     auth_service = AuthService(db)
     guild_sync_service = GuildSyncService(db)
-    unified_agent = UnifiedAgent(llm, mcp_client, context_service) if llm else None
+
+    # Load SpecRegistry for safety layers (non-blocking — skip if file missing)
+    registry = None
+    try:
+        from app.core.spec_loader import SpecRegistry
+        registry = SpecRegistry.load()
+        logger.info("✅ SpecRegistry loaded: %d tools", len(registry.get_all_tools()))
+    except Exception as e:
+        logger.warning("⚠️ SpecRegistry not loaded (safety features degraded): %s", e)
+
+    # UnifiedAgent v2 — with db + registry for full safety layers
+    unified_agent = UnifiedAgent(llm, mcp_client, context_service, db=db, registry=registry) if llm else None
 
     services = {
         "context_service": context_service,

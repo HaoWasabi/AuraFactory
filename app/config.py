@@ -29,6 +29,10 @@ class Config:
             os.environ.get('ALLOWED_GUILD_IDS', '')
         )
         
+        # Safety Configuration
+        self.GUILD_LOCK_MODE: str = os.environ.get('GUILD_LOCK_MODE', 'open')  # "open" or "whitelist"
+        self.RATE_LIMIT_DELAY: float = float(os.environ.get('RATE_LIMIT_DELAY', '0.5'))
+        
         # LLM Configuration
         self.LLM_PROVIDER: str = os.environ.get('LLM_PROVIDER', 'gemini')
         self.GEMINI_API_KEY: str = os.environ.get('GEMINI_API_KEY', '')

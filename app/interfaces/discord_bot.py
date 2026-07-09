@@ -18,6 +18,7 @@ class DiscordBot(commands.Bot):
     - on_ready: log + sync + register MCP tools
     - on_guild_join / on_guild_remove: register/unregister bot_installs
     - on_message: route user messages to UnifiedAgent
+    - Approval flow: detect replies to bot's confirmation messages
     """
 
     def __init__(self, services: dict, mcp_discord_server=None, **kwargs):
@@ -38,6 +39,8 @@ class DiscordBot(commands.Bot):
         self._bot_owner_ids: Set[int] = set()
         # Flag: tools registered and ready
         self._tools_ready = False
+        # Track confirmation message IDs → guild_id for reply detection
+        self._confirm_message_ids: dict[int, int] = {}  # msg_id → guild_id
 
     async def on_ready(self):
         logger.info("🤖 AuraFactory bot ready: %s (ID: %d)", self.user.name, self.user.id)
@@ -68,7 +71,7 @@ class DiscordBot(commands.Bot):
 
         self._tools_ready = True
 
-    # —— Admin: update Gemini API key ——————————————————————————————————
+    # —— Admin: update Gemini API key ——————————————————————————————————————
 
     @nextcord.slash_command(
         name="setgeminikey",
@@ -122,7 +125,7 @@ class DiscordBot(commands.Bot):
             ephemeral=True,
         )
 
-    # —— Guild events ——————————————————————————————————————————————————
+    # —— Guild events ——————————————————————————————————————————————————————
 
     async def on_guild_join(self, guild: nextcord.Guild):
         """Bot was added to a guild."""
@@ -135,24 +138,40 @@ class DiscordBot(commands.Bot):
         await self.guild_sync_service.unregister_bot_install(guild.id)
         logger.info("Removed from guild: %s (%d)", guild.name, guild.id)
 
-    # —— Message handling ——————————————————————————————————————————————
+    # —— Message handling ——————————————————————————————————————————————————
 
     async def on_message(self, message: nextcord.Message):
-        """Main message handler — entry point for user commands."""
+        """Main message handler — entry point for user commands.
+
+        Triggers on:
+        1. Bot is @mentioned → normal command flow
+        2. Message is a reply to bot's confirmation prompt → approval flow
+        """
         # Ignore self messages and non-guild messages
         if message.author.bot or not message.guild:
-            return
-        # Only respond to mentions
-        if not self.user.mentioned_in(message):
-            return
-
-        # Clean message content (remove mention)
-        content = message.content.replace(f"<@{self.user.id}>", "").replace(f"<@!{self.user.id}>", "").strip()
-        if not content:
             return
 
         guild_id = message.guild.id
         user_id = message.author.id
+        content = ""
+
+        # Check if this is a reply to a bot confirmation message
+        is_confirmation_reply = False
+        if message.reference and message.reference.message_id:
+            ref_id = message.reference.message_id
+            if ref_id in self._confirm_message_ids:
+                is_confirmation_reply = True
+                content = message.content.strip()
+
+        # Normal flow: bot must be mentioned
+        if not is_confirmation_reply:
+            if not self.user.mentioned_in(message):
+                return
+            # Clean message content (remove mention)
+            content = message.content.replace(f"<@{self.user.id}>", "").replace(f"<@!{self.user.id}>", "").strip()
+
+        if not content:
+            return
 
         # Show typing indicator
         async with message.channel.typing():
@@ -179,14 +198,30 @@ class DiscordBot(commands.Bot):
 
             response_text = result.get("content", "")
             if not response_text:
-                response_text = "✅ Đã thực hiện xong." if result.get("type") == "action" else "Không có phản hồi."
+                if result.get("type") == "action":
+                    response_text = "✅ Đã thực hiện xong."
+                elif result.get("type") == "confirm_needed":
+                    response_text = "❓ Cần xác nhận (reply tin này với có/không)."
+                else:
+                    response_text = "Không có phản hồi."
 
             # Discord message limit: 2000 chars
             if len(response_text) > 1900:
                 response_text = response_text[:1900] + "\n... *(bị cắt do quá dài)*"
 
-            await message.reply(response_text)
+            sent_msg = await message.reply(response_text)
+
+            # If confirmation needed, track the bot's reply message ID
+            if result.get("type") == "confirm_needed":
+                self._confirm_message_ids[sent_msg.id] = guild_id
+                # Auto-cleanup after 5 minutes
+                asyncio.create_task(self._cleanup_confirm_id(sent_msg.id, delay=300))
 
         except Exception as e:
             logger.exception("Error processing message from user %d in guild %d: %s", user_id, guild_id, e)
             await message.reply("⚠️ Đã xảy ra lỗi khi xử lý yêu cầu. Vui lòng thử lại.")
+
+    async def _cleanup_confirm_id(self, msg_id: int, delay: float = 300):
+        """Remove tracked confirmation message after timeout."""
+        await asyncio.sleep(delay)
+        self._confirm_message_ids.pop(msg_id, None)

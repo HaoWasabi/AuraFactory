@@ -1,239 +1,164 @@
-# 🏭 AuraFactory
+# AuraFactory v2 🏭
 
-> **AI Agent tự động hoá setup & quản lý Discord server qua ngôn ngữ tự nhiên**  
-> Plan-then-Execute với Human-in-the-Loop Approval  
-> Track: Built with AWS (AABW Hackathon, Jul 8–12 2026)
+**AI-Powered Discord Server Management** — Spec-driven Agentic Architecture
 
----
-
-## 💡 Giá trị cốt lõi
-
-> Admin đăng nhập bằng Discord → chọn server → mô tả điều muốn làm → Bot lên kế hoạch → Admin duyệt (web hoặc Discord) → Bot tự thực thi hết.
-
-**Không phải thin wrapper vì:**
-- Bot **thực sự thực thi** trên Discord API (tạo channel, role, set permission)
-- Có **pipeline xử lý** rõ ràng (classify → plan → approve → execute → report)
-- Có **risk assessment + HITL thật** — AI không tự ý thực hiện hành động nguy hiểm
-- Có **state machine bền vững** (PostgreSQL) — resume được sau crash/restart
-
----
-
-## 🏗️ Architecture (7-Layer)
+## Architecture
 
 ```
-┌──────────────────────────────────────────────────────────────┐
-│  L7: INTERFACE LAYER (I/O only)                              │
-│  ├── Discord Bot (nextcord) — mention-based interaction      │
-│  └── Web Dashboard + REST API (FastAPI) — OAuth login        │
-├──────────────────────────────────────────────────────────────┤
-│  L6: SERVICE LAYER (Business Logic)                          │
-│  ├── RequestService    — nhận input, check khoá 1-active     │
-│  ├── ClassifierService — phân loại intent (1 LLM call)       │
-│  ├── PlannerService    — sinh execution plan (1 LLM call)    │
-│  ├── ApprovalService   — dùng chung web + Discord buttons    │
-│  ├── ExecutorService   — thực thi plan step-by-step          │
-│  ├── ReActStepHandler  — retry cục bộ khi step lệch kỳ vọng │
-│  ├── QueryService      — trả lời read-only (no plan needed)  │
-│  ├── ContextService    — cache server state (60s TTL)        │
-│  ├── AuthService       — Discord OAuth2 flow                 │
-│  └── GuildSyncService  — sync quyền admin + bot_installs     │
-├──────────────────────────────────────────────────────────────┤
-│  L5: CONNECTORS (Tool Implementations)                       │
-│  └── discord/ — 15 sub-connectors (channels, roles, perms…)  │
-├──────────────────────────────────────────────────────────────┤
-│  L4: MCP (Model Context Protocol)                            │
-│  ├── MCPClient — unified tool dispatch + risk filtering      │
-│  └── DiscordMCPServer — 37 tools via MCP protocol            │
-├──────────────────────────────────────────────────────────────┤
-│  L3: MODELS (Pydantic v2)                                    │
-│  └── schemas.py — Request, Plan, PlanStep, AuditEntry…       │
-├──────────────────────────────────────────────────────────────┤
-│  L2: INFRASTRUCTURE                                          │
-│  ├── database.py — asyncpg pool + auto-migrations            │
-│  └── llm/ — BaseLLM + GeminiLLM (swappable → Bedrock later) │
-├──────────────────────────────────────────────────────────────┤
-│  L1: CONFIGURATION                                           │
-│  └── config.py — env vars, feature flags                     │
-└──────────────────────────────────────────────────────────────┘
-         DATA LAYER: PostgreSQL (DUY NHẤT) — 10 tables
+┌─────────────────────────────────────────────────────────────────┐
+│  User Request (Discord mention / Dashboard)                      │
+└────────────────────────────┬────────────────────────────────────┘
+                             │
+                             ▼
+┌─────────────────────────────────────────────────────────────────┐
+│  UnifiedAgent v2                                                 │
+│  ┌──────────┐  ┌──────────┐  ┌───────────┐  ┌───────────────┐  │
+│  │Guild Lock│→ │ LLM Call │→ │ Approval  │→ │ Rate Limiter  │  │
+│  │(security)│  │(Gemini)  │  │   Gate    │  │ + Retry       │  │
+│  └──────────┘  └──────────┘  └───────────┘  └───────────────┘  │
+│                                                    │             │
+│  ┌──────────┐  ┌──────────┐  ┌───────────┐       ▼             │
+│  │  Audit   │← │ Memory   │← │  Format   │← │MCP Execute│     │
+│  │  Logger  │  │(context) │  │ Response  │  └───────────┘     │
+│  └──────────┘  └──────────┘  └───────────┘                     │
+└─────────────────────────────────────────────────────────────────┘
+                             │
+                             ▼
+┌─────────────────────────────────────────────────────────────────┐
+│  MCP Server → Discord Connector Facade                           │
+│  ┌──────────┐ ┌──────────┐ ┌────────┐ ┌─────────┐ ┌────────┐  │
+│  │ Channels │ │  Roles   │ │Members │ │  Guild  │ │Features│  │
+│  │ Category │ │  Assign  │ │  Mod   │ │Settings │ │  Polls │  │
+│  └──────────┘ └──────────┘ └────────┘ └─────────┘ └────────┘  │
+│  + Webhooks, Threads, Invites, AutoMod, Backup, Templates,      │
+│    Audit, Safety, Events, Emojis, Stickers, Soundboard          │
+└─────────────────────────────────────────────────────────────────┘
 ```
 
----
+## Key Design Decisions
 
-## 📁 Project Structure
+### Spec-Driven (**kwargs pattern**)
+- Single source of truth: `tools_spec.yaml` (700+ lines, 65+ tools)
+- Tool code uses pure `**kwargs` — zero validation logic in connectors
+- `KwargsFilter` (from spec) validates before execution
+- `ToolGraph` (NetworkX) handles intelligent tool retrieval
+
+### Safety Layers (Production)
+1. **Guild Lock** — whitelist or open mode (`GUILD_LOCK_MODE=whitelist`)
+2. **Approval Gate** — destructive actions (delete/ban/kick) ask user first
+3. **Rate Limiter** — 0.5s delay between Discord API calls, burst=5
+4. **Retry Policy** — exponential backoff (3 retries) on transient 5xx/429
+5. **Audit Logger** — every tool execution logged (who, what, when, result)
+6. **Conversation Memory** — tracks created resources for multi-turn references
+
+### Token Efficiency
+- 1 LLM call per request (Gemini native function calling)
+- ~800-1200 tokens/request
+- Future: top-k graph retrieval saves 90% tool context tokens
+
+## Project Structure
 
 ```
 AuraFactory/
+├── tools_spec.yaml              ← SOURCE OF TRUTH (all tools defined here)
 ├── app/
-│   ├── main.py                # 🚀 Entrypoint + DI wiring + lifespan
-│   ├── config.py              # L1: Settings (env vars)
-│   ├── database.py            # L2: asyncpg pool + migrations
-│   │
-│   ├── llm/                   # L2: LLM providers
-│   │   ├── base.py            # BaseLLM abstract + LLMResponse
-│   │   └── gemini.py          # Gemini 2.5 Flash provider
-│   │
-│   ├── models/                # L3: Pydantic schemas
-│   │   └── schemas.py         # All data models + constants
-│   │
-│   ├── mcp/                   # L4: MCP protocol layer
-│   │   ├── protocol.py        # ToolDefinition, MCPRequest/Response, RiskLevel
-│   │   ├── client.py          # MCPClient + MCPServer base class
-│   │   └── servers/
-│   │       └── discord_server.py  # DiscordMCPServer (37 tools)
-│   │
-│   ├── connectors/            # L5: Tool implementations
-│   │   └── discord/           # 15 sub-connectors
-│   │       ├── channels.py, categories.py, roles.py
-│   │       ├── permissions.py, members.py, webhooks.py
-│   │       ├── emojis.py, invites.py, threads.py
-│   │       ├── guild.py, onboarding.py, backup.py
-│   │       ├── automod.py, features.py, templates.py
-│   │       └── connector.py   # Facade (dispatch + discovery)
-│   │
-│   ├── services/              # L6: Business logic
-│   │   ├── request_service.py
-│   │   ├── classifier_service.py
-│   │   ├── planner_service.py
-│   │   ├── approval_service.py
-│   │   ├── executor_service.py
-│   │   ├── react_step_handler.py
-│   │   ├── query_service.py
-│   │   ├── context_service.py
-│   │   ├── auth_service.py
+│   ├── config.py                ← Environment config + safety settings
+│   ├── main.py                  ← FastAPI entrypoint + lifespan
+│   ├── database.py              ← PostgreSQL (Phase 2: DynamoDB)
+│   ├── core/                    ← 🧠 Brain
+│   │   ├── spec_loader.py      ← Parse tools_spec.yaml
+│   │   ├── tool_graph.py       ← NetworkX dependency graph
+│   │   ├── kwargs_filter.py    ← Runtime kwarg validation
+│   │   ├── unified_agent.py    ← Graph-based orchestrator (Phase 2)
+│   │   └── safety.py           ← All safety layers
+│   ├── connectors/              ← 🔌 Discord API wrappers
+│   │   ├── base.py             ← BaseConnector + shared helpers
+│   │   └── discord/
+│   │       ├── connector.py    ← Facade (dispatches to sub-connectors)
+│   │       ├── channels.py     ← create, edit, delete, move, list
+│   │       ├── categories.py   ← create, edit, delete, sync, reorder, list
+│   │       ├── roles.py        ← create, modify, delete, assign, remove, batch, clone
+│   │       ├── members.py      ← kick, ban, unban, bulk_ban, timeout, mute, purge
+│   │       ├── guild.py        ← get_info, edit_profile, set_verification...
+│   │       ├── webhooks.py     ← create, delete, list
+│   │       ├── threads.py      ← create, archive, delete
+│   │       ├── invites.py      ← create, delete, list
+│   │       ├── automod.py      ← create_rule, delete_rule, list_rules
+│   │       ├── backup.py       ← export, restore
+│   │       ├── features.py     ← verification, polls, welcome, auto-delete
+│   │       ├── audit.py        ← query audit logs
+│   │       ├── safety.py       ← content filter, MFA
+│   │       └── templates.py    ← create, sync, delete
+│   ├── services/                ← 🔧 Business logic
+│   │   ├── unified_agent.py    ← Main agent (v2 with safety)
+│   │   ├── context_service.py  ← Server state cache
+│   │   ├── auth_service.py     ← OAuth + session management
 │   │   └── guild_sync_service.py
-│   │
-│   └── interfaces/            # L7: I/O layer
-│       ├── discord_bot.py     # Nextcord bot + approval buttons
-│       └── api_routes.py      # FastAPI REST endpoints
-│
-├── migrations/                # PostgreSQL schema (10 files)
-│   ├── 001_create_sessions.sql
-│   ├── 002_create_requests.sql
-│   ├── 003_create_plans.sql
-│   ├── ...
-│   └── 010_create_rate_limits.sql
-│
-├── skills/                    # Tool definitions (reference .md files)
-├── prompts/                   # System prompts
-├── frontend/                  # Web dashboard (HTML/JS)
-├── requirements.txt
-├── Dockerfile
-├── docker-compose.yml         # PostgreSQL 16
-└── render.yaml                # Deploy config
+│   ├── interfaces/              ← 🖥️ Entry points
+│   │   ├── discord_bot.py      ← Discord bot (mentions → agent)
+│   │   └── api_routes.py       ← REST API for dashboard
+│   ├── llm/                     ← 🤖 LLM abstraction
+│   │   ├── base.py             ← BaseLLM interface
+│   │   └── gemini.py           ← Gemini implementation
+│   └── mcp/                     ← 📡 MCP protocol layer
+│       ├── client.py           ← MCP client (tool dispatcher)
+│       └── servers/
+│           └── discord_server.py
+├── frontend/                    ← Dashboard (static HTML/JS/CSS)
+├── migrations/                  ← SQL migrations
+├── tests/                       ← Test suite
+├── Dockerfile                   ← Container build
+├── docker-compose.yml           ← Local dev stack
+└── render.yaml                  ← Render.com deployment
 ```
 
----
-
-## 🔄 Request Pipeline (Hybrid Plan + ReAct)
-
-```
-User Message
-    │
-    ▼
-┌─ RequestService ─────────────────────────────────┐
-│  Check 1-active-request lock (per guild+user)    │
-└──────────────────────────────────────────────────┘
-    │
-    ▼
-┌─ ClassifierService ──────────────────────────────┐
-│  1 LLM call → intent + tool_mode + confidence    │
-│  Intents: setup|manage|moderate|query|           │
-│           server_settings|automod|clarify|oos    │
-└──────────────────────────────────────────────────┘
-    │
-    ├── query → QueryService (read-only, no plan)
-    ├── clarify/oos → direct response
-    │
-    ▼ (action intents)
-┌─ PlannerService ─────────────────────────────────┐
-│  1 LLM call → ordered steps [{tool, params}]     │
-│  Risk = max(step risks)                          │
-│  LOW/MEDIUM → auto-approve                       │
-│  HIGH/CRITICAL → await human approval            │
-└──────────────────────────────────────────────────┘
-    │
-    ▼ (approved)
-┌─ ExecutorService ────────────────────────────────┐
-│  For each step:                                  │
-│    1. Call MCP tool                              │
-│    2. If fail → ReActStepHandler (1 retry)       │
-│    3. Write audit_log                            │
-│  Progress reported after each step               │
-└──────────────────────────────────────────────────┘
-```
-
-**ReAct boundary (§5.6b):** Khi 1 step fail, LLM được phép điều chỉnh THAM SỐ (cùng tool) — không thêm/bớt step, không đổi tool, max 1 retry.
-
----
-
-## 🧠 Key Design Decisions
-
-| Decision | Rationale |
-|---|---|
-| **Plan-then-Execute** (not pure ReAct) | User sees full plan BEFORE execution → transparent, auditable |
-| **PostgreSQL only** | No Redis, no vector DB, no graph DB at Phase 1 — simplicity |
-| **MCP protocol** | All tools go through unified interface → easy to add/swap |
-| **1 LLM call per stage** | Classify=1 call, Plan=1 call, ReAct=1 call → predictable cost |
-| **Dual-origin** (web + Discord) | Same pipeline, same approval service, same state |
-| **Risk matrix + HITL** | LOW/MEDIUM auto-execute; HIGH/CRITICAL require explicit human approval |
-
----
-
-## 🚀 Quick Start
+## Quick Start
 
 ```bash
-# 1. Setup environment
-cp .env.example .env
-# Edit .env: DISCORD_TOKEN, GEMINI_API_KEY, DATABASE_URL, DISCORD_CLIENT_ID/SECRET
-
-# 2. Start database
-docker-compose up -d
-
-# 3. Install dependencies
+# 1. Clone + install
+git clone <repo>
+cd AuraFactory
 pip install -r requirements.txt
 
-# 4. Run
-uvicorn app.main:app --reload --port 8000
+# 2. Configure environment
+cp .env.example .env
+# Edit .env with your Discord token, Gemini API key, DB URL
+
+# 3. Run
+uvicorn app.main:app --host 0.0.0.0 --port 8000
 ```
 
-**Required env vars:**
-```env
-DISCORD_TOKEN=your_bot_token
-GEMINI_API_KEY=your_gemini_key
-DATABASE_URL=postgresql://localhost:5432/aurafactory
-DISCORD_CLIENT_ID=your_client_id
-DISCORD_CLIENT_SECRET=your_client_secret
-DISCORD_REDIRECT_URI=http://localhost:8000/api/auth/callback
-```
+## Environment Variables
 
----
+| Variable | Required | Default | Description |
+|----------|----------|---------|-------------|
+| `DISCORD_TOKEN` | ✅ | — | Bot token from Discord Developer Portal |
+| `GEMINI_API_KEY` | ✅ | — | Google AI API key |
+| `GEMINI_MODEL` | ❌ | `gemini-2.5-flash` | Gemini model name |
+| `DATABASE_URL` | ✅ | `postgresql://localhost:5432/aurafactory` | PostgreSQL connection |
+| `ALLOWED_GUILD_IDS` | ❌ | — | Comma-separated guild IDs (for whitelist mode) |
+| `GUILD_LOCK_MODE` | ❌ | `open` | `open` (all guilds) or `whitelist` |
+| `RATE_LIMIT_DELAY` | ❌ | `0.5` | Seconds between API calls |
+| `SECRET_KEY` | ❌ | `dev-secret...` | Session encryption key |
+| `LOG_LEVEL` | ❌ | `INFO` | Logging level |
 
-## 📊 Tech Stack
+## Phases
 
-| Layer | Technology |
-|---|---|
-| Bot framework | nextcord |
-| Web framework | FastAPI + Uvicorn |
-| Database | PostgreSQL 16 (asyncpg) |
-| LLM | Gemini 2.5 Flash (Phase 1) → Amazon Bedrock (Phase 2) |
-| Auth | Discord OAuth2 |
-| Deploy | Render / Docker |
+### Phase 1 (Current) — Open Source
+- ✅ Gemini Flash LLM (free tier: 1M tokens/day)
+- ✅ PostgreSQL database
+- ✅ NetworkX in-memory graph
+- ✅ Full safety layers
+- ✅ 14 Discord connector modules, 65+ actions
 
----
+### Phase 2 — AWS Integration
+- 🔲 LLM: Gemini → AWS Bedrock (Claude/Titan)
+- 🔲 Database: PostgreSQL → DynamoDB
+- 🔲 Graph: NetworkX → AWS Neptune
+- 🔲 Storage: Local → S3
+- 🔲 Monitoring: File logs → CloudWatch
+- 🔲 Retrieval: Keyword → Bedrock embedding top-k
 
-## 🗺️ Roadmap
+## License
 
-| Phase | Focus | LLM |
-|---|---|---|
-| **Phase 1** (hackathon) | Core pipeline + Discord bot + Web dashboard | Gemini 2.5 Flash |
-| **Phase 2** (post-event) | Bedrock integration, Guardrails, CloudWatch | Amazon Bedrock |
-| **Phase 3** (future) | Member assistant 24/7, RAG, vector search | Hybrid |
-
----
-
-## 🏆 AABW Hackathon
-
-- **Track:** Built with AWS
-- **Dates:** July 8–12, 2026
-- **Strategy:** Gemini chạy trước cho tới khi luồng ổn định → Bedrock tích hợp cuối
+MIT

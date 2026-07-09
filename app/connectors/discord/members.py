@@ -1,9 +1,6 @@
-"""Discord Members Connector — SPEC v2 rewrite.
+"""Discord Members Connector — kwargs pattern.
 
-Uses **kwargs pattern with validation whitelist.
-Moderation actions: kick, ban, unban, bulk_ban, timeout, purge, get_info.
-
-Actions: kick, ban, unban, bulk_ban, timeout, purge, get_info
+Actions: kick, ban, unban, bulk_ban, timeout, mute, purge, list, get_info
 """
 
 from __future__ import annotations
@@ -15,326 +12,208 @@ from typing import Any, Dict, List, Optional
 import nextcord
 
 from app.connectors.base import BaseConnector
-from app.connectors.discord._permissions import check_bot_permissions
-from app.connectors.discord._validation import check_role_hierarchy, validate_kwargs
 
 logger = logging.getLogger(__name__)
 
 
 class MembersConnector(BaseConnector):
-    """Manages Discord guild members (moderation actions)."""
+    """Member moderation with **kwargs."""
 
     def __init__(self, bot: nextcord.Bot) -> None:
         self._bot = bot
 
-    # ------------------------------------------------------------------
-    # Actions
+    async def execute(self, action: str, guild: nextcord.Guild, **kwargs) -> Dict[str, Any]:
+        actions = {
+            "kick": self.kick,
+            "ban": self.ban,
+            "unban": self.unban,
+            "bulk_ban": self.bulk_ban,
+            "timeout": self.timeout,
+            "mute": self.mute,
+            "purge": self.purge,
+            "list": self.list,
+            "get_info": self.get_info,
+        }
+        handler = actions.get(action)
+        if handler is None:
+            raise ValueError(f"Unknown action '{action}'. Available: {list(actions.keys())}")
+        return await handler(guild, **kwargs)
+
     # ------------------------------------------------------------------
 
     async def kick(self, guild: nextcord.Guild, member_id: int, **kwargs) -> Dict[str, Any]:
-        """Kick a member from the guild.
-
-        Required: member_id
-        Optional: reason
-        """
-        perm_error = check_bot_permissions(guild, "discord.members.kick")
-        if perm_error:
-            raise PermissionError(perm_error)
-
-        clean = validate_kwargs("discord.members.kick", kwargs)
-
+        """Kick a member."""
         member = guild.get_member(int(member_id))
         if member is None:
-            try:
-                member = await guild.fetch_member(int(member_id))
-            except Exception:
-                raise ValueError(f"Member '{member_id}' not found in guild")
+            raise ValueError(f"Member '{member_id}' not found")
 
-        # Role hierarchy check
-        hierarchy_error = check_role_hierarchy(guild, member)
-        if hierarchy_error:
-            raise PermissionError(hierarchy_error)
-
-        reason = clean.get("reason", "AI Agent Request")
+        reason = kwargs.pop("reason", None)
 
         try:
-            display_name = member.display_name
+            name = member.display_name
             await member.kick(reason=reason)
-            logger.info("Kicked member '%s' (id=%s) from guild '%s'", display_name, member_id, guild.name)
-            return {
-                "id": str(member_id),
-                "name": display_name,
-                "action": "kick",
-                "reason": reason,
-            }
-        except nextcord.errors.Forbidden:
-            raise PermissionError("Bot lacks 'Kick Members' permission or role hierarchy issue.")
-        except nextcord.errors.HTTPException as exc:
-            raise RuntimeError(f"Failed to kick member: {exc}")
+            logger.info("Kicked '%s' (id=%s)", name, member_id)
+            return {"kicked": True, "member_id": str(member_id), "name": name, "reason": reason}
+        except nextcord.Forbidden:
+            raise PermissionError("kick_members")
+        except nextcord.HTTPException as exc:
+            raise RuntimeError(f"Failed to kick: {exc}")
 
     async def ban(self, guild: nextcord.Guild, member_id: int, **kwargs) -> Dict[str, Any]:
-        """Ban a member from the guild.
-
-        Required: member_id
-        Optional: delete_message_seconds (max 604800 = 7 days), reason
-        """
-        perm_error = check_bot_permissions(guild, "discord.members.ban")
-        if perm_error:
-            raise PermissionError(perm_error)
-
-        clean = validate_kwargs("discord.members.ban", kwargs)
-
-        # Check hierarchy if member is still in guild
+        """Ban a member. kwargs: reason, delete_message_seconds"""
         member = guild.get_member(int(member_id))
-        if member:
-            hierarchy_error = check_role_hierarchy(guild, member)
-            if hierarchy_error:
-                raise PermissionError(hierarchy_error)
+        if member is None:
+            raise ValueError(f"Member '{member_id}' not found")
 
-        delete_message_seconds = int(clean.get("delete_message_seconds", 0))
-        # Clamp to Discord max (7 days)
-        delete_message_seconds = min(max(delete_message_seconds, 0), 604800)
-        reason = clean.get("reason", "AI Agent Request")
+        reason = kwargs.pop("reason", None)
+        delete_secs = kwargs.pop("delete_message_seconds", 0)
 
         try:
-            member_name = member.display_name if member else f"User ID: {member_id}"
-            await guild.ban(
-                nextcord.Object(id=int(member_id)),
-                delete_message_seconds=delete_message_seconds,
-                reason=reason,
-            )
-            logger.info("Banned member '%s' (id=%s) from guild '%s'", member_name, member_id, guild.name)
-            return {
-                "id": str(member_id),
-                "name": member_name,
-                "action": "ban",
-                "delete_message_seconds": delete_message_seconds,
-                "reason": reason,
-            }
-        except nextcord.errors.Forbidden:
-            raise PermissionError("Bot lacks 'Ban Members' permission or role hierarchy issue.")
-        except nextcord.errors.HTTPException as exc:
-            raise RuntimeError(f"Failed to ban member: {exc}")
+            name = member.display_name
+            await member.ban(reason=reason, delete_message_seconds=int(delete_secs))
+            logger.info("Banned '%s' (id=%s)", name, member_id)
+            return {"banned": True, "member_id": str(member_id), "name": name, "reason": reason}
+        except nextcord.Forbidden:
+            raise PermissionError("ban_members")
+        except nextcord.HTTPException as exc:
+            raise RuntimeError(f"Failed to ban: {exc}")
 
-    async def unban(self, guild: nextcord.Guild, member_id: int, **kwargs) -> Dict[str, Any]:
-        """Unban a previously banned user.
-
-        Required: member_id
-        Optional: reason
-        """
-        perm_error = check_bot_permissions(guild, "discord.members.unban")
-        if perm_error:
-            raise PermissionError(perm_error)
-
-        clean = validate_kwargs("discord.members.unban", kwargs)
-        reason = clean.get("reason", "AI Agent Request")
+    async def unban(self, guild: nextcord.Guild, user_id: int, **kwargs) -> Dict[str, Any]:
+        """Unban a user."""
+        reason = kwargs.pop("reason", None)
 
         try:
-            user_obj = nextcord.Object(id=int(member_id))
-            await guild.unban(user_obj, reason=reason)
-            logger.info("Unbanned user (id=%s) from guild '%s'", member_id, guild.name)
-            return {"id": str(member_id), "action": "unban", "reason": reason}
-        except nextcord.errors.NotFound:
-            raise ValueError(f"User '{member_id}' is not in the ban list.")
-        except nextcord.errors.Forbidden:
-            raise PermissionError("Bot lacks 'Ban Members' permission.")
-        except nextcord.errors.HTTPException as exc:
+            user = await self._bot.fetch_user(int(user_id))
+            await guild.unban(user, reason=reason)
+            logger.info("Unbanned '%s' (id=%s)", user.name, user_id)
+            return {"unbanned": True, "user_id": str(user_id), "name": user.name}
+        except nextcord.NotFound:
+            raise ValueError(f"User '{user_id}' not found or not banned")
+        except nextcord.Forbidden:
+            raise PermissionError("ban_members")
+        except nextcord.HTTPException as exc:
             raise RuntimeError(f"Failed to unban: {exc}")
 
     async def bulk_ban(self, guild: nextcord.Guild, member_ids: List[int], **kwargs) -> Dict[str, Any]:
-        """Ban multiple members at once (max 200).
+        """Ban multiple members at once."""
+        reason = kwargs.pop("reason", None)
+        delete_secs = kwargs.pop("delete_message_seconds", 0)
 
-        CRITICAL action — requires double confirmation from approval layer.
+        success = []
+        failed = []
 
-        Required: member_ids (list of user IDs)
-        Optional: delete_message_seconds, reason
-        """
-        perm_error = check_bot_permissions(guild, "discord.members.bulk_ban")
-        if perm_error:
-            raise PermissionError(perm_error)
+        for mid in member_ids:
+            member = guild.get_member(int(mid))
+            if not member:
+                failed.append({"id": str(mid), "error": "not found"})
+                continue
+            try:
+                await member.ban(reason=reason, delete_message_seconds=int(delete_secs))
+                success.append(str(mid))
+            except Exception as e:
+                failed.append({"id": str(mid), "error": str(e)})
 
-        clean = validate_kwargs("discord.members.bulk_ban", kwargs)
-
-        if not member_ids or len(member_ids) == 0:
-            raise ValueError("member_ids list cannot be empty.")
-        if len(member_ids) > 200:
-            raise ValueError("Cannot bulk ban more than 200 members at once.")
-
-        delete_message_seconds = int(clean.get("delete_message_seconds", 0))
-        delete_message_seconds = min(max(delete_message_seconds, 0), 604800)
-        reason = clean.get("reason", "AI Agent Bulk Ban")
-
-        # Use Discord bulk ban endpoint via HTTP if available
-        try:
-            payload = {
-                "user_ids": [str(uid) for uid in member_ids],
-                "delete_message_seconds": delete_message_seconds,
-            }
-            # Try nextcord bulk_ban if available (newer versions)
-            if hasattr(guild, "bulk_ban"):
-                result = await guild.bulk_ban(
-                    [nextcord.Object(id=int(uid)) for uid in member_ids],
-                    delete_message_seconds=delete_message_seconds,
-                    reason=reason,
-                )
-                banned_count = len(member_ids)
-            else:
-                # Fallback: use HTTP directly
-                await guild._state.http.request(
-                    nextcord.http.Route(
-                        "POST", "/guilds/{guild_id}/bulk-ban", guild_id=guild.id
-                    ),
-                    json=payload,
-                    reason=reason,
-                )
-                banned_count = len(member_ids)
-
-            logger.info("Bulk banned %d members from guild '%s'", banned_count, guild.name)
-            return {
-                "action": "bulk_ban",
-                "banned_count": banned_count,
-                "member_ids": [str(uid) for uid in member_ids],
-                "reason": reason,
-            }
-        except nextcord.errors.Forbidden:
-            raise PermissionError("Bot lacks 'Ban Members' permission for bulk ban.")
-        except nextcord.errors.HTTPException as exc:
-            raise RuntimeError(f"Failed to bulk ban: {exc}")
+        logger.info("Bulk ban: %d success, %d failed", len(success), len(failed))
+        return {"banned_count": len(success), "failed": failed, "reason": reason}
 
     async def timeout(self, guild: nextcord.Guild, member_id: int, duration_minutes: int, **kwargs) -> Dict[str, Any]:
-        """Timeout (mute) a member for a specified duration.
-
-        Required: member_id, duration_minutes (0 = remove timeout)
-        Optional: reason
-        """
-        perm_error = check_bot_permissions(guild, "discord.members.timeout")
-        if perm_error:
-            raise PermissionError(perm_error)
-
-        clean = validate_kwargs("discord.members.timeout", kwargs)
-
+        """Timeout a member (disable communication)."""
         member = guild.get_member(int(member_id))
         if member is None:
-            try:
-                member = await guild.fetch_member(int(member_id))
-            except Exception:
-                raise ValueError(f"Member '{member_id}' not found in guild")
+            raise ValueError(f"Member '{member_id}' not found")
 
-        # Hierarchy check
-        hierarchy_error = check_role_hierarchy(guild, member)
-        if hierarchy_error:
-            raise PermissionError(hierarchy_error)
+        max_minutes = 40320  # 28 days
+        if duration_minutes <= 0 or duration_minutes > max_minutes:
+            raise ValueError(f"duration_minutes must be 1-{max_minutes}")
 
-        reason = clean.get("reason", "AI Agent Request")
+        reason = kwargs.pop("reason", None)
 
         try:
-            if duration_minutes > 0:
-                # Apply timeout
-                delta = timedelta(minutes=duration_minutes)
-                # Discord max timeout = 28 days
-                max_delta = timedelta(days=28)
-                if delta > max_delta:
-                    delta = max_delta
-                await member.timeout(delta, reason=reason)
-                action = "timeout"
-            else:
-                # Remove timeout
-                await member.timeout(None, reason=reason)
-                action = "untimeout"
-
-            logger.info(
-                "%s member '%s' (id=%s) for %d min",
-                action, member.display_name, member_id, duration_minutes,
-            )
+            delta = timedelta(minutes=int(duration_minutes))
+            await member.edit(timeout=delta, reason=reason)
+            logger.info("Timed out '%s' for %d min", member.display_name, duration_minutes)
             return {
-                "id": str(member_id),
+                "timed_out": True,
+                "member_id": str(member_id),
                 "name": member.display_name,
-                "action": action,
                 "duration_minutes": duration_minutes,
                 "reason": reason,
             }
-        except nextcord.errors.Forbidden:
-            raise PermissionError("Bot lacks 'Moderate Members' permission.")
-        except nextcord.errors.HTTPException as exc:
-            raise RuntimeError(f"Failed to timeout member: {exc}")
+        except nextcord.Forbidden:
+            raise PermissionError("moderate_members")
+        except nextcord.HTTPException as exc:
+            raise RuntimeError(f"Failed to timeout: {exc}")
 
-    async def purge(self, guild: nextcord.Guild, channel_id: int, **kwargs) -> Dict[str, Any]:
-        """Bulk delete messages from a channel.
+    async def mute(self, guild: nextcord.Guild, member_id: int, **kwargs) -> Dict[str, Any]:
+        """Server-mute a member in voice."""
+        member = guild.get_member(int(member_id))
+        if member is None:
+            raise ValueError(f"Member '{member_id}' not found")
 
-        CRITICAL action.
-
-        Required: channel_id
-        Optional: limit (default 100, max 1000), member_id (filter by author)
-        """
-        perm_error = check_bot_permissions(guild, "discord.members.purge")
-        if perm_error:
-            raise PermissionError(perm_error)
-
-        clean = validate_kwargs("discord.members.purge", kwargs)
-
-        channel = guild.get_channel(int(channel_id))
-        if channel is None or not isinstance(channel, nextcord.TextChannel):
-            raise ValueError(f"Text channel '{channel_id}' not found.")
-
-        limit = min(int(clean.get("limit", 100)), 1000)
-        filter_member_id = clean.get("member_id")
+        reason = kwargs.pop("reason", None)
 
         try:
-            check_fn = None
-            if filter_member_id:
-                def check_fn(msg):
-                    return msg.author.id == int(filter_member_id)
+            await member.edit(mute=True, reason=reason)
+            logger.info("Muted '%s'", member.display_name)
+            return {"muted": True, "member_id": str(member_id), "name": member.display_name}
+        except nextcord.Forbidden:
+            raise PermissionError("mute_members")
+        except nextcord.HTTPException as exc:
+            raise RuntimeError(f"Failed to mute: {exc}")
 
-            deleted = await channel.purge(limit=limit, check=check_fn)
-            logger.info("Purged %d messages from channel '%s'", len(deleted), channel.name)
-            return {
-                "channel_id": str(channel_id),
-                "channel_name": channel.name,
-                "action": "purge",
-                "deleted_count": len(deleted),
-                "limit_requested": limit,
-            }
-        except nextcord.errors.Forbidden:
-            raise PermissionError("Bot lacks 'Manage Messages' permission.")
-        except nextcord.errors.HTTPException as exc:
-            raise RuntimeError(f"Failed to purge messages: {exc}")
+    async def purge(self, guild: nextcord.Guild, channel_id: int, **kwargs) -> Dict[str, Any]:
+        """Delete messages in a channel."""
+        channel = guild.get_channel(int(channel_id))
+        if channel is None or not isinstance(channel, nextcord.TextChannel):
+            raise ValueError(f"Text channel '{channel_id}' not found")
+
+        limit = kwargs.pop("limit", 10)
+        member_id = kwargs.pop("member_id", None)
+
+        def check(msg):
+            if member_id:
+                return msg.author.id == int(member_id)
+            return True
+
+        try:
+            deleted = await channel.purge(limit=int(limit), check=check)
+            logger.info("Purged %d messages in '%s'", len(deleted), channel.name)
+            return {"purged": len(deleted), "channel_id": str(channel_id), "channel_name": channel.name}
+        except nextcord.Forbidden:
+            raise PermissionError("manage_messages")
+        except nextcord.HTTPException as exc:
+            raise RuntimeError(f"Failed to purge: {exc}")
+
+    async def list(self, guild: nextcord.Guild, **kwargs) -> Dict[str, Any]:
+        """List all members."""
+        members = []
+        for m in guild.members:
+            members.append({
+                "id": str(m.id),
+                "name": m.name,
+                "display_name": m.display_name,
+                "bot": m.bot,
+                "roles": [str(r.id) for r in m.roles if r != guild.default_role],
+                "joined_at": m.joined_at.isoformat() if m.joined_at else None,
+            })
+        return {"members": members, "count": len(members)}
 
     async def get_info(self, guild: nextcord.Guild, member_id: int, **kwargs) -> Dict[str, Any]:
-        """Get detailed info about a member.
-
-        Required: member_id
-        """
+        """Get detailed member info."""
         member = guild.get_member(int(member_id))
         if member is None:
             try:
                 member = await guild.fetch_member(int(member_id))
-            except Exception:
-                raise ValueError(f"Member '{member_id}' not found in guild")
-
-        roles = [{"id": str(r.id), "name": r.name} for r in member.roles if not r.is_default()]
+            except (nextcord.NotFound, nextcord.HTTPException):
+                raise ValueError(f"Member '{member_id}' not found")
 
         return {
             "id": str(member.id),
             "name": member.name,
             "display_name": member.display_name,
-            "discriminator": member.discriminator,
             "bot": member.bot,
+            "roles": [{"id": str(r.id), "name": r.name} for r in member.roles if r != guild.default_role],
             "joined_at": member.joined_at.isoformat() if member.joined_at else None,
-            "created_at": member.created_at.isoformat() if member.created_at else None,
-            "top_role": {"id": str(member.top_role.id), "name": member.top_role.name},
-            "roles": roles,
-            "permissions": {
-                "administrator": member.guild_permissions.administrator,
-                "manage_guild": member.guild_permissions.manage_guild,
-                "manage_channels": member.guild_permissions.manage_channels,
-                "manage_roles": member.guild_permissions.manage_roles,
-                "kick_members": member.guild_permissions.kick_members,
-                "ban_members": member.guild_permissions.ban_members,
-            },
+            "permissions": {name: val for name, val in member.guild_permissions if val},
             "timed_out": member.communication_disabled_until is not None,
-            "timeout_until": (
-                member.communication_disabled_until.isoformat()
-                if member.communication_disabled_until
-                else None
-            ),
         }

@@ -119,7 +119,3 @@ class Database:
                 except Exception as e:
                     logger.error("Migration FAILED: %s — %s", sql_file.name, e)
                     raise  # Stop migration sequence
-
-
-# Global database instance
-db = Database()

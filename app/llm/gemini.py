@@ -271,6 +271,18 @@ class GeminiLLM(BaseLLM):
             raise RuntimeError("Failed to get response from Gemini API")
         
         # Parse response
+        # Log finish_reason for debugging (safety blocks, length limits, etc.)
+        try:
+            if response.candidates:
+                finish_reason = response.candidates[0].finish_reason
+                if finish_reason and finish_reason != 1:  # 1 = STOP (normal)
+                    logger.warning(
+                        "Gemini finish_reason=%s (1=STOP, 2=MAX_TOKENS, 3=SAFETY, 4=RECITATION, 5=OTHER)",
+                        finish_reason,
+                    )
+        except (AttributeError, IndexError):
+            pass
+        
         content = ""
         tool_calls = []
         

@@ -1,0 +1,1005 @@
+# ============================================================================
+# TOOLS_SPEC.yaml — Single Source of Truth for AuraFactory UnifiedAgent v2
+# ============================================================================
+# This file generates:
+#   1. Tool schemas for LLM (MCP ToolDefinition)
+#   2. Graph nodes + edges (NetworkX / Neptune)
+#   3. Runtime kwargs filter (whitelist)
+#
+# Convention:
+#   - tool names: discord.{module}.{action}
+#   - All code + descriptions in English
+#   - required_permissions: bot permissions needed (nextcord)
+#   - risk_level: low | medium | high | critical
+#   - graph_edges: relationships for dependency graph
+# ============================================================================
+
+metadata:
+  version: "2.0.0"
+  project: "AuraFactory"
+  description: "Discord Agentic AI — Spec-driven tool registry"
+  modules:
+    - channels
+    - categories
+    - roles
+    - members
+    - guild
+    - webhooks
+    - threads
+    - invites
+    - automod
+    - onboarding
+    - backup
+    - features
+    - events
+    - emojis
+    - stickers
+    - soundboard
+    - audit
+    - templates
+
+# ============================================================================
+# CHANNELS
+# ============================================================================
+discord.channels.create:
+  description: "Create a new channel in the guild"
+  required_params:
+    name:
+      type: string
+      description: "Channel name (2-100 chars, auto-slugified by Discord)"
+      validation: { min_length: 1, max_length: 100 }
+    type:
+      type: string
+      description: "Channel type"
+      enum: [text, voice, stage, forum, news]
+  
+  context_params:
+    text:
+      topic: { type: string, max_length: 1024, description: "Channel topic/description" }
+      slowmode_delay: { type: integer, range: [0, 21600], description: "Seconds between user messages" }
+      nsfw: { type: boolean, default: false, description: "Age-restricted channel" }
+    voice:
+      bitrate: { type: integer, range: [8000, 384000], description: "Audio bitrate in bps" }
+      user_limit: { type: integer, range: [0, 99], description: "Max users (0=unlimited)" }
+      rtc_region: { type: string, description: "Voice region override (null=auto)" }
+    stage:
+      topic: { type: string, description: "Stage topic (shown in stage instance)" }
+      bitrate: { type: integer, range: [8000, 384000] }
+      user_limit: { type: integer, range: [0, 10000] }
+    forum:
+      topic: { type: string, max_length: 4096 }
+      slowmode_delay: { type: integer, range: [0, 21600] }
+      default_auto_archive_duration: { type: integer, enum: [60, 1440, 4320, 10080] }
+    news:
+      topic: { type: string, max_length: 1024 }
+
+  shared_params:
+    category_id: { type: integer, description: "Parent category ID" }
+    position: { type: integer, description: "Channel position in sidebar" }
+    reason: { type: string, description: "Audit log reason" }
+    is_private:
+      type: boolean
+      default: false
+      description: "Hide channel from @everyone"
+    allowed_role_ids:
+      type: array
+      items: integer
+      description: "Role IDs that can access private channel"
+      depends_on: { is_private: true }
+    allowed_user_ids:
+      type: array
+      items: integer
+      description: "User IDs that can access private channel"
+      depends_on: { is_private: true }
+    advanced_permissions:
+      type: object
+      description: "Custom permission overwrites {perm_name: bool}"
+      depends_on: { is_private: true }
+
+  required_permissions: [manage_channels]
+  risk_level: medium
+  graph_edges:
+    - { target: "discord.categories.list", relation: "often_preceded_by", reason: "Need category_id" }
+    - { target: "discord.roles.list", relation: "often_preceded_by", reason: "Need role IDs for private channel" }
+    - { target: "discord.channels.edit", relation: "often_followed_by", reason: "Set additional props after create" }
+    - { target: "stage", relation: "requires_feature", feature: "COMMUNITY" }
+    - { target: "forum", relation: "requires_feature", feature: "COMMUNITY" }
+    - { target: "news", relation: "requires_feature", feature: "COMMUNITY" }
+
+discord.channels.edit:
+  description: "Edit channel properties. Only provided params are changed."
+  required_params:
+    channel_id: { type: integer, description: "Target channel ID" }
+  
+  context_params:
+    text:
+      name: { type: string }
+      topic: { type: string, max_length: 1024 }
+      slowmode_delay: { type: integer, range: [0, 21600] }
+      nsfw: { type: boolean }
+    voice:
+      name: { type: string }
+      bitrate: { type: integer, range: [8000, 384000] }
+      user_limit: { type: integer, range: [0, 99] }
+      rtc_region: { type: string }
+    stage:
+      name: { type: string }
+      topic: { type: string }
+    forum:
+      name: { type: string }
+      topic: { type: string }
+      slowmode_delay: { type: integer, range: [0, 21600] }
+    news:
+      name: { type: string }
+      topic: { type: string }
+
+  shared_params:
+    position: { type: integer }
+    category_id: { type: integer, description: "Move to different category" }
+    sync_permissions: { type: boolean, default: false, description: "Sync perms with parent category" }
+    update_permissions:
+      type: object
+      description: "Granular permission update for a target"
+      properties:
+        target_id: { type: integer, description: "Role or member ID" }
+        permissions: { type: object, description: "{perm_name: bool}" }
+    reason: { type: string }
+
+  required_permissions: [manage_channels]
+  risk_level: medium
+
+discord.channels.delete:
+  description: "Delete a channel permanently"
+  required_params:
+    channel_id: { type: integer, description: "Channel to delete" }
+  shared_params:
+    reason: { type: string }
+  required_permissions: [manage_channels]
+  risk_level: high
+  graph_edges:
+    - { target: "discord.channels.list", relation: "often_preceded_by", reason: "Confirm channel exists" }
+
+discord.channels.move:
+  description: "Move a channel to a different category or position"
+  required_params:
+    channel_id: { type: integer }
+  shared_params:
+    category_id: { type: integer, description: "New parent category" }
+    position: { type: integer, description: "New position" }
+    sync_permissions: { type: boolean, default: false }
+  required_permissions: [manage_channels]
+  risk_level: medium
+
+discord.channels.list:
+  description: "List all channels in the guild (or filtered by category)"
+  required_params: {}
+  shared_params:
+    category_id: { type: integer, description: "Filter by category" }
+    type: { type: string, enum: [text, voice, stage, forum, news, all], description: "Filter by type" }
+  required_permissions: [view_channel]
+  risk_level: low
+
+# ============================================================================
+# CATEGORIES
+# ============================================================================
+discord.categories.create:
+  description: "Create a new category"
+  required_params:
+    name: { type: string, validation: { min_length: 1, max_length: 100 } }
+  shared_params:
+    position: { type: integer }
+    is_private: { type: boolean, default: false }
+    allowed_role_ids:
+      type: array
+      items: integer
+      depends_on: { is_private: true }
+    allowed_user_ids:
+      type: array
+      items: integer
+      depends_on: { is_private: true }
+    advanced_permissions: { type: object, depends_on: { is_private: true } }
+    reason: { type: string }
+  required_permissions: [manage_channels]
+  risk_level: medium
+
+discord.categories.edit:
+  description: "Edit category name or permissions"
+  required_params:
+    category_id: { type: integer }
+  shared_params:
+    name: { type: string }
+    position: { type: integer }
+    update_permissions:
+      type: object
+      properties:
+        target_id: { type: integer }
+        permissions: { type: object }
+    reason: { type: string }
+  required_permissions: [manage_channels]
+  risk_level: medium
+
+discord.categories.delete:
+  description: "Delete a category (channels inside become uncategorized)"
+  required_params:
+    category_id: { type: integer }
+  shared_params:
+    reason: { type: string }
+  required_permissions: [manage_channels]
+  risk_level: high
+
+discord.categories.sync:
+  description: "Sync all child channel permissions with the category"
+  required_params:
+    category_id: { type: integer }
+  shared_params: {}
+  required_permissions: [manage_channels]
+  risk_level: medium
+
+discord.categories.reorder:
+  description: "Reorder categories by providing IDs in desired order"
+  required_params:
+    category_ids: { type: array, items: integer, description: "Category IDs in desired order" }
+  shared_params: {}
+  required_permissions: [manage_channels]
+  risk_level: medium
+
+discord.categories.list:
+  description: "List all categories with their child channels"
+  required_params: {}
+  shared_params: {}
+  required_permissions: [view_channel]
+  risk_level: low
+
+# ============================================================================
+# ROLES
+# ============================================================================
+discord.roles.create:
+  description: "Create a new role with full attribute control"
+  required_params:
+    name: { type: string, validation: { min_length: 1, max_length: 100 } }
+  shared_params:
+    color: { type: string, description: "Hex color string '#ff0000' or integer" }
+    hoist: { type: boolean, default: false, description: "Show separately in member list" }
+    mentionable: { type: boolean, default: false, description: "Allow @mention" }
+    permissions: { type: object, description: "{permission_name: bool}" }
+    position: { type: integer }
+    reason: { type: string }
+  required_permissions: [manage_roles]
+  risk_level: medium
+  graph_edges:
+    - { target: "discord.roles.assign", relation: "often_followed_by" }
+
+discord.roles.modify:
+  description: "Edit role attributes. Permissions are MERGED (not replaced)."
+  required_params:
+    role_id: { type: integer }
+  shared_params:
+    name: { type: string }
+    color: { type: string }
+    hoist: { type: boolean }
+    mentionable: { type: boolean }
+    permissions: { type: object, description: "Partial — only listed keys change" }
+    position: { type: integer }
+    reason: { type: string }
+  required_permissions: [manage_roles]
+  risk_level: medium
+  constraints:
+    - "Cannot modify roles at or above bot's highest role"
+
+discord.roles.delete:
+  description: "Delete a role from the guild"
+  required_params:
+    role_id: { type: integer }
+  shared_params:
+    reason: { type: string }
+  required_permissions: [manage_roles]
+  risk_level: high
+  constraints:
+    - "Cannot delete @everyone or roles above bot"
+
+discord.roles.assign:
+  description: "Assign a role to a member"
+  required_params:
+    member_id: { type: integer }
+    role_id: { type: integer }
+  shared_params:
+    reason: { type: string }
+  required_permissions: [manage_roles]
+  risk_level: medium
+  graph_edges:
+    - { target: "discord.roles.list", relation: "often_preceded_by" }
+    - { target: "discord.members.list", relation: "often_preceded_by" }
+
+discord.roles.remove:
+  description: "Remove a role from a member"
+  required_params:
+    member_id: { type: integer }
+    role_id: { type: integer }
+  shared_params:
+    reason: { type: string }
+  required_permissions: [manage_roles]
+  risk_level: medium
+
+discord.roles.batch_assign:
+  description: "Assign or remove a role to/from multiple members at once"
+  required_params:
+    role_id: { type: integer }
+    member_ids: { type: array, items: integer }
+  shared_params:
+    action: { type: string, enum: [add, remove], default: "add" }
+    reason: { type: string }
+  required_permissions: [manage_roles]
+  risk_level: high
+
+discord.roles.clone:
+  description: "Clone a role — copy all attributes (color, perms, hoist, mentionable)"
+  required_params:
+    source_role_id: { type: integer }
+    new_name: { type: string }
+  shared_params:
+    reason: { type: string }
+  required_permissions: [manage_roles]
+  risk_level: medium
+
+discord.roles.set_position:
+  description: "Change a role's hierarchy position"
+  required_params:
+    role_id: { type: integer }
+    position: { type: integer }
+  shared_params: {}
+  required_permissions: [manage_roles]
+  risk_level: high
+  constraints:
+    - "Cannot move role above bot's highest role"
+
+discord.roles.list:
+  description: "List all roles in the guild with permissions info"
+  required_params: {}
+  shared_params: {}
+  required_permissions: []
+  risk_level: low
+
+discord.roles.get_info:
+  description: "Get detailed info about a specific role"
+  required_params:
+    role_id: { type: integer }
+  shared_params: {}
+  required_permissions: []
+  risk_level: low
+
+# ============================================================================
+# MEMBERS
+# ============================================================================
+discord.members.kick:
+  description: "Kick a member from the guild (they can rejoin via invite)"
+  required_params:
+    member_id: { type: integer }
+  shared_params:
+    reason: { type: string }
+  required_permissions: [kick_members]
+  risk_level: high
+
+discord.members.ban:
+  description: "Ban a member from the guild (cannot rejoin unless unbanned)"
+  required_params:
+    member_id: { type: integer }
+  shared_params:
+    reason: { type: string }
+    delete_message_seconds: { type: integer, range: [0, 604800], description: "Delete messages from last N seconds (max 7 days)" }
+  required_permissions: [ban_members]
+  risk_level: critical
+
+discord.members.unban:
+  description: "Unban a previously banned user"
+  required_params:
+    user_id: { type: integer }
+  shared_params:
+    reason: { type: string }
+  required_permissions: [ban_members]
+  risk_level: medium
+
+discord.members.bulk_ban:
+  description: "Ban multiple members at once"
+  required_params:
+    member_ids: { type: array, items: integer, validation: { max_items: 200 } }
+  shared_params:
+    delete_message_seconds: { type: integer, range: [0, 604800] }
+    reason: { type: string }
+  required_permissions: [ban_members]
+  risk_level: critical
+
+discord.members.timeout:
+  description: "Timeout a member (disable communication temporarily)"
+  required_params:
+    member_id: { type: integer }
+    duration_minutes: { type: integer, range: [1, 40320], description: "Timeout duration (max 28 days)" }
+  shared_params:
+    reason: { type: string }
+  required_permissions: [moderate_members]
+  risk_level: high
+
+discord.members.mute:
+  description: "Server-mute a member in voice channels"
+  required_params:
+    member_id: { type: integer }
+  shared_params:
+    reason: { type: string }
+  required_permissions: [mute_members]
+  risk_level: medium
+
+discord.members.purge:
+  description: "Delete messages in a channel (optionally by a specific member)"
+  required_params:
+    channel_id: { type: integer }
+  shared_params:
+    limit: { type: integer, range: [1, 100], default: 10, description: "Number of messages to delete" }
+    member_id: { type: integer, description: "Only delete messages from this member" }
+  required_permissions: [manage_messages]
+  risk_level: high
+
+discord.members.list:
+  description: "List all members in the guild"
+  required_params: {}
+  shared_params: {}
+  required_permissions: []
+  risk_level: low
+
+discord.members.get_info:
+  description: "Get detailed info about a member (roles, permissions, join date)"
+  required_params:
+    member_id: { type: integer }
+  shared_params: {}
+  required_permissions: []
+  risk_level: low
+
+# ============================================================================
+# GUILD
+# ============================================================================
+discord.guild.get_info:
+  description: "Get full guild snapshot — identity, stats, features, settings"
+  required_params: {}
+  shared_params: {}
+  required_permissions: []
+  risk_level: low
+
+discord.guild.edit_profile:
+  description: "Batch-edit server profile fields (name, icon, banner, etc.)"
+  required_params: {}
+  shared_params:
+    name: { type: string, validation: { min_length: 2, max_length: 100 } }
+    description: { type: string }
+    icon_url: { type: string, description: "URL of new icon (empty string to clear)" }
+    banner_url: { type: string, description: "URL of new banner (requires Boost Level 2+)" }
+    splash_url: { type: string, description: "Invite splash image URL" }
+    verification_level: { type: string, enum: [none, low, medium, high, highest] }
+    explicit_content_filter: { type: string, enum: [disabled, no_role, all_members] }
+    preferred_locale: { type: string, description: "IETF locale tag (en-US, vi, ja)" }
+  required_permissions: [manage_guild]
+  risk_level: high
+  graph_edges:
+    - { target: "discord.guild.get_info", relation: "often_preceded_by", reason: "Check current settings" }
+
+discord.guild.set_verification:
+  description: "Change verification level"
+  required_params:
+    level: { type: string, enum: [none, low, medium, high, highest] }
+  shared_params: {}
+  required_permissions: [manage_guild]
+  risk_level: high
+
+discord.guild.set_system_channels:
+  description: "Configure system message channels and flags"
+  required_params: {}
+  shared_params:
+    system_channel_id: { type: integer, description: "Channel for join/boost messages" }
+    suppress_join_notifications: { type: boolean }
+    suppress_premium_subscriptions: { type: boolean }
+    suppress_guild_reminder_notifications: { type: boolean }
+    suppress_join_notification_replies: { type: boolean }
+  required_permissions: [manage_guild]
+  risk_level: medium
+
+discord.guild.set_afk:
+  description: "Set AFK channel and timeout"
+  required_params: {}
+  shared_params:
+    afk_channel_id: { type: integer }
+    afk_timeout: { type: integer, enum: [60, 300, 900, 1800, 3600], description: "Seconds before moving to AFK" }
+  required_permissions: [manage_guild]
+  risk_level: medium
+
+discord.guild.set_notifications:
+  description: "Change default notification level"
+  required_params:
+    level: { type: string, enum: [all_messages, only_mentions] }
+  shared_params: {}
+  required_permissions: [manage_guild]
+  risk_level: medium
+
+discord.guild.set_widget:
+  description: "Enable/disable server widget and set widget channel"
+  required_params: {}
+  shared_params:
+    widget_enabled: { type: boolean }
+    widget_channel_id: { type: integer }
+  required_permissions: [manage_guild]
+  risk_level: low
+
+# ============================================================================
+# COMMUNITY
+# ============================================================================
+discord.community.toggle:
+  description: "Enable or disable Community features for the guild"
+  required_params:
+    enable: { type: boolean }
+  shared_params:
+    rules_channel_id: { type: integer, depends_on: { enable: true } }
+    public_updates_channel_id: { type: integer, depends_on: { enable: true } }
+  required_permissions: [manage_guild]
+  risk_level: critical
+  graph_edges:
+    - { target: "discord.channels.create", relation: "enables", context: "stage, forum, news" }
+    - { target: "discord.guild.get_info", relation: "often_preceded_by" }
+
+# ============================================================================
+# SAFETY / MODERATION
+# ============================================================================
+discord.safety.set_content_filter:
+  description: "Set explicit content filter level"
+  required_params:
+    level: { type: string, enum: [disabled, no_role, all_members] }
+  shared_params: {}
+  required_permissions: [manage_guild]
+  risk_level: high
+
+discord.safety.set_mfa:
+  description: "Require 2FA for moderator actions"
+  required_params:
+    level: { type: integer, enum: [0, 1], description: "0=disabled, 1=required" }
+  shared_params: {}
+  required_permissions: [manage_guild]
+  risk_level: critical
+
+# ============================================================================
+# AUTOMOD
+# ============================================================================
+discord.automod.create_rule:
+  description: "Create an auto-moderation rule (keyword filter, spam block, etc.)"
+  required_params:
+    name: { type: string }
+    trigger_type: { type: integer, enum: [1, 3, 4, 5], description: "1=keyword, 3=spam, 4=preset, 5=mention_spam" }
+    actions:
+      type: array
+      items:
+        type: object
+        properties:
+          type: { type: integer, enum: [1, 2, 3], description: "1=block, 2=alert, 3=timeout" }
+          channel_id: { type: integer, description: "Required for type=2 (alert)" }
+          duration_seconds: { type: integer, description: "Required for type=3 (timeout)" }
+          custom_message: { type: string, description: "Optional for type=1 (block)" }
+  shared_params:
+    trigger_metadata:
+      type: object
+      description: "Keywords, regex patterns, presets, mention limit"
+      properties:
+        keyword_filter: { type: array, items: string }
+        regex_patterns: { type: array, items: string }
+        presets: { type: array, items: integer, description: "1=profanity, 2=sexual, 3=slurs" }
+        mention_total_limit: { type: integer }
+    exempt_role_ids: { type: array, items: integer }
+    exempt_channel_ids: { type: array, items: integer }
+    enabled: { type: boolean, default: true }
+  required_permissions: [manage_guild]
+  risk_level: high
+
+discord.automod.delete_rule:
+  description: "Delete an auto-moderation rule"
+  required_params:
+    rule_id: { type: integer }
+  shared_params: {}
+  required_permissions: [manage_guild]
+  risk_level: high
+
+discord.automod.list_rules:
+  description: "List all auto-moderation rules in the guild"
+  required_params: {}
+  shared_params: {}
+  required_permissions: [manage_guild]
+  risk_level: low
+
+# ============================================================================
+# WEBHOOKS
+# ============================================================================
+discord.webhooks.create:
+  description: "Create a webhook for a text channel"
+  required_params:
+    channel_id: { type: integer }
+    name: { type: string }
+  shared_params:
+    avatar_url: { type: string, description: "Webhook avatar image URL" }
+    reason: { type: string }
+  required_permissions: [manage_webhooks]
+  risk_level: medium
+
+discord.webhooks.delete:
+  description: "Delete a webhook by ID"
+  required_params:
+    webhook_id: { type: integer }
+  shared_params:
+    reason: { type: string }
+  required_permissions: [manage_webhooks]
+  risk_level: medium
+
+discord.webhooks.list:
+  description: "List all webhooks in guild or a specific channel"
+  required_params: {}
+  shared_params:
+    channel_id: { type: integer, description: "Filter by channel" }
+  required_permissions: [manage_webhooks]
+  risk_level: low
+
+# ============================================================================
+# THREADS
+# ============================================================================
+discord.threads.create:
+  description: "Create a new thread in a text channel"
+  required_params:
+    channel_id: { type: integer }
+    name: { type: string }
+  shared_params:
+    message_id: { type: integer, description: "Create thread from this message" }
+    auto_archive: { type: integer, enum: [60, 1440, 4320, 10080], description: "Auto-archive minutes" }
+    type: { type: string, enum: [public, private], default: "public" }
+  required_permissions: [create_public_threads]
+  risk_level: low
+
+discord.threads.archive:
+  description: "Archive a thread (can be unarchived later)"
+  required_params:
+    thread_id: { type: integer }
+  shared_params: {}
+  required_permissions: [manage_threads]
+  risk_level: low
+
+discord.threads.delete:
+  description: "Delete a thread permanently"
+  required_params:
+    thread_id: { type: integer }
+  shared_params: {}
+  required_permissions: [manage_threads]
+  risk_level: medium
+
+# ============================================================================
+# INVITES
+# ============================================================================
+discord.invites.create:
+  description: "Create an invite link for a channel"
+  required_params:
+    channel_id: { type: integer }
+  shared_params:
+    max_age: { type: integer, default: 86400, description: "Expiration seconds (0=never)" }
+    max_uses: { type: integer, default: 0, description: "Max uses (0=unlimited)" }
+    temporary: { type: boolean, default: false, description: "Grant temporary membership" }
+  required_permissions: [create_instant_invite]
+  risk_level: medium
+
+discord.invites.delete:
+  description: "Revoke an invite by code"
+  required_params:
+    invite_code: { type: string }
+  shared_params: {}
+  required_permissions: [manage_guild]
+  risk_level: medium
+
+discord.invites.list:
+  description: "List all active invites in the guild"
+  required_params: {}
+  shared_params: {}
+  required_permissions: [manage_guild]
+  risk_level: low
+
+# ============================================================================
+# ONBOARDING
+# ============================================================================
+discord.onboarding.setup_welcome:
+  description: "Set up a pinned welcome message in a channel"
+  required_params:
+    channel_id: { type: integer }
+    message: { type: string }
+  shared_params: {}
+  required_permissions: [send_messages, manage_messages]
+  risk_level: low
+
+discord.onboarding.send_dm:
+  description: "Send a DM to a member (for onboarding, notifications)"
+  required_params:
+    member_id: { type: integer }
+    message: { type: string }
+  shared_params: {}
+  required_permissions: []
+  risk_level: medium
+
+# ============================================================================
+# EVENTS
+# ============================================================================
+discord.events.create:
+  description: "Create a scheduled event (voice, stage, or external)"
+  required_params:
+    name: { type: string }
+    start_time: { type: string, description: "ISO 8601 datetime" }
+  shared_params:
+    description: { type: string }
+    end_time: { type: string, description: "ISO 8601 datetime" }
+    entity_type: { type: string, enum: [voice, stage, external], default: "voice" }
+    channel_id: { type: integer, description: "Required for voice/stage events" }
+    location: { type: string, description: "Required for external events" }
+    image_url: { type: string }
+  required_permissions: [manage_events]
+  risk_level: medium
+  graph_edges:
+    - { target: "discord.channels.list", relation: "often_preceded_by", reason: "Need channel_id for voice/stage" }
+
+discord.events.edit:
+  description: "Edit a scheduled event"
+  required_params:
+    event_id: { type: integer }
+  shared_params:
+    name: { type: string }
+    description: { type: string }
+    start_time: { type: string }
+    end_time: { type: string }
+    channel_id: { type: integer }
+    location: { type: string }
+    entity_type: { type: string, enum: [voice, stage, external] }
+    image_url: { type: string }
+    status: { type: string, enum: [scheduled, active, completed, canceled] }
+  required_permissions: [manage_events]
+  risk_level: medium
+
+discord.events.cancel:
+  description: "Cancel a scheduled event"
+  required_params:
+    event_id: { type: integer }
+  shared_params: {}
+  required_permissions: [manage_events]
+  risk_level: medium
+
+# ============================================================================
+# EMOJIS
+# ============================================================================
+discord.emojis.upload:
+  description: "Upload a custom emoji to the guild"
+  required_params:
+    name: { type: string, validation: { min_length: 2, max_length: 32 } }
+    image_url: { type: string, description: "Image URL (PNG, JPG, GIF, max 256KB)" }
+  shared_params:
+    roles: { type: array, items: integer, description: "Roles that can use this emoji" }
+  required_permissions: [manage_emojis_and_stickers]
+  risk_level: low
+
+discord.emojis.delete:
+  description: "Delete a custom emoji"
+  required_params:
+    emoji_id: { type: integer }
+  shared_params:
+    reason: { type: string }
+  required_permissions: [manage_emojis_and_stickers]
+  risk_level: medium
+
+discord.emojis.rename:
+  description: "Rename a custom emoji"
+  required_params:
+    emoji_id: { type: integer }
+    new_name: { type: string }
+  shared_params: {}
+  required_permissions: [manage_emojis_and_stickers]
+  risk_level: low
+
+discord.emojis.list:
+  description: "List all custom emojis in the guild"
+  required_params: {}
+  shared_params: {}
+  required_permissions: []
+  risk_level: low
+
+# ============================================================================
+# STICKERS
+# ============================================================================
+discord.stickers.upload:
+  description: "Upload a custom sticker (guild must have available slots)"
+  required_params:
+    name: { type: string }
+    file_url: { type: string, description: "Sticker file URL (PNG, APNG, GIF, Lottie)" }
+    tags: { type: string, description: "Related emoji tag for autocomplete" }
+  shared_params:
+    description: { type: string }
+  required_permissions: [manage_emojis_and_stickers]
+  risk_level: low
+
+discord.stickers.edit:
+  description: "Edit sticker name, description, or tags"
+  required_params:
+    sticker_id: { type: integer }
+  shared_params:
+    name: { type: string }
+    description: { type: string }
+    tags: { type: string }
+  required_permissions: [manage_emojis_and_stickers]
+  risk_level: low
+
+discord.stickers.delete:
+  description: "Delete a custom sticker"
+  required_params:
+    sticker_id: { type: integer }
+  shared_params:
+    reason: { type: string }
+  required_permissions: [manage_emojis_and_stickers]
+  risk_level: medium
+
+# ============================================================================
+# SOUNDBOARD
+# ============================================================================
+discord.soundboard.upload:
+  description: "Upload a custom soundboard sound"
+  required_params:
+    name: { type: string }
+    sound_url: { type: string, description: "Audio file URL (MP3/OGG, max 512KB, max 5s)" }
+  shared_params:
+    volume: { type: number, range: [0.0, 1.0], default: 1.0 }
+    emoji_name: { type: string }
+    emoji_id: { type: integer }
+  required_permissions: [manage_guild_expressions]
+  risk_level: low
+
+discord.soundboard.edit:
+  description: "Edit soundboard sound properties"
+  required_params:
+    sound_id: { type: integer }
+  shared_params:
+    name: { type: string }
+    volume: { type: number, range: [0.0, 1.0] }
+    emoji_name: { type: string }
+    emoji_id: { type: integer }
+  required_permissions: [manage_guild_expressions]
+  risk_level: low
+
+discord.soundboard.delete:
+  description: "Delete a soundboard sound"
+  required_params:
+    sound_id: { type: integer }
+  shared_params: {}
+  required_permissions: [manage_guild_expressions]
+  risk_level: medium
+
+# ============================================================================
+# BACKUP
+# ============================================================================
+discord.backup.export:
+  description: "Export full guild structure (categories, channels, roles, settings)"
+  required_params: {}
+  shared_params: {}
+  required_permissions: [manage_guild]
+  risk_level: low
+
+discord.backup.restore:
+  description: "Import/restore guild structure from backup (additive, no deletion)"
+  required_params:
+    backup_data: { type: object, description: "Structure dict from export" }
+  shared_params: {}
+  required_permissions: [administrator]
+  risk_level: critical
+
+# ============================================================================
+# TEMPLATES
+# ============================================================================
+discord.templates.create:
+  description: "Create a guild template (snapshot for cloning)"
+  required_params:
+    name: { type: string }
+  shared_params:
+    description: { type: string }
+  required_permissions: [manage_guild]
+  risk_level: medium
+
+discord.templates.sync:
+  description: "Sync template with current guild state"
+  required_params:
+    template_code: { type: string }
+  shared_params: {}
+  required_permissions: [manage_guild]
+  risk_level: medium
+
+discord.templates.delete:
+  description: "Delete a guild template"
+  required_params:
+    template_code: { type: string }
+  shared_params: {}
+  required_permissions: [manage_guild]
+  risk_level: medium
+
+# ============================================================================
+# AUDIT
+# ============================================================================
+discord.audit.query:
+  description: "Query audit log entries (who did what, when)"
+  required_params: {}
+  shared_params:
+    action_type: { type: integer, description: "Discord audit log action type ID" }
+    user_id: { type: integer, description: "Filter by user who performed action" }
+    limit: { type: integer, range: [1, 100], default: 50 }
+    before: { type: integer, description: "Audit entry ID to paginate before" }
+  required_permissions: [view_audit_log]
+  risk_level: low
+
+# ============================================================================
+# FEATURES (Interactive setup tools)
+# ============================================================================
+discord.features.setup_verification:
+  description: "Set up reaction-based role verification in a channel"
+  required_params:
+    channel_id: { type: integer }
+    role_id: { type: integer, description: "Role to assign on verify" }
+  shared_params:
+    emoji: { type: string, default: "✅" }
+    title: { type: string, default: "Verification" }
+    description: { type: string }
+  required_permissions: [manage_roles, send_messages]
+  risk_level: medium
+
+discord.features.create_poll:
+  description: "Create a reaction-based poll in a channel"
+  required_params:
+    channel_id: { type: integer }
+    question: { type: string }
+    options: { type: array, items: string, validation: { min_items: 2, max_items: 10 } }
+  shared_params: {}
+  required_permissions: [send_messages]
+  risk_level: low
+
+discord.features.setup_welcome:
+  description: "Configure automated welcome message with template variables"
+  required_params:
+    channel_id: { type: integer }
+  shared_params:
+    welcome_title: { type: string }
+    welcome_message_template: { type: string, description: "Supports {member_name}, {guild_name}, {member_count}" }
+  required_permissions: [send_messages]
+  risk_level: low
+
+discord.features.configure_auto_delete:
+  description: "Set auto-delete for messages in a channel after delay"
+  required_params:
+    channel_id: { type: integer }
+    delay_seconds: { type: integer, range: [5, 86400] }
+  shared_params: {}
+  required_permissions: [manage_messages]
+  risk_level: medium
+
+# ============================================================================
+# GRAPH GLOBAL EDGES (cross-module relationships)
+# ============================================================================
+graph_global_edges:
+  # Feature dependencies
+  - { from: "discord.channels.create[stage]", to: "COMMUNITY", relation: "requires_feature" }
+  - { from: "discord.channels.create[forum]", to: "COMMUNITY", relation: "requires_feature" }
+  - { from: "discord.channels.create[news]", to: "COMMUNITY", relation: "requires_feature" }
+  - { from: "discord.community.toggle[enable=true]", to: "COMMUNITY", relation: "provides_feature" }
+  
+  # Common workflows (multi-step)
+  - { from: "discord.channels.create[is_private=true]", to: "discord.roles.list", relation: "needs_data_from" }
+  - { from: "discord.roles.assign", to: "discord.roles.list", relation: "needs_data_from" }
+  - { from: "discord.roles.assign", to: "discord.members.list", relation: "needs_data_from" }
+  - { from: "discord.events.create[entity_type=voice]", to: "discord.channels.list", relation: "needs_data_from" }
+  - { from: "discord.webhooks.create", to: "discord.channels.list", relation: "needs_data_from" }
+  - { from: "discord.features.setup_verification", to: "discord.roles.list", relation: "needs_data_from" }
+  - { from: "discord.features.setup_verification", to: "discord.channels.list", relation: "needs_data_from" }
+  
+  # Risk escalation chains
+  - { from: "discord.members.ban", to: "discord.members.get_info", relation: "should_verify_first" }
+  - { from: "discord.members.bulk_ban", to: "discord.members.list", relation: "should_verify_first" }
+  - { from: "discord.backup.restore", to: "discord.backup.export", relation: "should_backup_first" }
+
+  # Undo/paired actions
+  - { from: "discord.members.ban", to: "discord.members.unban", relation: "inverse_of" }
+  - { from: "discord.roles.assign", to: "discord.roles.remove", relation: "inverse_of" }
+  - { from: "discord.threads.archive", to: "discord.threads.create", relation: "inverse_of" }

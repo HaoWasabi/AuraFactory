@@ -1,7 +1,4 @@
-"""Discord Connectors Package — SPEC v2.
-
-Entry point: DiscordConnector (facade that aggregates all sub-connectors).
-"""
+"""Discord connectors package — kwargs pattern, spec-driven."""
 
 from app.connectors.discord.connector import DiscordConnector
 

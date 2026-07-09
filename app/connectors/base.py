@@ -1,90 +1,178 @@
-"""Base Connector — Base class for all connectors.
+"""Base connector + shared helpers for Discord connectors.
 
-Every connector (Discord, future Slack, etc.) inherits from this.
-Provides default execute() dispatcher that routes by action name to methods.
+All connectors inherit BaseConnector and use these helpers for
+type coercion before spreading **kwargs into Nextcord API calls.
 """
 
 from __future__ import annotations
 
 import logging
-from typing import Any, Dict, List
+from abc import ABC, abstractmethod
+from typing import Any, Dict, List, Optional
 
-from app.mcp.protocol import ToolDefinition
+import nextcord
 
 logger = logging.getLogger(__name__)
 
 
-class BaseConnector:
-    """Base class for service connectors.
+# ===========================================================================
+# Shared Helpers (used across all connectors)
+# ===========================================================================
 
-    Provides a default execute() that dispatches to same-named methods.
-    Subclasses can override execute() for custom routing.
+def parse_color(color: Any) -> Optional[nextcord.Color]:
+    """Normalize color input from LLM → nextcord.Color.
+
+    Accepts: "#ff0000", "ff0000", 16711680, None
+    """
+    if color is None:
+        return None
+    if isinstance(color, str):
+        return nextcord.Color(int(color.lstrip("#"), 16))
+    if isinstance(color, int):
+        return nextcord.Color(color)
+    return None
+
+
+def parse_permissions(perms_dict: Dict[str, bool]) -> nextcord.Permissions:
+    """Convert {perm_name: bool} dict → nextcord.Permissions (set only True flags)."""
+    perms = nextcord.Permissions.none()
+    for name, value in perms_dict.items():
+        if hasattr(perms, name) and isinstance(value, bool):
+            setattr(perms, name, value)
+    return perms
+
+
+def merge_permissions(base: nextcord.Permissions, updates: Dict[str, bool]) -> nextcord.Permissions:
+    """Merge updates onto existing permissions (preserves unmentioned flags)."""
+    for name, value in updates.items():
+        if hasattr(base, name) and isinstance(value, bool):
+            setattr(base, name, value)
+    return base
+
+
+def permissions_to_dict(perms: nextcord.Permissions) -> Dict[str, bool]:
+    """Extract only True permission flags as clean dict."""
+    return {name: val for name, val in perms if val is True}
+
+
+def build_overwrites(
+    guild: nextcord.Guild,
+    is_private: bool = False,
+    allowed_role_ids: Optional[List[int]] = None,
+    allowed_user_ids: Optional[List[int]] = None,
+    advanced_permissions: Optional[Dict[str, bool]] = None,
+) -> Optional[Dict[Any, nextcord.PermissionOverwrite]]:
+    """Build permission overwrite map for channel/category creation.
+
+    Logic:
+      - is_private=True: hide from @everyone, grant view to listed roles/users
+      - advanced_permissions: apply custom flags on top of view_channel
+      - Neither set: return None (inherit defaults)
+    """
+    allowed_role_ids = allowed_role_ids or []
+    allowed_user_ids = allowed_user_ids or []
+
+    if not is_private and not advanced_permissions:
+        return None
+
+    overwrites: Dict[Any, nextcord.PermissionOverwrite] = {}
+
+    # Build custom overwrite from advanced_permissions
+    custom_ow = nextcord.PermissionOverwrite()
+    if advanced_permissions:
+        for perm, val in advanced_permissions.items():
+            if hasattr(custom_ow, perm):
+                setattr(custom_ow, perm, val)
+
+    if is_private:
+        # Hide from @everyone
+        overwrites[guild.default_role] = nextcord.PermissionOverwrite(view_channel=False)
+
+        # Grant access to allowed roles
+        for r_id in allowed_role_ids:
+            role = guild.get_role(int(r_id))
+            if role:
+                if advanced_permissions:
+                    ow = nextcord.PermissionOverwrite(**{k: v for k, v in advanced_permissions.items() if hasattr(nextcord.PermissionOverwrite(), k)})
+                    ow.view_channel = True
+                    overwrites[role] = ow
+                else:
+                    overwrites[role] = nextcord.PermissionOverwrite(view_channel=True)
+
+        # Grant access to allowed users
+        for u_id in allowed_user_ids:
+            member = guild.get_member(int(u_id))
+            if member:
+                if advanced_permissions:
+                    ow = nextcord.PermissionOverwrite(**{k: v for k, v in advanced_permissions.items() if hasattr(nextcord.PermissionOverwrite(), k)})
+                    ow.view_channel = True
+                    overwrites[member] = ow
+                else:
+                    overwrites[member] = nextcord.PermissionOverwrite(view_channel=True)
+    else:
+        # Public channel with custom flags on @everyone
+        overwrites[guild.default_role] = custom_ow
+
+    # Bot always retains access
+    overwrites[guild.me] = nextcord.PermissionOverwrite(
+        view_channel=True, manage_channels=True
+    )
+    return overwrites
+
+
+def role_to_dict(role: nextcord.Role) -> Dict[str, Any]:
+    """Serialize role to JSON-safe dict."""
+    return {
+        "id": str(role.id),
+        "name": role.name,
+        "color": str(role.color),
+        "color_value": role.color.value,
+        "position": role.position,
+        "hoist": role.hoist,
+        "mentionable": role.mentionable,
+        "managed": role.managed,
+        "member_count": len(role.members),
+        "permissions": permissions_to_dict(role.permissions),
+    }
+
+
+def channel_to_dict(channel: nextcord.abc.GuildChannel) -> Dict[str, Any]:
+    """Serialize channel to JSON-safe dict."""
+    result = {
+        "id": str(channel.id),
+        "name": channel.name,
+        "type": str(channel.type).split(".")[-1],
+        "position": channel.position,
+        "category_id": str(channel.category_id) if channel.category_id else None,
+    }
+    if hasattr(channel, "topic") and channel.topic:
+        result["topic"] = channel.topic
+    return result
+
+
+# ===========================================================================
+# Base Connector
+# ===========================================================================
+
+class BaseConnector(ABC):
+    """Abstract base for all Discord connectors.
+
+    Each connector exposes:
+      - Action methods (create, edit, delete, list, etc.)
+      - execute() dispatcher
+      - get_actions() for discovery
     """
 
-    async def execute(self, action: str, **params: Any) -> Dict[str, Any]:
-        """Execute a named action by dispatching to the corresponding method.
+    @abstractmethod
+    async def execute(self, action: str, guild: nextcord.Guild, **kwargs) -> Dict[str, Any]:
+        """Dispatch to the appropriate action method."""
+        ...
 
-        Looks for a method matching `action` on the connector instance.
-
-        Args:
-            action: The action name (e.g. 'create', 'delete', 'list').
-            **params: Action-specific parameters.
-
-        Returns:
-            Dict with the action result.
-
-        Raises:
-            ValueError: If action method not found.
-            PermissionError: If the bot lacks required permissions.
-        """
-        method = getattr(self, action, None)
-        if method is None or not callable(method):
-            raise ValueError(
-                f"Action '{action}' not found on {self.__class__.__name__}. "
-                f"Available: {self._list_actions()}"
-            )
-        return await method(**params)
-
-    def get_tool_definitions(self) -> List[ToolDefinition]:
-        """Return tool definitions for all public actions.
-
-        Default implementation auto-generates from public async methods.
-        Subclasses can override for custom definitions.
-        """
-        import inspect
-
-        tools = []
-        for name in dir(self):
-            if name.startswith("_"):
-                continue
-            attr = getattr(self, name)
-            if inspect.iscoroutinefunction(attr) and name != "execute":
-                doc = attr.__doc__ or f"{name} action"
-                first_line = doc.strip().split("\n")[0]
-                tools.append(
-                    ToolDefinition(
-                        name=f"{self.get_connector_name()}.{name}",
-                        description=first_line,
-                        parameters={},
-                    )
-                )
-        return tools
-
-    def get_connector_name(self) -> str:
-        """Return the connector's name (defaults to class name lowercase)."""
-        name = self.__class__.__name__
-        # Strip 'Connector' suffix for cleaner tool names
-        if name.endswith("Connector"):
-            name = name[: -len("Connector")]
-        return name.lower()
-
-    def _list_actions(self) -> List[str]:
-        """List available action names (public async methods)."""
-        import inspect
+    def get_actions(self) -> List[str]:
+        """Return list of supported action names."""
         return [
-            name
-            for name in dir(self)
+            name for name in dir(self)
             if not name.startswith("_")
-            and inspect.iscoroutinefunction(getattr(self, name, None))
-            and name != "execute"
+            and name not in ("execute", "get_actions")
+            and callable(getattr(self, name))
         ]
