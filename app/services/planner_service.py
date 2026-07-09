@@ -34,9 +34,12 @@ CRITICAL RULES:
 6. Assign risk_level per step: LOW (read/inspect), MEDIUM (create/edit/move/rename), HIGH (delete/bulk ops/batch assign), CRITICAL (ban/bulk delete/server settings)
 7. Write step descriptions in the SAME language as the user request
 8. ROLE ID DEPENDENCY: When a step needs to reference a role that will be created in a PREVIOUS step of this same plan:
-   - Use the EXACT role name (e.g. "Sales Team") as a string placeholder in allowed_role_ids
+   - Use the EXACT role name (e.g. "Sales Team") as a string placeholder in role_id or allowed_role_ids
    - The executor will automatically resolve role names to their IDs at runtime
-   - Example: if step 3 creates role "Sales Team", step 6 can use allowed_role_ids=["Sales Team"]
+   - Example: if step 1 creates role "VIP", step 2 can use role_id="VIP"
+9. REQUESTOR IDENTITY: The context header contains "Requestor ID" — this is the Discord user ID of the person who sent the request.
+   - When the user says "tôi", "me", "myself", "cho tôi", "for me" — use the Requestor ID as member_id
+   - NEVER use placeholder strings like "REPLACE_WITH_ACTUAL_USER_ID" — always use the actual numeric ID from context
 
 ROLE MANAGEMENT TOOL SELECTION GUIDE:
 - Creating ONE role with basic settings → discord.roles.create
@@ -87,7 +90,6 @@ User: "tạo role 'VIP' và gán cho tôi" (user_id=123456789)
 → Step 1: discord.roles.create with name="VIP", risk: MEDIUM
    Step 2: discord.roles.assign with member_id="123456789", role_id="VIP"
    (role_id dùng tên "VIP" làm placeholder — executor sẽ tự resolve sang ID thực từ Step 1)
-
 EXAMPLE — Clone role:
 User: "tạo role Mod2 giống hệt role Mod"
 Context: roles include {"id": "444555666", "name": "Mod"}
@@ -260,6 +262,7 @@ class PlannerService:
             user_content = self._build_user_prompt(
                 message=message,
                 guild_id=guild_id,
+                user_id=user_id,
                 server_context=server_context,
                 tool_list=tool_descriptions,
             )
@@ -485,12 +488,18 @@ class PlannerService:
         guild_id: int,
         server_context: dict,
         tool_list: List[Dict[str, Any]],
+        user_id: Optional[int] = None,
     ) -> str:
         """Build the user prompt with human-readable context.
 
         Uses compact tool format to keep token count low.
         """
         formatted_context = self._format_context_for_llm(server_context, guild_id)
+
+        # Inject requestor identity so the planner can resolve "tôi"/"me"/"myself"
+        # to an actual Discord user ID when generating member_id in steps.
+        if user_id:
+            formatted_context = f"Requestor ID (người gửi yêu cầu): {user_id}\n" + formatted_context
         # Build compact tool reference instead of full JSON schema
         tool_lines = []
         for t in tool_list:
