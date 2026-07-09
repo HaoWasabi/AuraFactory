@@ -139,8 +139,11 @@
       <div class="sess-list" id="sessList"></div>
       <div class="side-info" id="sideInfo">
         <div class="row"><span id="lblCh">Channels</span><span class="val" id="valCh">-</span></div>
+        <div class="row"><span id="lblCat">Categories</span><span class="val" id="valCat">-</span></div>
         <div class="row"><span id="lblRo">Roles</span><span class="val" id="valRo">-</span></div>
         <div class="row"><span id="lblMe">Members</span><span class="val" id="valMe">-</span></div>
+        <div class="row"><span id="lblEm">Emojis</span><span class="val" id="valEm">-</span></div>
+        <div class="row"><span id="lblBo">Boost</span><span class="val" id="valBo">-</span></div>
       </div>
       <div class="admin-sec" id="adminSec">
         <div class="sec-title">Admin Panel</div>
@@ -176,10 +179,10 @@ var lang=localStorage.getItem('lang')||'en';
 
 // === i18n ===
 var T={
-  en:{new_chat:'New Chat',select_server:'Select server...',channels:'Channels',roles:'Roles',members:'Members',
+  en:{new_chat:'New Chat',select_server:'Select server...',channels:'Channels',categories:'Categories',roles:'Roles',members:'Members',emojis:'Emojis',boost:'Boost',
       structure:'Structure',audit_log:'Audit Log',send:'Send',approve:'Approve',reject:'Reject',logout:'Log out',
       type_msg:'Type a message...',no_sessions:'No conversations yet',clarify:'Need more information',toggle:'VI'},
-  vi:{new_chat:'Chat moi',select_server:'Chon server...',channels:'Kenh',roles:'Vai tro',members:'Thanh vien',
+  vi:{new_chat:'Chat moi',select_server:'Chon server...',channels:'Kenh',categories:'Danh muc',roles:'Vai tro',members:'Thanh vien',emojis:'Emoji',boost:'Boost',
       structure:'Cau truc',audit_log:'Nhat ky',send:'Gui',approve:'Duyet',reject:'Tu choi',logout:'Dang xuat',
       type_msg:'Nhap tin nhan...',no_sessions:'Chua co cuoc tro chuyen',clarify:'Can them thong tin',toggle:'EN'}
 };
@@ -189,8 +192,11 @@ function setLang(l){
   document.getElementById('btnNew').textContent=t.new_chat;
   if(!guildId)document.getElementById('guildBtn').textContent=t.select_server;
   document.getElementById('lblCh').textContent=t.channels;
+  document.getElementById('lblCat').textContent=t.categories;
   document.getElementById('lblRo').textContent=t.roles;
   document.getElementById('lblMe').textContent=t.members;
+  document.getElementById('lblEm').textContent=t.emojis;
+  document.getElementById('lblBo').textContent=t.boost;
   document.getElementById('tabStruct').textContent=t.structure;
   document.getElementById('tabAudit').textContent=t.audit_log;
   document.getElementById('sendBtn').textContent=t.send;
@@ -339,8 +345,11 @@ function loadGuildData(){
     if(!d)return;
     _guildData=d;
     document.getElementById('valCh').textContent=d.channel_count||d.channels||'-';
+    document.getElementById('valCat').textContent=d.categories||'-';
     document.getElementById('valRo').textContent=d.role_count||d.roles||'-';
     document.getElementById('valMe').textContent=d.member_count||d.members||'-';
+    document.getElementById('valEm').textContent=d.emoji_count||'-';
+    document.getElementById('valBo').textContent=d.boost_tier?('Tier '+d.boost_tier+' ('+d.boost_count+')'):'None';
     if(activeTab==='structure')renderStructure(d);
     else loadAudit();
   });

@@ -370,7 +370,13 @@ def create_api_router(services: dict) -> APIRouter:
                 "roles": len(roles) if isinstance(roles, list) else 0,
                 "categories": len(categories) if isinstance(categories, list) else 0,
                 "member_count": server_info.get("member_count") or server_info.get("approximate_member_count") or "?",
+                "emoji_count": server_info.get("emoji_count", 0),
+                "boost_tier": server_info.get("premium_tier", 0),
+                "boost_count": server_info.get("premium_subscriptions", 0),
+                "verification_level": server_info.get("verification_level", ""),
+                "features": server_info.get("features", []),
                 "server_name": server_info.get("name", ""),
+                "description": server_info.get("description", ""),
                 "categories_detail": categories_structured,
                 "roles_detail": roles_structured,
             }
