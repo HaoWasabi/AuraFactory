@@ -511,6 +511,10 @@ class UnifiedAgent:
             tool_name = tc.get("name", "")
             raw_args = tc.get("arguments", {})
 
+            # Strip known LLM prefixes (Gemini adds "default_api.")
+            if tool_name.startswith("default_api."):
+                tool_name = tool_name[len("default_api."):]
+
             # Map short name to MCP name
             mcp_name = self._tool_name_map.get(tool_name, tool_name)
 

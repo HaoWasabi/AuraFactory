@@ -150,12 +150,18 @@ class LLMResponseNormalizer:
 
         Returns None if tool name is not recognized (filtered out).
         """
+        # Strip known prefixes that LLMs add (Gemini: "default_api.")
+        tool_name = tc.name
+        if tool_name.startswith("default_api."):
+            tool_name = tool_name[len("default_api."):]
+            logger.debug("Stripped 'default_api.' prefix: %s → %s", tc.name, tool_name)
+
         # Validate tool name
-        if tc.name not in self._valid_tool_names:
-            logger.warning("Normalizer: unknown tool '%s' — skipping", tc.name)
+        if tool_name not in self._valid_tool_names:
+            logger.warning("Normalizer: unknown tool '%s' — skipping", tool_name)
             return None
 
-        mcp_name = self._tool_name_map[tc.name]
+        mcp_name = self._tool_name_map[tool_name]
 
         # Normalize arguments
         raw_args = tc.arguments if tc.arguments else {}
