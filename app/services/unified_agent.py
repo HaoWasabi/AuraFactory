@@ -533,6 +533,7 @@ class UnifiedAgent:
         llm_call_count: int,
         results_so_far: Optional[List[Dict]] = None,
         iteration: int = 1,
+        approved: bool = False,
     ) -> Dict[str, Any]:
         """Execute tools sequentially with forward dependency injection."""
         results = results_so_far or []
@@ -566,18 +567,19 @@ class UnifiedAgent:
                 continue
 
             # ── Approval gate: HIGH RISK → pause ──
-            if mcp_name in self._high_risk_tools:
-                # Store state and pause
+            if mcp_name in self._high_risk_tools and not approved:
+                # Batch ALL remaining high-risk tools into ONE approval prompt.
+                # After user confirms, the entire batch executes without re-asking.
                 req = self._requests.create(guild_id, user_id, goal)
                 req.transition(RequestState.AWAITING_APPROVAL)
                 req.set_payload("pending_type", "AWAITING_APPROVAL")
                 req.set_payload("goal", goal)
-                req.set_payload("pending_tools", tool_calls[i:])
+                req.set_payload("pending_tools", tool_calls[i:])  # All remaining tools (incl. current)
                 req.set_payload("results_so_far", results)
                 req.set_payload("iteration", iteration)
                 req.set_payload("llm_call_count", llm_call_count)
 
-                # Describe what needs approval
+                # Describe ALL high-risk tools in the remaining batch
                 desc_lines = []
                 for t in tool_calls[i:]:
                     t_mcp = self._tool_name_map.get(t.get("name", ""), t.get("name", ""))
@@ -803,7 +805,7 @@ class UnifiedAgent:
 
         return await self._execute_loop(
             pending_tools, goal, guild_id, user_id, history,
-            llm_call_count, results_so_far, iteration,
+            llm_call_count, results_so_far, iteration, approved=True,
         )
 
     # ─────────────────────────────────────────────────────────────────────────
