@@ -17,6 +17,9 @@ redis[hiredis]>=5.0.0
 # LLM providers
 google-generativeai>=0.8.0
 
+# Ollama (local/self-hosted LLM)
+httpx>=0.27.0
+
 # HTTP client (OAuth2, Discord API)
 aiohttp>=3.9.0
 

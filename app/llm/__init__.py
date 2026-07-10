@@ -8,5 +8,8 @@ def get_llm(provider: str = "gemini", **kwargs) -> BaseLLM:
     elif provider == "bedrock":
         from .bedrock import BedrockLLM
         return BedrockLLM(**kwargs)
+    elif provider == "ollama":
+        from .ollama import OllamaLLM
+        return OllamaLLM(**kwargs)
     else:
         raise ValueError(f"Unknown LLM provider: {provider}")

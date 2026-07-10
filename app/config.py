@@ -38,6 +38,10 @@ class Config:
         self.GEMINI_API_KEY: str = os.environ.get('GEMINI_API_KEY', '')
         self.GEMINI_MODEL: str = os.environ.get('GEMINI_MODEL', 'gemini-2.5-flash')
         
+        # Ollama Configuration (for local/self-hosted models)
+        self.OLLAMA_BASE_URL: str = os.environ.get('OLLAMA_BASE_URL', 'http://localhost:11434')
+        self.OLLAMA_MODEL: str = os.environ.get('OLLAMA_MODEL', 'qwen2.5:7b-instruct')
+        
         # Server Configuration
         self.PORT: int = int(os.environ.get('PORT', 8000))
         self.SECRET_KEY: str = os.environ.get('SECRET_KEY', '')
