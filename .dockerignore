@@ -1,0 +1,37 @@
+# Git
+.git
+.gitignore
+
+# Python cache
+__pycache__
+*.py[cod]
+*.egg-info
+
+# Virtual env
+.venv
+venv
+
+# IDE
+.vscode
+.idea
+
+# Testing (not needed in prod image)
+tests/
+pytest.ini
+.coverage
+htmlcov/
+
+# Load tests
+tests/load/
+
+# Docs (not needed in prod image)
+docs/
+ARCHITECTURE.md
+README.md
+LICENSE
+
+# Dev files
+.env
+.env.local
+docker-compose.yml
+Makefile

@@ -12,6 +12,7 @@ from typing import Any, Dict, List, Optional
 import nextcord
 
 from app.connectors.base import BaseConnector, build_overwrites, channel_to_dict
+from app.connectors.discord.exceptions import CommunityRequiredError
 
 logger = logging.getLogger(__name__)
 
@@ -101,7 +102,11 @@ class ChannelsConnector(BaseConnector):
 
             elif c_type == "stage":
                 if "COMMUNITY" not in guild.features:
-                    raise ValueError("Stage channels require Community feature enabled")
+                    raise CommunityRequiredError(
+                        feature_needed="COMMUNITY",
+                        blocked_action="create_stage_channel",
+                        channel_name=name,
+                    )
                 topic = kwargs.pop("topic", None)
                 channel = await guild.create_stage_channel(name=name, **create_kwargs, **kwargs)
                 try:
@@ -110,11 +115,21 @@ class ChannelsConnector(BaseConnector):
                     pass
 
             elif c_type == "forum":
+                if "COMMUNITY" not in guild.features:
+                    raise CommunityRequiredError(
+                        feature_needed="COMMUNITY",
+                        blocked_action="create_forum_channel",
+                        channel_name=name,
+                    )
                 channel = await guild.create_forum_channel(name=name, **create_kwargs, **kwargs)
 
             elif c_type in ("news", "announcement"):
                 if "COMMUNITY" not in guild.features:
-                    raise ValueError("News channels require Community feature enabled")
+                    raise CommunityRequiredError(
+                        feature_needed="COMMUNITY",
+                        blocked_action="create_news_channel",
+                        channel_name=name,
+                    )
                 channel = await guild.create_news_channel(name=name, **create_kwargs, **kwargs)
 
             else:

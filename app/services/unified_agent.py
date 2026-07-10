@@ -520,7 +520,7 @@ class UnifiedAgent:
             return self._respond("error", "⚠️ Unexpected response from AI. Please try again.")
 
     # ─────────────────────────────────────────────────────────────────────────
-    # EXECUTE LOOP — sequential execution with dependency resolution
+    # EXECUTE LOOP — ReAct pattern: Act → Observe → Think → Act ...
     # ─────────────────────────────────────────────────────────────────────────
 
     async def _execute_loop(
@@ -535,9 +535,17 @@ class UnifiedAgent:
         iteration: int = 1,
         approved: bool = False,
     ) -> Dict[str, Any]:
-        """Execute tools sequentially with forward dependency injection."""
+        """ReAct execution loop.
+
+        For each tool: execute → observe result → LLM decides whether to
+        continue with next planned tool, adapt plan, or stop.
+
+        Fast path: if ≤2 tools planned and all succeed, skip per-step
+        LLM reasoning to save tokens (same as before).
+        """
         results = results_so_far or []
         total_tools_called = sum(1 for r in results if r.get("status") != "skipped_dependency_failed")
+        planned_count = len(tool_calls)
 
         for i, tc in enumerate(tool_calls):
             # Budget check
@@ -564,22 +572,20 @@ class UnifiedAgent:
                     "error": f"Could not resolve dependency reference in params",
                     "result": None, "duration_ms": 0,
                 })
-                continue
+                # Dependency failed → trigger observe to let LLM adapt
+                break
 
             # ── Approval gate: HIGH RISK → pause ──
             if mcp_name in self._high_risk_tools and not approved:
-                # Batch ALL remaining high-risk tools into ONE approval prompt.
-                # After user confirms, the entire batch executes without re-asking.
                 req = self._requests.create(guild_id, user_id, goal)
                 req.transition(RequestState.AWAITING_APPROVAL)
                 req.set_payload("pending_type", "AWAITING_APPROVAL")
                 req.set_payload("goal", goal)
-                req.set_payload("pending_tools", tool_calls[i:])  # All remaining tools (incl. current)
+                req.set_payload("pending_tools", tool_calls[i:])
                 req.set_payload("results_so_far", results)
                 req.set_payload("iteration", iteration)
                 req.set_payload("llm_call_count", llm_call_count)
 
-                # Describe ALL high-risk tools in the remaining batch
                 desc_lines = []
                 for t in tool_calls[i:]:
                     t_mcp = self._tool_name_map.get(t.get("name", ""), t.get("name", ""))
@@ -594,7 +600,7 @@ class UnifiedAgent:
                     results,
                 )
 
-            # ── Execute tool ──
+            # ── ACT: Execute single tool ──
             params["guild_id"] = guild_id
             ctx = ExecutionContext(
                 tool_name=mcp_name, params=params,
@@ -603,6 +609,34 @@ class UnifiedAgent:
                 request_id="",
             )
             result = await self._pipeline.execute(ctx)
+
+            # ── Auto-recovery: Community feature ──
+            if not result.success and result.error and "[community_required]" in result.error:
+                logger.info(
+                    "[CommunityRecovery] Tool '%s' blocked — "
+                    "attempting auto-enable for guild %d", mcp_name, guild_id
+                )
+                community_ctx = ExecutionContext(
+                    tool_name="discord.guild.set_community",
+                    params={"guild_id": guild_id, "enable": True},
+                    guild_id=guild_id, user_id=user_id,
+                    risk_level="medium", request_id="",
+                )
+                community_result = await self._pipeline.execute(community_ctx)
+                if community_result.success:
+                    logger.info("[CommunityRecovery] Community enabled — retrying")
+                    await self._context.invalidate(guild_id)
+                    result = await self._pipeline.execute(ctx)
+                else:
+                    logger.warning("[CommunityRecovery] Failed: %s", community_result.error)
+                    results.append({
+                        "tool": "set_community", "mcp_name": "discord.guild.set_community",
+                        "success": False, "result": None,
+                        "error": f"Could not auto-enable Community: {community_result.error}",
+                        "duration_ms": community_result.duration_ms,
+                    })
+
+            # ── OBSERVE: Record result ──
             results.append({
                 "tool": mcp_name.split(".")[-1] if "." in mcp_name else mcp_name,
                 "mcp_name": mcp_name,
@@ -613,8 +647,112 @@ class UnifiedAgent:
             })
             total_tools_called += 1
 
-        # ═══════ EVALUATE ═══════
+            # ── THINK: Should LLM observe mid-execution? ──
+            # Fast path: skip per-step reasoning for simple plans (≤2 tools)
+            # when everything is succeeding. Only invoke LLM observe when:
+            #   - A tool failed (need to adapt)
+            #   - Complex plan (>2 tools) and not the last tool
+            is_last_tool = (i == len(tool_calls) - 1)
+            needs_observe = (
+                (not result.success)  # Tool failed → LLM must decide
+                or (planned_count > 2 and not is_last_tool)  # Complex plan mid-step
+            )
+
+            if needs_observe and llm_call_count < MAX_LLM_CALLS:
+                observe_decision = await self._observe_and_decide(
+                    goal, results, tool_calls[i + 1:], guild_id, user_id, llm_call_count
+                )
+                llm_call_count += 1
+
+                obs_action = observe_decision.get("action", "proceed")
+
+                if obs_action == "stop":
+                    # LLM says goal is done or cannot proceed
+                    return self._respond("action", observe_decision.get("response", self._format_results_summary(results)), results)
+
+                elif obs_action == "adapt":
+                    # LLM provides new tool_calls replacing the remaining plan
+                    new_tools = observe_decision.get("tool_calls", [])
+                    if new_tools:
+                        remaining = tool_calls[i + 1:]  # discard old remaining
+                        return await self._execute_loop(
+                            new_tools, goal, guild_id, user_id, history,
+                            llm_call_count, results, iteration + 1, approved=approved,
+                        )
+                    # No new tools → fall through to evaluate
+                    break
+
+                # obs_action == "proceed" → continue with next planned tool
+
+        # ═══════ FINAL EVALUATE ═══════
         return await self._evaluate(goal, results, guild_id, user_id, history, llm_call_count, iteration)
+
+    # ─────────────────────────────────────────────────────────────────────────
+    # OBSERVE & DECIDE — mid-execution reasoning (ReAct "Think" step)
+    # ─────────────────────────────────────────────────────────────────────────
+
+    async def _observe_and_decide(
+        self,
+        goal: str,
+        results: List[Dict[str, Any]],
+        remaining_plan: List[Dict[str, Any]],
+        guild_id: int,
+        user_id: int,
+        llm_call_count: int,
+    ) -> Dict[str, Any]:
+        """Mid-execution reasoning: observe results so far, decide next action.
+
+        Returns: {"action": "proceed"} | {"action": "stop", "response": "..."} |
+                 {"action": "adapt", "tool_calls": [...]}
+        """
+        # Build compact observation context
+        result_lines = []
+        for idx, r in enumerate(results):
+            if r.get("status") == "skipped_dependency_failed":
+                result_lines.append(f"Step {idx}: SKIPPED (dependency)")
+            elif r["success"]:
+                data = r.get("result") or {}
+                name = data.get("name") or data.get("id") or ""
+                result_lines.append(f"Step {idx}: ✓ {r.get('tool','?')} → {name}")
+            else:
+                result_lines.append(f"Step {idx}: ✗ {r.get('tool','?')} → {r.get('error','')[:100]}")
+
+        remaining_desc = ""
+        if remaining_plan:
+            rem_names = [self._tool_name_map.get(t.get("name",""), t.get("name","")) for t in remaining_plan]
+            remaining_desc = f"\n[REMAINING PLAN]\n" + "\n".join(f"- {n}" for n in rem_names)
+
+        observe_prompt = (
+            f"[GOAL]\n{goal}\n\n"
+            f"[RESULTS SO FAR]\n" + "\n".join(result_lines) + "\n"
+            f"{remaining_desc}\n\n"
+            f"You are mid-execution. Based on results, choose ONE JSON response:\n"
+            f'A) Continue with remaining plan: {{"action": "proceed"}}\n'
+            f'B) Goal already achieved or cannot proceed: {{"action": "stop", "response": "summary"}}\n'
+            f'C) Adapt plan (replace remaining steps): {{"action": "adapt", "tool_calls": [...]}}\n'
+            f"Respond with JSON only."
+        )
+
+        try:
+            response = await self._llm.generate(
+                messages=[{"role": "user", "content": observe_prompt}],
+                system_prompt=SYSTEM_PROMPT,
+                tools=self._tool_definitions,
+                temperature=0.1,
+                max_tokens=1024,
+            )
+            if hasattr(response, 'usage') and response.usage:
+                await record_token_usage(self._db, guild_id, user_id, response.usage, provider=settings.LLM_PROVIDER, phase="observe")
+
+            if response.content:
+                parsed, _ = parse_llm_json(response.content)
+                if parsed and "action" in parsed:
+                    return parsed
+        except Exception as e:
+            logger.warning("Observe LLM failed: %s — defaulting to proceed", e)
+
+        # Default: continue with plan (graceful degradation)
+        return {"action": "proceed"}
 
     # ─────────────────────────────────────────────────────────────────────────
     # EVALUATE — LLM decides: done / continue / ask_user / failed

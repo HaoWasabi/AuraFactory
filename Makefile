@@ -18,8 +18,8 @@ help:
 
 # Setup project
 setup:
-	pip install -r requirements.txt
-	mkdir -p data/knowledge logs/traces frontend/static
+	pip install -r requirements-dev.txt
+	mkdir -p data/knowledge frontend/static
 	@echo "✅ Setup complete. Copy .env.example to .env and configure."
 
 # Development server (with reload)

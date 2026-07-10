@@ -12,8 +12,8 @@ RUN adduser --disabled-password --gecos '' --uid 1001 appuser
 # Copy application code
 COPY . .
 
-# Create required directories with correct ownership
-RUN mkdir -p logs frontend/static && chown -R appuser:appuser /app
+# Set correct ownership
+RUN mkdir -p frontend/static && chown -R appuser:appuser /app
 
 # Switch to non-root user
 USER appuser
