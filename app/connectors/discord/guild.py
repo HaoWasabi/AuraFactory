@@ -1,7 +1,7 @@
 """Discord Guild Connector — kwargs pattern.
 
 Actions: get_info, edit_profile, set_verification, set_system_channels,
-         set_afk, set_notifications, set_widget
+        set_afk, set_notifications, set_widget, set_community, set_preferred_locale
 """
 
 from __future__ import annotations
@@ -13,6 +13,7 @@ import aiohttp
 import nextcord
 
 from app.connectors.base import BaseConnector
+from app.connectors.discord.exceptions import CommunityRequiredError
 
 logger = logging.getLogger(__name__)
 
@@ -63,6 +64,8 @@ class GuildConnector(BaseConnector):
             "set_afk": self.set_afk,
             "set_notifications": self.set_notifications,
             "set_widget": self.set_widget,
+            "set_community": self.set_community,
+            "set_preferred_locale": self.set_preferred_locale,
         }
         handler = actions.get(action)
         if handler is None:
@@ -190,6 +193,108 @@ class GuildConnector(BaseConnector):
             raise PermissionError("manage_guild")
         except nextcord.HTTPException as exc:
             raise RuntimeError(f"Failed: {exc}")
+
+    # ------------------------------------------------------------------
+    # SET COMMUNITY
+    # ------------------------------------------------------------------
+
+    async def set_community(self, guild: nextcord.Guild, enable: bool = True, **kwargs) -> Dict[str, Any]:
+        """Enable or disable the Community feature on the server.
+
+        When enabling, Discord requires a rules channel and a public updates
+        channel. If not provided, the first available text channel is used.
+
+        kwargs: enable, rules_channel_id, updates_channel_id
+        """
+        if not guild.me.guild_permissions.manage_guild:
+            raise PermissionError("manage_guild")
+
+        rules_channel_id = kwargs.pop("rules_channel_id", None)
+        updates_channel_id = kwargs.pop("updates_channel_id", None)
+
+        current_features = list(guild.features)
+
+        if enable:
+            if "COMMUNITY" not in current_features:
+                current_features.append("COMMUNITY")
+
+            # Resolve rules channel
+            rules_ch: Optional[nextcord.TextChannel] = None
+            if rules_channel_id:
+                ch = guild.get_channel(int(rules_channel_id))
+                if isinstance(ch, nextcord.TextChannel):
+                    rules_ch = ch
+            if rules_ch is None:
+                rules_ch = guild.rules_channel or (
+                    guild.text_channels[0] if guild.text_channels else None
+                )
+            if rules_ch is None:
+                raise ValueError("Cannot enable Community: no text channels available for rules channel.")
+
+            # Resolve public updates channel
+            updates_ch: Optional[nextcord.TextChannel] = None
+            if updates_channel_id:
+                ch = guild.get_channel(int(updates_channel_id))
+                if isinstance(ch, nextcord.TextChannel):
+                    updates_ch = ch
+            if updates_ch is None:
+                # Pick a different channel from rules if possible
+                for ch in guild.text_channels:
+                    if ch.id != (rules_ch.id if rules_ch else None):
+                        updates_ch = ch
+                        break
+                if updates_ch is None:
+                    updates_ch = rules_ch  # Fallback to same channel
+
+            try:
+                await guild.edit(
+                    community=True,
+                    rules_channel=rules_ch,
+                    public_updates_channel=updates_ch,
+                    verification_level=nextcord.VerificationLevel.low,  # Discord minimum for Community
+                )
+                logger.info("Enabled Community on guild '%s'", guild.name)
+                return {
+                    "community_enabled": True,
+                    "rules_channel": {"id": str(rules_ch.id), "name": rules_ch.name},
+                    "updates_channel": {"id": str(updates_ch.id), "name": updates_ch.name},
+                }
+            except nextcord.Forbidden:
+                raise PermissionError("manage_guild")
+            except nextcord.HTTPException as exc:
+                raise RuntimeError(f"Failed to enable Community: {exc}")
+
+        else:
+            # Disable community
+            try:
+                await guild.edit(community=False)
+                logger.info("Disabled Community on guild '%s'", guild.name)
+                return {"community_enabled": False}
+            except nextcord.Forbidden:
+                raise PermissionError("manage_guild")
+            except nextcord.HTTPException as exc:
+                raise RuntimeError(f"Failed to disable Community: {exc}")
+
+    # ------------------------------------------------------------------
+    # SET PREFERRED LOCALE
+    # ------------------------------------------------------------------
+
+    async def set_preferred_locale(self, guild: nextcord.Guild, locale: str = "en-US", **kwargs) -> Dict[str, Any]:
+        """Set server preferred locale (language).
+
+        Common values: en-US, vi, ja, ko, zh-CN, zh-TW, fr, de, es-ES, pt-BR
+        """
+        if not guild.me.guild_permissions.manage_guild:
+            raise PermissionError("manage_guild")
+
+        try:
+            await guild.edit(preferred_locale=locale)
+            logger.info("Set preferred_locale to '%s'", locale)
+            return {"preferred_locale": locale}
+        except nextcord.Forbidden:
+            raise PermissionError("manage_guild")
+        except nextcord.HTTPException as exc:
+            raise RuntimeError(f"Failed to set locale: {exc}")
 
     async def set_system_channels(self, guild: nextcord.Guild, **kwargs) -> Dict[str, Any]:
         """Configure system channels and flags."""

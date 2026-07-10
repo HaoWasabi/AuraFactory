@@ -85,6 +85,18 @@ MESSAGES = {
         "vi": "Chỉ người tạo yêu cầu mới được từ chối.",
         "en": "Only the request creator can reject.",
     },
+    "community_required": {
+        "vi": "⚠️ Server cần bật tính năng **Community** để tạo kênh {channel_type}. Bạn có muốn tôi bật Community không?",
+        "en": "⚠️ Server needs the **Community** feature enabled to create {channel_type} channels. Want me to enable it?",
+    },
+    "community_enabled": {
+        "vi": "✅ Đã bật tính năng Community cho server!",
+        "en": "✅ Community feature has been enabled for the server!",
+    },
+    "approval_timeout": {
+        "vi": "⏰ Yêu cầu đã hết thời gian chờ phê duyệt. Vui lòng gửi lại.",
+        "en": "⏰ Approval request timed out. Please send the command again.",
+    },
 }
 
 

@@ -25,6 +25,7 @@ class ChannelsConnector(BaseConnector):
     async def execute(self, action: str, guild: nextcord.Guild, **kwargs) -> Dict[str, Any]:
         actions = {
             "create": self.create,
+            "rename": self.rename,
             "edit": self.edit,
             "delete": self.delete,
             "move": self.move,
@@ -138,6 +139,35 @@ class ChannelsConnector(BaseConnector):
 
     # ------------------------------------------------------------------
     # EDIT
+    # ------------------------------------------------------------------
+
+    # ------------------------------------------------------------------
+    # RENAME
+    # ------------------------------------------------------------------
+
+    async def rename(self, guild: nextcord.Guild, channel_id: int, name: str, **kwargs) -> Dict[str, Any]:
+        """Rename a channel (convenience wrapper over edit)."""
+        if not name or not name.strip():
+            raise ValueError("Channel name cannot be empty")
+
+        channel = guild.get_channel(int(channel_id))
+        if channel is None:
+            raise ValueError(f"Channel '{channel_id}' not found")
+
+        reason = kwargs.pop("reason", None)
+
+        try:
+            old_name = channel.name
+            await channel.edit(name=name.strip(), reason=reason)
+            logger.info("Renamed channel '%s' → '%s' (id=%s)", old_name, name, channel_id)
+            return {"id": str(channel_id), "old_name": old_name, "new_name": channel.name}
+        except nextcord.Forbidden:
+            raise PermissionError("manage_channels")
+        except nextcord.HTTPException as exc:
+            raise RuntimeError(f"Failed to rename channel: {exc}")
+
+    # ------------------------------------------------------------------
+    # EDIT (original)
     # ------------------------------------------------------------------
 
     async def edit(self, guild: nextcord.Guild, channel_id: int, **kwargs) -> Dict[str, Any]:

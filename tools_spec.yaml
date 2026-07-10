@@ -31,6 +31,7 @@ metadata:
     - onboarding
     - backup
     - features
+    - permissions
     - events
     - emojis
     - stickers
@@ -72,6 +73,16 @@ metadata:
       delete_emoji: discord.emojis.delete
       setup_onboarding: discord.onboarding.setup
 
+      set_channel_perms: discord.permissions.set_channel_perms
+      set_role_perms: discord.permissions.set_role_perms
+      sync_permissions: discord.permissions.sync
+      rename_channel: discord.channels.rename
+      rename_category: discord.categories.rename
+      rename_role: discord.roles.rename
+      bulk_create_roles: discord.roles.bulk_create
+      set_community: discord.guild.set_community
+      set_locale: discord.guild.set_preferred_locale
+
     # Human-readable labels for confirmation prompts (only high-risk tools need this)
     # If not listed here, auto-generates from description field.
     human_labels:
@@ -84,7 +95,9 @@ metadata:
       discord.members.timeout: "🔇 Timeout member"
       discord.members.purge: "🗑️ Purge messages"
       discord.backup.restore: "⚠️ Restore full server backup"
+      discord.permissions.set_role_perms: "🔐 Modify role permissions"
       discord.community.toggle: "⚠️ Toggle Community mode"
+      discord.guild.set_community: "⚠️ Toggle Community feature"
       discord.safety.set_mfa: "⚠️ Change 2FA requirement"
 
     # Agentic loop settings (overridable via env vars)
@@ -235,6 +248,16 @@ discord.channels.create:
     - { target: "forum", relation: "requires_feature", feature: "COMMUNITY" }
     - { target: "news", relation: "requires_feature", feature: "COMMUNITY" }
 
+discord.channels.rename:
+  description: "Rename an existing channel"
+  required_params:
+    channel_id: { type: integer, description: "Channel ID to rename" }
+    name: { type: string, description: "New channel name (2-100 chars)" }
+  shared_params:
+    reason: { type: string, description: "Audit log reason" }
+  required_permissions: [manage_channels]
+  risk_level: medium
+
 discord.channels.edit:
   description: "Edit channel properties. Only provided params are changed."
   required_params:
@@ -331,6 +354,16 @@ discord.categories.create:
   required_permissions: [manage_channels]
   risk_level: medium
 
+discord.categories.rename:
+  description: "Rename an existing category"
+  required_params:
+    category_id: { type: integer, description: "Category ID to rename" }
+    name: { type: string, description: "New category name" }
+  shared_params:
+    reason: { type: string, description: "Audit log reason" }
+  required_permissions: [manage_channels]
+  risk_level: medium
+
 discord.categories.edit:
   description: "Edit category name or permissions"
   required_params:
@@ -397,6 +430,34 @@ discord.roles.create:
   risk_level: medium
   graph_edges:
     - { target: "discord.roles.assign", relation: "often_followed_by" }
+
+discord.roles.bulk_create:
+  description: "Create multiple roles at once (batch operation)"
+  required_params:
+    roles:
+      type: array
+      items: object
+      description: "List of role definitions. Each: {name, color?, hoist?, mentionable?, permissions?}"
+  shared_params:
+    reason: { type: string, description: "Audit log reason" }
+  required_permissions: [manage_roles]
+  risk_level: medium
+  constraints:
+    - "Each role must have a 'name' field"
+    - "Max 25 roles per call recommended (Discord rate limits)"
+  graph_edges:
+    - { target: "discord.roles.assign", relation: "often_followed_by" }
+    - { target: "discord.roles.batch_assign", relation: "often_followed_by" }
+
+discord.roles.rename:
+  description: "Rename an existing role"
+  required_params:
+    role_id: { type: integer, description: "Role ID to rename" }
+    name: { type: string, description: "New role name" }
+  shared_params:
+    reason: { type: string, description: "Audit log reason" }
+  required_permissions: [manage_roles]
+  risk_level: medium
 
 discord.roles.modify:
   description: "Edit role attributes. Permissions are MERGED (not replaced)."
@@ -607,6 +668,37 @@ discord.guild.edit_profile:
   risk_level: high
   graph_edges:
     - { target: "discord.guild.get_info", relation: "often_preceded_by", reason: "Check current settings" }
+
+discord.guild.set_community:
+  description: "Enable or disable the Community feature on the server. Required for stage/news/forum channels."
+  required_params:
+    enable:
+      type: boolean
+      description: "True to enable Community, False to disable"
+  shared_params:
+    rules_channel_id:
+      type: integer
+      description: "Text channel to use as #rules (required by Discord when enabling)"
+    updates_channel_id:
+      type: integer
+      description: "Text channel for public updates/announcements"
+  required_permissions: [manage_guild]
+  risk_level: high
+  constraints:
+    - "Enabling Community requires at least one text channel"
+    - "Discord will set minimum verification_level to 'low' when enabling"
+  graph_edges:
+    - { target: "discord.channels.list", relation: "often_preceded_by", reason: "Need channel IDs" }
+
+discord.guild.set_preferred_locale:
+  description: "Set the server's preferred language/locale"
+  required_params:
+    locale:
+      type: string
+      description: "IETF locale tag (e.g. en-US, vi, ja, ko, zh-CN, fr, de, es-ES, pt-BR)"
+  shared_params: {}
+  required_permissions: [manage_guild]
+  risk_level: low
 
 discord.guild.set_verification:
   description: "Change verification level"
@@ -1190,6 +1282,78 @@ discord.features.configure_auto_delete:
   shared_params: {}
   required_permissions: [manage_messages]
   risk_level: medium
+
+discord.permissions.set_channel_perms:
+  description: "Set permission overrides for a specific role or member on a channel"
+  required_params:
+    channel_id:
+      type: integer
+      description: "Target channel ID"
+    target_id:
+      type: integer
+      description: "Role ID or Member ID to set permissions for"
+    target_type:
+      type: string
+      enum: [role, member]
+      description: "Whether target_id is a 'role' or 'member'"
+  shared_params:
+    view_channel: { type: boolean, description: "Allow/deny viewing channel" }
+    send_messages: { type: boolean, description: "Allow/deny sending messages" }
+    manage_messages: { type: boolean, description: "Allow/deny managing messages" }
+    manage_channels: { type: boolean, description: "Allow/deny managing channel settings" }
+    connect: { type: boolean, description: "Allow/deny connecting to voice" }
+    speak: { type: boolean, description: "Allow/deny speaking in voice" }
+    attach_files: { type: boolean, description: "Allow/deny file uploads" }
+    embed_links: { type: boolean, description: "Allow/deny embed links" }
+    add_reactions: { type: boolean, description: "Allow/deny adding reactions" }
+    use_external_emojis: { type: boolean, description: "Allow/deny external emojis" }
+    mention_everyone: { type: boolean, description: "Allow/deny @everyone mentions" }
+    manage_threads: { type: boolean, description: "Allow/deny managing threads" }
+    create_public_threads: { type: boolean, description: "Allow/deny creating public threads" }
+    create_private_threads: { type: boolean, description: "Allow/deny creating private threads" }
+    read_message_history: { type: boolean, description: "Allow/deny reading message history" }
+  required_permissions: [manage_roles]
+  risk_level: medium
+  graph_edges:
+    - { target: "discord.channels.list", relation: "often_preceded_by", reason: "Need channel_id" }
+    - { target: "discord.roles.list", relation: "often_preceded_by", reason: "Need role_id for target" }
+
+discord.permissions.set_role_perms:
+  description: "Set base guild-level permissions for a role"
+  required_params:
+    role_id:
+      type: integer
+      description: "Role to modify permissions on"
+  shared_params:
+    administrator: { type: boolean, description: "Full admin access (dangerous)" }
+    manage_guild: { type: boolean, description: "Manage server settings" }
+    manage_roles: { type: boolean, description: "Manage roles below this one" }
+    manage_channels: { type: boolean, description: "Create/edit/delete channels" }
+    kick_members: { type: boolean, description: "Kick members" }
+    ban_members: { type: boolean, description: "Ban members" }
+    manage_messages: { type: boolean, description: "Delete/pin messages" }
+    manage_webhooks: { type: boolean, description: "Manage webhooks" }
+    manage_emojis_and_stickers: { type: boolean, description: "Manage emojis/stickers" }
+    moderate_members: { type: boolean, description: "Timeout members" }
+    view_audit_log: { type: boolean, description: "View audit log" }
+    send_messages: { type: boolean, description: "Send messages in text channels" }
+    connect: { type: boolean, description: "Connect to voice channels" }
+    speak: { type: boolean, description: "Speak in voice channels" }
+  required_permissions: [manage_roles]
+  risk_level: high
+  graph_edges:
+    - { target: "discord.roles.list", relation: "often_preceded_by", reason: "Need role_id" }
+
+discord.permissions.sync:
+  description: "Sync a channel's permissions with its parent category"
+  required_params:
+    channel_id:
+      type: integer
+      description: "Channel to sync"
+  shared_params:
+    category_id: { type: integer, description: "Category to sync from (uses channel's current category if omitted)" }
+  required_permissions: [manage_channels]
+  risk_level: low
 
 # ============================================================================
 # GRAPH GLOBAL EDGES (cross-module relationships)

@@ -24,6 +24,7 @@ class CategoriesConnector(BaseConnector):
     async def execute(self, action: str, guild: nextcord.Guild, **kwargs) -> Dict[str, Any]:
         actions = {
             "create": self.create,
+            "rename": self.rename,
             "edit": self.edit,
             "delete": self.delete,
             "sync": self.sync,
@@ -77,6 +78,31 @@ class CategoriesConnector(BaseConnector):
             raise PermissionError("manage_channels")
         except nextcord.HTTPException as exc:
             raise RuntimeError(f"Failed to create category: {exc}")
+
+    # ------------------------------------------------------------------
+    # RENAME
+    # ------------------------------------------------------------------
+
+    async def rename(self, guild: nextcord.Guild, category_id: int, name: str, **kwargs) -> Dict[str, Any]:
+        """Rename a category."""
+        if not name or not name.strip():
+            raise ValueError("Category name cannot be empty")
+
+        category = guild.get_channel(int(category_id))
+        if category is None or not isinstance(category, nextcord.CategoryChannel):
+            raise ValueError(f"Category '{category_id}' not found")
+
+        reason = kwargs.pop("reason", None)
+
+        try:
+            old_name = category.name
+            await category.edit(name=name.strip(), reason=reason)
+            logger.info("Renamed category '%s' → '%s' (id=%s)", old_name, name, category_id)
+            return {"id": str(category_id), "old_name": old_name, "new_name": name.strip()}
+        except nextcord.Forbidden:
+            raise PermissionError("manage_channels")
+        except nextcord.HTTPException as exc:
+            raise RuntimeError(f"Failed to rename category: {exc}")
 
     async def edit(self, guild: nextcord.Guild, category_id: int, **kwargs) -> Dict[str, Any]:
         """Edit category. kwargs: name, position, update_permissions, reason"""

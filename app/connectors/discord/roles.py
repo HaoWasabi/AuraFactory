@@ -28,6 +28,8 @@ class RolesConnector(BaseConnector):
     async def execute(self, action: str, guild: nextcord.Guild, **kwargs) -> Dict[str, Any]:
         actions = {
             "create": self.create,
+            "bulk_create": self.bulk_create,
+            "rename": self.rename,
             "modify": self.modify,
             "delete": self.delete,
             "assign": self.assign,
@@ -79,6 +81,97 @@ class RolesConnector(BaseConnector):
             raise PermissionError("manage_roles")
         except nextcord.HTTPException as exc:
             raise RuntimeError(f"Failed to create role: {exc}")
+
+    # ------------------------------------------------------------------
+    # BULK CREATE
+    # ------------------------------------------------------------------
+
+    async def bulk_create(self, guild: nextcord.Guild, roles: list = None, **kwargs) -> Dict[str, Any]:
+        """Create multiple roles in one call.
+
+        kwargs:
+            roles: list of dicts, each with {name, color?, hoist?, mentionable?, permissions?}
+        """
+        if not roles or not isinstance(roles, list):
+            raise ValueError("'roles' must be a non-empty list of role definitions")
+
+        created = []
+        errors = []
+        reason = kwargs.pop("reason", "Bulk created by AI Agent")
+
+        # Hierarchy check: bot needs manage_roles
+        if not guild.me.guild_permissions.manage_roles:
+            raise PermissionError("manage_roles")
+
+        for i, role_def in enumerate(roles):
+            if not isinstance(role_def, dict):
+                errors.append({"index": i, "error": "Invalid role definition (must be dict)"})
+                continue
+
+            name = role_def.get("name", "").strip()
+            if not name:
+                errors.append({"index": i, "error": "Role name cannot be empty"})
+                continue
+
+            try:
+                create_kwargs: Dict[str, Any] = {
+                    "name": name,
+                    "hoist": role_def.get("hoist", False),
+                    "mentionable": role_def.get("mentionable", False),
+                    "reason": reason,
+                }
+
+                color = parse_color(role_def.get("color"))
+                if color:
+                    create_kwargs["color"] = color
+
+                perms = role_def.get("permissions")
+                if perms and isinstance(perms, dict):
+                    create_kwargs["permissions"] = parse_permissions(perms)
+
+                role = await guild.create_role(**create_kwargs)
+                created.append(role_to_dict(role))
+                logger.info("Bulk-created role '%s' (id=%s)", name, role.id)
+
+            except (nextcord.Forbidden, nextcord.HTTPException) as exc:
+                errors.append({"index": i, "name": name, "error": str(exc)})
+
+        return {
+            "created": created,
+            "created_count": len(created),
+            "error_count": len(errors),
+            "errors": errors,
+        }
+
+    # ------------------------------------------------------------------
+    # RENAME
+    # ------------------------------------------------------------------
+
+    async def rename(self, guild: nextcord.Guild, role_id: int, name: str, **kwargs) -> Dict[str, Any]:
+        """Rename a role (convenience wrapper)."""
+        if not name or not name.strip():
+            raise ValueError("Role name cannot be empty")
+
+        role = guild.get_role(int(role_id))
+        if role is None:
+            raise ValueError(f"Role '{role_id}' not found")
+
+        # Hierarchy check
+        bot_top_role = guild.me.top_role
+        if role >= bot_top_role:
+            raise PermissionError(f"Cannot rename role '{role.name}' — it is at or above bot's highest role")
+
+        reason = kwargs.pop("reason", None)
+
+        try:
+            old_name = role.name
+            await role.edit(name=name.strip(), reason=reason)
+            logger.info("Renamed role '%s' → '%s' (id=%s)", old_name, name, role_id)
+            return {"id": str(role_id), "old_name": old_name, "new_name": name.strip()}
+        except nextcord.Forbidden:
+            raise PermissionError("manage_roles")
+        except nextcord.HTTPException as exc:
+            raise RuntimeError(f"Failed to rename role: {exc}")
 
     async def modify(self, guild: nextcord.Guild, role_id: int, **kwargs) -> Dict[str, Any]:
         """Edit role. kwargs: name, color, hoist, mentionable, permissions, position, reason"""

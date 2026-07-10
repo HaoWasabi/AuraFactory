@@ -1,4 +1,6 @@
-"""Discord Bot Interface — uses UnifiedAgent for all message processing."""
+"""Discord Bot Interface — uses UnifiedAgent for all message processing.
+Includes Discord UI buttons for approval flows (ApprovalView).
+"""
 import asyncio
 import logging
 from typing import Set
@@ -7,6 +9,7 @@ import nextcord
 from nextcord.ext import commands
 
 from app.config import settings
+from app.messages import msg
 
 logger = logging.getLogger(__name__)
 
@@ -209,13 +212,12 @@ class DiscordBot(commands.Bot):
             if len(response_text) > 1900:
                 response_text = response_text[:1900] + "\n... *(truncated)*"
 
-            sent_msg = await message.reply(response_text)
-
-            # If confirmation needed, track the bot's reply message ID
+            # If confirmation needed, use Discord UI buttons instead of text reply
             if result.get("type") == "confirm_needed":
-                self._confirm_message_ids[sent_msg.id] = guild_id
-                # Auto-cleanup after 5 minutes
-                asyncio.create_task(self._cleanup_confirm_id(sent_msg.id, delay=300))
+                view = ApprovalView(self, guild_id, user_id)
+                await message.reply(response_text, view=view)
+            else:
+                await message.reply(response_text)
 
         except Exception as e:
             logger.exception("Error processing message from user %d in guild %d: %s", user_id, guild_id, e)
@@ -225,3 +227,73 @@ class DiscordBot(commands.Bot):
         """Remove tracked confirmation message after timeout."""
         await asyncio.sleep(delay)
         self._confirm_message_ids.pop(msg_id, None)
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# Discord UI Views (Buttons)
+# ═══════════════════════════════════════════════════════════════════════════════
+
+class ApprovalView(nextcord.ui.View):
+    """Discord UI buttons for high-risk action approval.
+
+    Shows Approve/Reject buttons. On approve, sends "yes" back to UnifiedAgent
+    which processes it via the confirmation handler flow.
+    """
+
+    def __init__(self, bot: DiscordBot, guild_id: int, user_id: int, timeout: float = 300):
+        super().__init__(timeout=timeout)
+        self.bot = bot
+        self.guild_id = guild_id
+        self.user_id = user_id
+
+    async def on_timeout(self) -> None:
+        """Disable all buttons when view times out."""
+        for item in self.children:
+            if hasattr(item, "disabled"):
+                item.disabled = True
+        if hasattr(self, "message") and self.message:
+            try:
+                await self.message.edit(view=self)
+            except Exception:
+                pass
+
+    @nextcord.ui.button(label="✅ Approve", style=nextcord.ButtonStyle.green)
+    async def approve_button(self, button: nextcord.ui.Button, interaction: nextcord.Interaction):
+        if interaction.user.id != self.user_id:
+            await interaction.response.send_message("Only the requestor can approve.", ephemeral=True)
+            return
+
+        await interaction.response.defer()
+        self.stop()
+
+        # Send "yes" to UnifiedAgent — triggers confirmation handler
+        try:
+            result = await self.bot.unified_agent.process(
+                message="yes",
+                guild_id=self.guild_id,
+                user_id=self.user_id,
+            )
+            response_text = result.get("content", "✅ Done.")
+            if len(response_text) > 1900:
+                response_text = response_text[:1900] + "\n... *(truncated)*"
+            await interaction.followup.send(response_text)
+        except Exception as e:
+            logger.exception("Approval execution error: %s", e)
+            await interaction.followup.send(f"⚠️ Error: {str(e)[:200]}", ephemeral=True)
+
+    @nextcord.ui.button(label="❌ Cancel", style=nextcord.ButtonStyle.red)
+    async def reject_button(self, button: nextcord.ui.Button, interaction: nextcord.Interaction):
+        if interaction.user.id != self.user_id:
+            await interaction.response.send_message("Only the requestor can cancel.", ephemeral=True)
+            return
+
+        await interaction.response.defer()
+        self.stop()
+
+        # Send "no" to UnifiedAgent — triggers cancellation
+        result = await self.bot.unified_agent.process(
+            message="no",
+            guild_id=self.guild_id,
+            user_id=self.user_id,
+        )
+        await interaction.followup.send(result.get("content", "✋ Cancelled."))

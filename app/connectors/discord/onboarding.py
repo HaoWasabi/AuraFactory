@@ -1,7 +1,11 @@
-"""Discord Onboarding Connector — kwargs pattern. Actions: get, setup"""
+"""Discord Onboarding Connector — kwargs pattern.
+
+Actions: get, setup, setup_welcome, send_dm
+"""
 from __future__ import annotations
 
 import logging
+import re
 from typing import Any, Dict, List
 
 import nextcord
@@ -16,7 +20,12 @@ class OnboardingConnector(BaseConnector):
         self._bot = bot
 
     async def execute(self, action: str, guild: nextcord.Guild, **kwargs) -> Dict[str, Any]:
-        actions = {"get": self.get, "setup": self.setup}
+        actions = {
+            "get": self.get,
+            "setup": self.setup,
+            "setup_welcome": self.setup_welcome,
+            "send_dm": self.send_dm,
+        }
         handler = actions.get(action)
         if handler is None:
             raise ValueError(f"Unknown action '{action}'")
@@ -86,3 +95,92 @@ class OnboardingConnector(BaseConnector):
             raise PermissionError(f"Missing permission to setup onboarding: {e}") from e
         except nextcord.HTTPException as e:
             raise RuntimeError(f"Failed to setup onboarding: {e}") from e
+
+    # ------------------------------------------------------------------
+    # SETUP WELCOME CHANNEL
+    # ------------------------------------------------------------------
+
+    async def setup_welcome(self, guild: nextcord.Guild, **kwargs) -> Dict[str, Any]:
+        """Configure a welcome/system channel with a welcome message.
+
+        kwargs:
+            channel_id: int — channel to use as welcome channel (system channel)
+            welcome_message: str — message to display (shown via system channel flags)
+            suppress_join_notifications: bool — if False, shows "X joined" messages
+        """
+        channel_id = kwargs.get("channel_id")
+        suppress_join = kwargs.get("suppress_join_notifications", False)
+
+        if not channel_id:
+            raise ValueError("'channel_id' is required for welcome setup")
+
+        channel = guild.get_channel(int(channel_id))
+        if channel is None:
+            raise ValueError(f"Channel '{channel_id}' not found")
+
+        if not guild.me.guild_permissions.manage_guild:
+            raise PermissionError("manage_guild")
+
+        try:
+            # Set as system channel
+            flags = guild.system_channel_flags
+            flags.join_notifications = not suppress_join
+
+            await guild.edit(
+                system_channel=channel,
+                system_channel_flags=flags,
+            )
+            logger.info("Set welcome/system channel to '%s' (id=%s)", channel.name, channel_id)
+            return {
+                "system_channel_id": str(channel_id),
+                "system_channel_name": channel.name,
+                "join_notifications_enabled": not suppress_join,
+            }
+        except nextcord.Forbidden:
+            raise PermissionError("manage_guild")
+        except nextcord.HTTPException as exc:
+            raise RuntimeError(f"Failed to setup welcome: {exc}")
+
+    # ------------------------------------------------------------------
+    # SEND DM TO MEMBER
+    # ------------------------------------------------------------------
+
+    async def send_dm(self, guild: nextcord.Guild, **kwargs) -> Dict[str, Any]:
+        """Send a DM to a guild member on behalf of the bot.
+
+        kwargs:
+            member_id: int — target member
+            message: str — message content (max 2000 chars)
+        """
+        member_id = kwargs.get("member_id")
+        message = kwargs.get("message", "")
+
+        if not member_id:
+            raise ValueError("'member_id' is required")
+        if not message or not message.strip():
+            raise ValueError("'message' cannot be empty")
+        if len(message) > 2000:
+            raise ValueError("DM message exceeds 2000 character limit")
+
+        member = guild.get_member(int(member_id))
+        if member is None:
+            raise ValueError(f"Member '{member_id}' not found in guild")
+
+        try:
+            # Create DM channel and send
+            dm_channel = await member.create_dm()
+            await dm_channel.send(message.strip())
+            logger.info("Sent DM to member '%s' (id=%s) in guild '%s'",
+                       member.display_name, member_id, guild.name)
+            return {
+                "sent": True,
+                "member_id": str(member_id),
+                "member_name": member.display_name,
+                "message_length": len(message.strip()),
+            }
+        except nextcord.Forbidden:
+            raise PermissionError(
+                f"Cannot DM member '{member.display_name}' — they may have DMs disabled"
+            )
+        except nextcord.HTTPException as exc:
+            raise RuntimeError(f"Failed to send DM: {exc}")

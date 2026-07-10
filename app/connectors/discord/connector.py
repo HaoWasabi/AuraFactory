@@ -27,6 +27,7 @@ from app.connectors.discord.safety import SafetyConnector
 from app.connectors.discord.templates import TemplatesConnector
 from app.connectors.discord.emojis import EmojisConnector
 from app.connectors.discord.events import EventsConnector
+from app.connectors.discord.permissions import PermissionsConnector
 from app.connectors.discord.stickers import StickersConnector
 from app.connectors.discord.soundboard import SoundboardConnector
 from app.connectors.discord.onboarding import OnboardingConnector
@@ -61,6 +62,7 @@ class DiscordConnector:
             "templates": TemplatesConnector(bot),
             "emojis": EmojisConnector(bot),
             "events": EventsConnector(bot),
+            "permissions": PermissionsConnector(bot),
             "stickers": StickersConnector(bot),
             "soundboard": SoundboardConnector(bot),
             "onboarding": OnboardingConnector(bot),

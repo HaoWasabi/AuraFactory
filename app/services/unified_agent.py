@@ -33,6 +33,9 @@ from app.llm.base import BaseLLM, LLMResponse
 from app.mcp import MCPClient
 from app.services.context_service import ContextService
 
+# Token tracking (cost observability)
+from app.services._token_tracker import record_token_usage
+
 # Pattern 1: Normalizer
 from app.core.normalizer import LLMResponseNormalizer, NormalizedLLMOutput, NormalizedToolCall
 
@@ -54,6 +57,9 @@ from app.prompts.system_prompt import UNIFIED_SYSTEM_PROMPT, ASSEMBLE_PROMPT, RE
 
 # Registry (the single source of truth)
 from app.core.spec_loader import SpecRegistry
+
+# Skills (knowledge docs for kwargs accuracy)
+from app.core.skill_loader import SkillLoader
 
 logger = logging.getLogger(__name__)
 
@@ -251,6 +257,7 @@ class UnifiedAgent:
         self._llm = llm
         self._mcp_client = mcp_client
         self._context_service = context_service
+        self._db = db
         self._registry = registry
 
         # ── Config (env vars > YAML defaults > hardcoded fallback) ──
@@ -300,6 +307,9 @@ class UnifiedAgent:
             mode=getattr(settings, "GUILD_LOCK_MODE", "open"),
             allowed_ids=set(int(x) for x in getattr(settings, "ALLOWED_GUILD_IDS", []) if x),
         )
+
+        # ── Skills (knowledge docs for LLM kwargs accuracy) ──
+        self._skills = SkillLoader()
 
         logger.info(
             "UnifiedAgent v3.1 (Spec-Driven) initialized: %d tools visible, %d high-risk, "
@@ -356,6 +366,13 @@ class UnifiedAgent:
             logger.error("LLM call failed: %s", e, exc_info=True)
             req.transition(RequestState.FAILED)
             return self._response("error", "⚠️ An error occurred while processing your request. Please try again.")
+
+        # === Track token usage ===
+        if hasattr(raw_response, 'usage') and raw_response.usage:
+            await record_token_usage(
+                self._db, guild_id, user_id, raw_response.usage,
+                provider=settings.LLM_PROVIDER, phase="planning",
+            )
 
         # === Normalize ===
         normalized = self._normalizer.normalize(raw_response)
@@ -629,6 +646,9 @@ class UnifiedAgent:
                 temperature=self._cfg.temp_reflect,
                 max_tokens=self._cfg.max_tokens_reflect,
             )
+            if response and hasattr(response, 'usage') and response.usage:
+                await record_token_usage(
+                    self._db, 0, 0, response.usage, provider=settings.LLM_PROVIDER, phase="reflect")
             if response and response.content:
                 text = response.content.strip()
                 if text.startswith("```"):
@@ -660,11 +680,17 @@ class UnifiedAgent:
             for r in results_so_far
         )
 
+        # Inject targeted skills based on what tools were already used
+        used_tools = [r.get("mcp_name", r.get("tool", "")) for r in results_so_far]
+        skills_block = self._skills.get_relevant_skills(tool_names=used_tools)
+        skills_section = f"\n\nTool knowledge:\n{skills_block}" if skills_block else ""
+
         replan_input = (
             f"Original request: {original_message}\n\n"
             f"Already completed:\n{result_summary}\n\n"
             f"Still needed:\n" + "\n".join(f"- {s}" for s in next_steps) + "\n\n"
-            f"Current server state:\n{context_block}\n\n"
+            f"Current server state:\n{context_block}"
+            f"{skills_section}\n\n"
             f"Call the appropriate tools for the remaining steps."
         )
 
@@ -716,6 +742,9 @@ class UnifiedAgent:
                 temperature=self._cfg.temp_assemble,
                 max_tokens=self._cfg.max_tokens_assemble,
             )
+            if response and hasattr(response, 'usage') and response.usage:
+                await record_token_usage(
+                    self._db, 0, 0, response.usage, provider=settings.LLM_PROVIDER, phase="assemble")
             if response and response.content:
                 return response.content.strip()
         except Exception as e:
@@ -752,9 +781,16 @@ class UnifiedAgent:
         messages = [
             {"role": "user", "content": f"[CURRENT SERVER STATE]\n{context_block}"},
         ]
+
+        # Inject relevant skill knowledge (business logic + param rules)
+        skills_content = self._skills.get_relevant_skills()
+        if skills_content:
+            messages.append({"role": "user", "content": f"[TOOL KNOWLEDGE]\n{skills_content}"})
+
         if memory_block:
             messages.append({"role": "user", "content": memory_block})
-        messages.append({"role": "assistant", "content": "I have the server state. How can I help?"})
+
+        messages.append({"role": "assistant", "content": "I have the server state and tool knowledge. How can I help?"})
 
         if history:
             for turn in history[-self._cfg.context_history_turns:]:
