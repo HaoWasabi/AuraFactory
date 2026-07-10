@@ -65,21 +65,27 @@ metadata:
       timeout_member: discord.members.timeout
       setup_verification: discord.features.setup_verification
       create_poll: discord.features.create_poll
+      create_event: discord.events.create
+      edit_event: discord.events.edit
+      delete_event: discord.events.delete
+      create_emoji: discord.emojis.create
+      delete_emoji: discord.emojis.delete
+      setup_onboarding: discord.onboarding.setup
 
     # Human-readable labels for confirmation prompts (only high-risk tools need this)
     # If not listed here, auto-generates from description field.
     human_labels:
-      discord.channels.delete: "🗑️ Xóa kênh"
-      discord.categories.delete: "🗑️ Xóa danh mục"
-      discord.roles.delete: "🗑️ Xóa role"
-      discord.members.kick: "👢 Kick thành viên"
-      discord.members.ban: "🔨 Ban thành viên"
-      discord.members.bulk_ban: "🔨 Ban hàng loạt"
-      discord.members.timeout: "🔇 Timeout thành viên"
-      discord.members.purge: "🗑️ Xóa tin nhắn hàng loạt"
-      discord.backup.restore: "⚠️ Khôi phục backup toàn server"
-      discord.community.toggle: "⚠️ Bật/tắt Community"
-      discord.safety.set_mfa: "⚠️ Thay đổi yêu cầu 2FA"
+      discord.channels.delete: "🗑️ Delete channel"
+      discord.categories.delete: "🗑️ Delete category"
+      discord.roles.delete: "🗑️ Delete role"
+      discord.members.kick: "👢 Kick member"
+      discord.members.ban: "🔨 Ban member"
+      discord.members.bulk_ban: "🔨 Bulk ban members"
+      discord.members.timeout: "🔇 Timeout member"
+      discord.members.purge: "🗑️ Purge messages"
+      discord.backup.restore: "⚠️ Restore full server backup"
+      discord.community.toggle: "⚠️ Toggle Community mode"
+      discord.safety.set_mfa: "⚠️ Change 2FA requirement"
 
     # Agentic loop settings (overridable via env vars)
     defaults:
@@ -99,7 +105,67 @@ metadata:
       rate_limit_min_delay: 0.5
       retry_max_attempts: 3
       retry_base_delay: 1.0
-      confirmation_words: "có,yes,y,ok,đồng ý,xác nhận,confirm,1"
+      confirmation_words: "yes,y,ok,confirm,có,đồng ý,xác nhận,1"
+
+  # ──────────────────────────────────────────────────────────────────────────
+  # Parameter Aliases — agent-friendly names → Nextcord/REST names
+  # ──────────────────────────────────────────────────────────────────────────
+  param_aliases:
+    new_name: name
+    new_topic: topic
+    icon_url: icon
+    banner_url: banner
+    category_id: parent_id  # REST API uses parent_id
+
+  # ──────────────────────────────────────────────────────────────────────────
+  # Rate Limit Profiles — named presets for different operation classes
+  # ──────────────────────────────────────────────────────────────────────────
+  rate_limit_profiles:
+    light_read:
+      burst: 10
+      min_delay: 0.2
+    standard_write:
+      burst: 5
+      min_delay: 0.5
+    heavy_write:
+      burst: 3
+      min_delay: 1.0
+    critical_write:
+      burst: 1
+      min_delay: 2.0
+
+  # ──────────────────────────────────────────────────────────────────────────
+  # Error Taxonomy — typed errors for agent decision-making
+  # ──────────────────────────────────────────────────────────────────────────
+  error_taxonomy:
+    FORBIDDEN:
+      retryable: false
+      agent_action: "Check bot permissions and role hierarchy"
+    HIERARCHY_VIOLATION:
+      retryable: false
+      agent_action: "Target role is higher than bot role — cannot modify"
+    RATE_LIMITED:
+      retryable: true
+      agent_action: "Wait retry_after seconds then retry"
+    NOT_FOUND:
+      retryable: false
+      agent_action: "Resource does not exist — verify ID with a list call"
+    FEATURE_REQUIRED:
+      retryable: false
+      agent_action: "Server lacks required feature (e.g. COMMUNITY) — inform user"
+    INVALID_PARAMS:
+      retryable: false
+      agent_action: "Fix parameters based on validation error message"
+
+  # ──────────────────────────────────────────────────────────────────────────
+  # Blocked Actions — things the bot CANNOT do (API or permission limitation)
+  # ──────────────────────────────────────────────────────────────────────────
+  blocked_actions:
+    - delete_server
+    - transfer_ownership
+    - add_integration
+    - notification_settings_personal
+    - per_server_avatar
 
 # ============================================================================
 # CHANNELS
@@ -783,156 +849,243 @@ discord.onboarding.send_dm:
   risk_level: medium
 
 # ============================================================================
-# EVENTS
+# EVENTS (Scheduled Events)
 # ============================================================================
 discord.events.create:
-  description: "Create a scheduled event (voice, stage, or external)"
+  description: "Create a scheduled event in the guild"
   required_params:
-    name: { type: string }
-    start_time: { type: string, description: "ISO 8601 datetime" }
+    name:
+      type: string
+      description: "Event name"
+      validation: { min_length: 1, max_length: 100 }
+    entity_type:
+      type: integer
+      enum: [1, 2, 3]
+      description: "Event entity type: 1=stage, 2=voice, 3=external"
+    scheduled_start_time:
+      type: string
+      description: "ISO8601 timestamp for event start"
   shared_params:
-    description: { type: string }
-    end_time: { type: string, description: "ISO 8601 datetime" }
-    entity_type: { type: string, enum: [voice, stage, external], default: "voice" }
-    channel_id: { type: integer, description: "Required for voice/stage events" }
-    location: { type: string, description: "Required for external events" }
-    image_url: { type: string }
+    channel_id:
+      type: integer
+      description: "Channel ID (required for entity_type 1 or 2)"
+      depends_on: { entity_type: [1, 2] }
+    scheduled_end_time:
+      type: string
+      description: "ISO8601 timestamp for event end (required for entity_type=3)"
+    description:
+      type: string
+      description: "Event description"
+      validation: { max_length: 1000 }
+    location:
+      type: string
+      description: "External location (required for entity_type=3)"
+      depends_on: { entity_type: 3 }
   required_permissions: [manage_events]
   risk_level: medium
   graph_edges:
-    - { target: "discord.channels.list", relation: "often_preceded_by", reason: "Need channel_id for voice/stage" }
+    - { target: "discord.channels.list", relation: "often_preceded_by", reason: "Need channel_id for voice/stage events" }
 
 discord.events.edit:
-  description: "Edit a scheduled event"
+  description: "Edit an existing scheduled event"
   required_params:
-    event_id: { type: integer }
+    event_id: { type: integer, description: "ID of the event to edit" }
   shared_params:
-    name: { type: string }
-    description: { type: string }
-    start_time: { type: string }
-    end_time: { type: string }
+    name: { type: string, validation: { max_length: 100 } }
+    entity_type: { type: integer, enum: [1, 2, 3] }
     channel_id: { type: integer }
+    scheduled_start_time: { type: string }
+    scheduled_end_time: { type: string }
+    description: { type: string, validation: { max_length: 1000 } }
     location: { type: string }
-    entity_type: { type: string, enum: [voice, stage, external] }
-    image_url: { type: string }
-    status: { type: string, enum: [scheduled, active, completed, canceled] }
+    status: { type: integer, enum: [1, 2, 3, 4], description: "1=scheduled, 2=active, 3=completed, 4=canceled" }
   required_permissions: [manage_events]
   risk_level: medium
 
-discord.events.cancel:
-  description: "Cancel a scheduled event"
+discord.events.delete:
+  description: "Delete a scheduled event"
   required_params:
-    event_id: { type: integer }
+    event_id: { type: integer, description: "ID of the event to delete" }
   shared_params: {}
   required_permissions: [manage_events]
-  risk_level: medium
+  risk_level: high
+
+discord.events.list:
+  description: "List all scheduled events in the guild"
+  required_params: {}
+  shared_params:
+    with_user_count: { type: boolean, default: false, description: "Include subscriber count" }
+  required_permissions: [view_channel]
+  risk_level: low
 
 # ============================================================================
 # EMOJIS
 # ============================================================================
-discord.emojis.upload:
+discord.emojis.create:
   description: "Upload a custom emoji to the guild"
   required_params:
-    name: { type: string, validation: { min_length: 2, max_length: 32 } }
-    image_url: { type: string, description: "Image URL (PNG, JPG, GIF, max 256KB)" }
+    name:
+      type: string
+      description: "Emoji name (2-32 chars, alphanumeric + underscores)"
+      validation: { min_length: 2, max_length: 32 }
+    image_url:
+      type: string
+      description: "URL of image to upload (PNG/GIF, max 256KB)"
   shared_params:
-    roles: { type: array, items: integer, description: "Roles that can use this emoji" }
-  required_permissions: [manage_emojis_and_stickers]
-  risk_level: low
-
-discord.emojis.delete:
-  description: "Delete a custom emoji"
-  required_params:
-    emoji_id: { type: integer }
-  shared_params:
-    reason: { type: string }
+    roles:
+      type: array
+      items: integer
+      description: "Role IDs that can use this emoji (empty = everyone)"
+    reason: { type: string, description: "Audit log reason" }
   required_permissions: [manage_emojis_and_stickers]
   risk_level: medium
+
+discord.emojis.delete:
+  description: "Delete a custom emoji from the guild"
+  required_params:
+    emoji_id: { type: integer, description: "ID of the emoji to delete" }
+  shared_params:
+    reason: { type: string, description: "Audit log reason" }
+  required_permissions: [manage_emojis_and_stickers]
+  risk_level: high
 
 discord.emojis.rename:
   description: "Rename a custom emoji"
   required_params:
-    emoji_id: { type: integer }
-    new_name: { type: string }
-  shared_params: {}
+    emoji_id: { type: integer, description: "ID of the emoji to rename" }
+    new_name:
+      type: string
+      description: "New emoji name (2-32 chars, alphanumeric + underscores)"
+      validation: { min_length: 2, max_length: 32 }
+  shared_params:
+    reason: { type: string, description: "Audit log reason" }
   required_permissions: [manage_emojis_and_stickers]
-  risk_level: low
+  risk_level: medium
 
 discord.emojis.list:
   description: "List all custom emojis in the guild"
   required_params: {}
   shared_params: {}
-  required_permissions: []
+  required_permissions: [manage_emojis_and_stickers]
   risk_level: low
 
 # ============================================================================
 # STICKERS
 # ============================================================================
-discord.stickers.upload:
-  description: "Upload a custom sticker (guild must have available slots)"
+discord.stickers.create:
+  description: "Upload a custom sticker to the guild"
   required_params:
-    name: { type: string }
-    file_url: { type: string, description: "Sticker file URL (PNG, APNG, GIF, Lottie)" }
-    tags: { type: string, description: "Related emoji tag for autocomplete" }
+    name:
+      type: string
+      description: "Sticker name (2-30 chars)"
+      validation: { min_length: 2, max_length: 30 }
+    file_url:
+      type: string
+      description: "URL of sticker file (PNG/APNG/Lottie, max 512KB)"
+    tags:
+      type: string
+      description: "Autocomplete tag for the sticker (related emoji name)"
   shared_params:
-    description: { type: string }
-  required_permissions: [manage_emojis_and_stickers]
-  risk_level: low
-
-discord.stickers.edit:
-  description: "Edit sticker name, description, or tags"
-  required_params:
-    sticker_id: { type: integer }
-  shared_params:
-    name: { type: string }
-    description: { type: string }
-    tags: { type: string }
-  required_permissions: [manage_emojis_and_stickers]
-  risk_level: low
-
-discord.stickers.delete:
-  description: "Delete a custom sticker"
-  required_params:
-    sticker_id: { type: integer }
-  shared_params:
-    reason: { type: string }
+    description: { type: string, description: "Sticker description", validation: { max_length: 100 } }
+    reason: { type: string, description: "Audit log reason" }
   required_permissions: [manage_emojis_and_stickers]
   risk_level: medium
+
+discord.stickers.delete:
+  description: "Delete a custom sticker from the guild"
+  required_params:
+    sticker_id: { type: integer, description: "ID of the sticker to delete" }
+  shared_params:
+    reason: { type: string, description: "Audit log reason" }
+  required_permissions: [manage_emojis_and_stickers]
+  risk_level: high
+
+discord.stickers.list:
+  description: "List all custom stickers in the guild"
+  required_params: {}
+  shared_params: {}
+  required_permissions: [manage_emojis_and_stickers]
+  risk_level: low
 
 # ============================================================================
 # SOUNDBOARD
 # ============================================================================
-discord.soundboard.upload:
-  description: "Upload a custom soundboard sound"
+discord.soundboard.create:
+  description: "Upload a custom sound to the guild soundboard"
   required_params:
-    name: { type: string }
-    sound_url: { type: string, description: "Audio file URL (MP3/OGG, max 512KB, max 5s)" }
+    name:
+      type: string
+      description: "Sound name"
+      validation: { min_length: 2, max_length: 32 }
+    file_url:
+      type: string
+      description: "URL of audio file (MP3/OGG, max 512KB, max 5s)"
   shared_params:
-    volume: { type: number, range: [0.0, 1.0], default: 1.0 }
-    emoji_name: { type: string }
-    emoji_id: { type: integer }
-  required_permissions: [manage_guild_expressions]
-  risk_level: low
-
-discord.soundboard.edit:
-  description: "Edit soundboard sound properties"
-  required_params:
-    sound_id: { type: integer }
-  shared_params:
-    name: { type: string }
-    volume: { type: number, range: [0.0, 1.0] }
-    emoji_name: { type: string }
-    emoji_id: { type: integer }
-  required_permissions: [manage_guild_expressions]
-  risk_level: low
-
-discord.soundboard.delete:
-  description: "Delete a soundboard sound"
-  required_params:
-    sound_id: { type: integer }
-  shared_params: {}
+    volume: { type: number, range: [0.0, 1.0], default: 1.0, description: "Playback volume" }
+    emoji_name: { type: string, description: "Associated emoji name" }
+    reason: { type: string, description: "Audit log reason" }
   required_permissions: [manage_guild_expressions]
   risk_level: medium
+
+discord.soundboard.delete:
+  description: "Delete a custom sound from the guild soundboard"
+  required_params:
+    sound_id: { type: integer, description: "ID of the sound to delete" }
+  shared_params:
+    reason: { type: string, description: "Audit log reason" }
+  required_permissions: [manage_guild_expressions]
+  risk_level: high
+
+discord.soundboard.list:
+  description: "List all custom sounds in the guild soundboard"
+  required_params: {}
+  shared_params: {}
+  required_permissions: [manage_guild_expressions]
+  risk_level: low
+
+# ============================================================================
+# ONBOARDING
+# ============================================================================
+discord.onboarding.get:
+  description: "Get the current onboarding configuration for the guild"
+  required_params: {}
+  shared_params: {}
+  required_permissions: [manage_guild]
+  risk_level: low
+
+discord.onboarding.setup:
+  description: "Configure server onboarding (prompts, default channels, enabled state)"
+  required_params:
+    prompts:
+      type: array
+      items:
+        type: object
+        properties:
+          title: { type: string, description: "Prompt question text" }
+          options:
+            type: array
+            items:
+              type: object
+              properties:
+                title: { type: string }
+                description: { type: string }
+                channel_ids: { type: array, items: integer }
+                role_ids: { type: array, items: integer }
+    default_channels:
+      type: array
+      items: integer
+      description: "Channel IDs shown to new members by default"
+    enabled:
+      type: boolean
+      description: "Whether onboarding is enabled"
+  shared_params:
+    mode: { type: integer, enum: [0, 1], description: "0=onboarding_default, 1=onboarding_advanced" }
+    reason: { type: string, description: "Audit log reason" }
+  required_permissions: [manage_guild, manage_roles]
+  risk_level: medium
+  graph_edges:
+    - { target: "discord.channels.list", relation: "often_preceded_by", reason: "Need channel IDs for prompts/defaults" }
+    - { target: "discord.roles.list", relation: "often_preceded_by", reason: "Need role IDs for prompt options" }
 
 # ============================================================================
 # BACKUP
@@ -1066,3 +1219,9 @@ graph_global_edges:
   - { from: "discord.members.ban", to: "discord.members.unban", relation: "inverse_of" }
   - { from: "discord.roles.assign", to: "discord.roles.remove", relation: "inverse_of" }
   - { from: "discord.threads.archive", to: "discord.threads.create", relation: "inverse_of" }
+
+  # Events & Onboarding dependencies
+  - { from: "discord.events.create[entity_type=voice]", to: "discord.channels.list", relation: "needs_data_from" }
+  - { from: "discord.events.create[entity_type=stage]", to: "COMMUNITY", relation: "requires_feature" }
+  - { from: "discord.onboarding.setup", to: "discord.channels.list", relation: "needs_data_from" }
+  - { from: "discord.onboarding.setup", to: "discord.roles.list", relation: "needs_data_from" }

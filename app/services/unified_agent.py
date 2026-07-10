@@ -58,9 +58,9 @@ from app.core.spec_loader import SpecRegistry
 logger = logging.getLogger(__name__)
 
 
-# ═══════════════════════════════════════════════════════════════════════════
+# ═══════════════════════════════════════════════════════════════════════════════
 # Config Resolver — env vars override YAML defaults
-# ═══════════════════════════════════════════════════════════════════════════
+# ═══════════════════════════════════════════════════════════════════════════════
 
 class AgentConfig:
     """Resolves configuration: env var → YAML default → hardcoded fallback.
@@ -160,12 +160,12 @@ class AgentConfig:
             yaml_val = self._registry.get_default("confirmation_words", "")
             if yaml_val:
                 return [w.strip() for w in str(yaml_val).split(",") if w.strip()]
-        return ["có", "yes", "y", "ok", "đồng ý", "xác nhận", "confirm", "1"]
+        return ["yes", "y", "ok", "confirm", "có", "đồng ý", "xác nhận", "1"]
 
 
-# ═══════════════════════════════════════════════════════════════════════════
+# ═══════════════════════════════════════════════════════════════════════════════
 # Context Builder
-# ═══════════════════════════════════════════════════════════════════════════
+# ═══════════════════════════════════════════════════════════════════════════════
 
 def build_server_context_block(server_context: dict, cfg: AgentConfig) -> str:
     """Build compact server context string for LLM prompt."""
@@ -213,9 +213,9 @@ def build_server_context_block(server_context: dict, cfg: AgentConfig) -> str:
     return "\n\n".join(parts) if parts else "Server is empty or bot has no cached data."
 
 
-# ═══════════════════════════════════════════════════════════════════════════
+# ═══════════════════════════════════════════════════════════════════════════════
 # Helper: serialize/deserialize tool calls for payload storage
-# ═══════════════════════════════════════════════════════════════════════════
+# ═══════════════════════════════════════════════════════════════════════════════
 
 def _serialize_tool_calls(tool_calls: List[NormalizedToolCall]) -> List[Dict[str, Any]]:
     """Convert NormalizedToolCall objects to JSON-safe dicts."""
@@ -233,9 +233,9 @@ def _deserialize_tool_calls(data: List[Dict[str, Any]]) -> List[NormalizedToolCa
     ]
 
 
-# ═══════════════════════════════════════════════════════════════════════════
+# ═══════════════════════════════════════════════════════════════════════════════
 # Unified Agent
-# ═══════════════════════════════════════════════════════════════════════════
+# ═══════════════════════════════════════════════════════════════════════════════
 
 class UnifiedAgent:
     """Spec-driven Agentic AI assistant with Plan → Execute → Reflect loop."""
@@ -310,9 +310,9 @@ class UnifiedAgent:
             self._guild_lock.mode,
         )
 
-    # ─────────────────────────────────────────────────────────────────────
+    # ─────────────────────────────────────────────────────────────────────────
     # Main Entry Point
-    # ─────────────────────────────────────────────────────────────────────
+    # ─────────────────────────────────────────────────────────────────────────
 
     async def process(
         self,
@@ -324,7 +324,7 @@ class UnifiedAgent:
         """Process a user message end-to-end."""
         # === Guild Lock ===
         if not self._guild_lock.is_allowed(guild_id):
-            return self._response("error", "⛔ Server này chưa được cấp quyền sử dụng bot.")
+            return self._response("error", "⛔ This server is not authorized to use the bot.")
 
         # === Check pending approval ===
         pending_req = self._requests.get_awaiting_approval(guild_id, user_id)
@@ -355,7 +355,7 @@ class UnifiedAgent:
         except Exception as e:
             logger.error("LLM call failed: %s", e, exc_info=True)
             req.transition(RequestState.FAILED)
-            return self._response("error", "⚠️ Đã xảy ra lỗi khi xử lý yêu cầu. Vui lòng thử lại.")
+            return self._response("error", "⚠️ An error occurred while processing your request. Please try again.")
 
         # === Normalize ===
         normalized = self._normalizer.normalize(raw_response)
@@ -363,7 +363,7 @@ class UnifiedAgent:
         if not normalized.usable:
             req.transition(RequestState.FAILED)
             logger.warning("LLM response not usable: %s", normalized.failure_reason)
-            return self._response("error", "⚠️ AI không thể xử lý yêu cầu lúc này. Vui lòng thử lại.")
+            return self._response("error", "⚠️ AI cannot process this request right now. Please try again.")
 
         # === Branch: text-only response ===
         if normalized.is_text_only:
@@ -376,11 +376,11 @@ class UnifiedAgent:
 
         # Fallback
         req.transition(RequestState.COMPLETED)
-        return self._response("answer", normalized.text or "Không có phản hồi.")
+        return self._response("answer", normalized.text or "No response.")
 
-    # ─────────────────────────────────────────────────────────────────────
+    # ─────────────────────────────────────────────────────────────────────────
     # Agentic Execution Loop
-    # ─────────────────────────────────────────────────────────────────────
+    # ─────────────────────────────────────────────────────────────────────────
 
     async def _agentic_execute(
         self,
@@ -398,9 +398,9 @@ class UnifiedAgent:
             logger.info("Agentic iteration %d/%d (guild=%d, tools=%d)",
                         iteration, self._cfg.max_iterations, guild_id, len(current_tool_calls))
 
-            # ┌─────────────────────────────────────────────────────┐
+            # ┌──────────────────────────────────────────────────────┐
             # │ PHASE 1: PRE-FLIGHT APPROVAL CHECK                  │
-            # └─────────────────────────────────────────────────────┘
+            # └──────────────────────────────────────────────────────┘
             high_risk_in_batch = [
                 tc for tc in current_tool_calls
                 if tc.mcp_name in self._high_risk_tools
@@ -423,38 +423,38 @@ class UnifiedAgent:
 
                 return self._response(
                     "confirm_needed",
-                    f"🔒 **Cần xác nhận {len(desc_lines)} hành động nguy hiểm:**\n{desc}\n\n"
-                    f"❓ **Xác nhận thực hiện TẤT CẢ?** (reply `có` / `yes` để tiếp tục, `không` / `no` để hủy)",
+                    f"🔒 **{len(desc_lines)} high-risk action(s) require confirmation:**\n{desc}\n\n"
+                    f"❓ **Confirm ALL?** (reply `yes` to proceed, `no` to cancel)",
                     all_results,
                 )
 
-            # ┌─────────────────────────────────────────────────────┐
+            # ┌──────────────────────────────────────────────────────┐
             # │ PHASE 2: EXECUTE ALL TOOLS                          │
-            # └─────────────────────────────────────────────────────┘
+            # └──────────────────────────────────────────────────────┘
             req.transition(RequestState.EXECUTING)
             iteration_results = await self._run_tool_batch(current_tool_calls, guild_id, user_id, req)
             all_results.extend(iteration_results)
 
-            # ┌─────────────────────────────────────────────────────┐
+            # ┌──────────────────────────────────────────────────────┐
             # │ PHASE 3: OBSERVE — Invalidate cache                 │
-            # └─────────────────────────────────────────────────────┘
+            # └──────────────────────────────────────────────────────┘
             try:
                 if any(r["success"] for r in iteration_results):
                     await self._context_service.invalidate(guild_id)
             except Exception as e:
                 logger.warning("Cache invalidation failed: %s", e)
 
-            # ┌─────────────────────────────────────────────────────┐
+            # ┌──────────────────────────────────────────────────────┐
             # │ PHASE 4: REFLECT — Goal achieved?                   │
-            # └─────────────────────────────────────────────────────┘
+            # └──────────────────────────────────────────────────────┘
             reflection = await self._reflect(original_message, all_results)
 
             if reflection["status"] != "continue":
                 break
 
-            # ┌─────────────────────────────────────────────────────┐
+            # ┌──────────────────────────────────────────────────────┐
             # │ PHASE 5: ADAPT — Replan with fresh context          │
-            # └─────────────────────────────────────────────────────┘
+            # └──────────────────────────────────────────────────────┘
             next_steps = reflection.get("next_steps", [])
             logger.info("Agentic loop continuing (iteration %d): %s", iteration, next_steps)
 
@@ -471,9 +471,9 @@ class UnifiedAgent:
         content = await self._assemble_response(original_message, all_results)
         return self._response("action", content, all_results)
 
-    # ─────────────────────────────────────────────────────────────────────
+    # ─────────────────────────────────────────────────────────────────────────
     # Confirmation Handler
-    # ─────────────────────────────────────────────────────────────────────
+    # ─────────────────────────────────────────────────────────────────────────
 
     async def _handle_confirmation(
         self,
@@ -490,7 +490,7 @@ class UnifiedAgent:
 
         if not affirmative:
             req.transition(RequestState.CANCELLED)
-            return self._response("answer", "✋ Đã hủy. Không có thay đổi nào được thực hiện.")
+            return self._response("answer", "✋ Cancelled. No changes were made.")
 
         # === User approved → Execute ALL pending tools ===
         await self._audit.log_approval(guild_id, user_id, "batch", "approved")
@@ -543,8 +543,8 @@ class UnifiedAgent:
                 ]
                 return self._response(
                     "confirm_needed",
-                    f"🔒 **Tiếp tục cần xác nhận {len(desc_lines)} hành động:**\n"
-                    + "\n".join(desc_lines) + "\n\n❓ **Xác nhận?**",
+                    f"🔒 **{len(desc_lines)} more action(s) need confirmation:**\n"
+                    + "\n".join(desc_lines) + "\n\n❓ **Confirm?**",
                     all_results,
                 )
 
@@ -564,9 +564,9 @@ class UnifiedAgent:
         content = await self._assemble_response(original_message, all_results)
         return self._response("action", content, all_results)
 
-    # ─────────────────────────────────────────────────────────────────────
+    # ─────────────────────────────────────────────────────────────────────────
     # Tool Batch Executor (no approval logic — just runs tools)
-    # ─────────────────────────────────────────────────────────────────────
+    # ─────────────────────────────────────────────────────────────────────────
 
     async def _run_tool_batch(
         self,
@@ -594,9 +594,9 @@ class UnifiedAgent:
 
         return results
 
-    # ─────────────────────────────────────────────────────────────────────
+    # ─────────────────────────────────────────────────────────────────────────
     # Reflect
-    # ─────────────────────────────────────────────────────────────────────
+    # ─────────────────────────────────────────────────────────────────────────
 
     async def _reflect(
         self,
@@ -639,9 +639,9 @@ class UnifiedAgent:
 
         return {"status": "done"}
 
-    # ─────────────────────────────────────────────────────────────────────
+    # ─────────────────────────────────────────────────────────────────────────
     # Replan
-    # ─────────────────────────────────────────────────────────────────────
+    # ─────────────────────────────────────────────────────────────────────────
 
     async def _replan(
         self,
@@ -685,9 +685,9 @@ class UnifiedAgent:
 
         return None
 
-    # ─────────────────────────────────────────────────────────────────────
+    # ─────────────────────────────────────────────────────────────────────────
     # Assemble
-    # ─────────────────────────────────────────────────────────────────────
+    # ─────────────────────────────────────────────────────────────────────────
 
     async def _assemble_response(
         self,
@@ -723,9 +723,9 @@ class UnifiedAgent:
 
         return self._format_results_fallback(results)
 
-    # ─────────────────────────────────────────────────────────────────────
+    # ─────────────────────────────────────────────────────────────────────────
     # Pipeline Executor (innermost MCP call)
-    # ─────────────────────────────────────────────────────────────────────
+    # ─────────────────────────────────────────────────────────────────────────
 
     async def _mcp_execute(self, ctx: ExecutionContext) -> ExecutionResult:
         """Actual MCP tool call — center of middleware chain."""
@@ -737,9 +737,9 @@ class UnifiedAgent:
             should_retry = any(s in error.lower() for s in ("429", "rate", "timeout"))
             return ExecutionResult(success=False, error=error, should_retry=should_retry)
 
-    # ─────────────────────────────────────────────────────────────────────
+    # ─────────────────────────────────────────────────────────────────────────
     # Helpers
-    # ─────────────────────────────────────────────────────────────────────
+    # ─────────────────────────────────────────────────────────────────────────
 
     def _build_messages(
         self,

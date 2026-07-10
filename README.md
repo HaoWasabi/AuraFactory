@@ -1,4 +1,4 @@
-# AuraFactory v2 🏭
+# AuraFactory v2.1 🏭
 
 **AI-Powered Discord Server Management** — Spec-driven Agentic Architecture
 
@@ -31,14 +31,15 @@
 │  │ Category │ │  Assign  │ │  Mod   │ │Settings │ │  Polls │  │
 │  └──────────┘ └──────────┘ └────────┘ └─────────┘ └────────┘  │
 │  + Webhooks, Threads, Invites, AutoMod, Backup, Templates,      │
-│    Audit, Safety, Events, Emojis, Stickers, Soundboard          │
+│    Audit, Safety, Events, Emojis, Stickers, Soundboard,         │
+│    Onboarding                                                    │
 └─────────────────────────────────────────────────────────────────┘
 ```
 
 ## Key Design Decisions
 
 ### Spec-Driven (**kwargs pattern**)
-- Single source of truth: `tools_spec.yaml` (700+ lines, 65+ tools)
+- Single source of truth: `tools_spec.yaml` (1200+ lines, 80+ tools)
 - Tool code uses pure `**kwargs` — zero validation logic in connectors
 - `KwargsFilter` (from spec) validates before execution
 - `ToolGraph` (NetworkX) handles intelligent tool retrieval
@@ -88,6 +89,11 @@ AuraFactory/
 │   │       ├── features.py     ← verification, polls, welcome, auto-delete
 │   │       ├── audit.py        ← query audit logs
 │   │       ├── safety.py       ← content filter, MFA
+│   │       ├── events.py       ← scheduled events CRUD
+│   │       ├── emojis.py       ← create, rename, delete, list
+│   │       ├── stickers.py     ← create, delete, list
+│   │       ├── soundboard.py   ← create, delete, list (REST-based)
+│   │       ├── onboarding.py   ← get config, setup prompts
 │   │       └── templates.py    ← create, sync, delete
 │   ├── services/                ← 🔧 Business logic
 │   │   ├── unified_agent.py    ← Main agent (v2 with safety)
@@ -149,7 +155,10 @@ uvicorn app.main:app --host 0.0.0.0 --port 8000
 - ✅ PostgreSQL database
 - ✅ NetworkX in-memory graph
 - ✅ Full safety layers
-- ✅ 14 Discord connector modules, 65+ actions
+- ✅ 19 Discord connector modules, 80+ actions
+- ✅ Spec-driven validation (KwargsFilter + error_taxonomy)
+- ✅ Rate-limit profiles (4 tiers: light/standard/heavy/critical)
+- ✅ Middleware pipeline (ErrorBoundary → RateLimit → Retry → Audit → Memory)
 
 ### Phase 2 — AWS Integration
 - 🔲 LLM: Gemini → AWS Bedrock (Claude/Titan)

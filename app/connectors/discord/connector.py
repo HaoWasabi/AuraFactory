@@ -25,6 +25,11 @@ from app.connectors.discord.features import FeaturesConnector
 from app.connectors.discord.audit import AuditConnector
 from app.connectors.discord.safety import SafetyConnector
 from app.connectors.discord.templates import TemplatesConnector
+from app.connectors.discord.emojis import EmojisConnector
+from app.connectors.discord.events import EventsConnector
+from app.connectors.discord.stickers import StickersConnector
+from app.connectors.discord.soundboard import SoundboardConnector
+from app.connectors.discord.onboarding import OnboardingConnector
 
 logger = logging.getLogger(__name__)
 
@@ -54,6 +59,11 @@ class DiscordConnector:
             "audit": AuditConnector(bot),
             "safety": SafetyConnector(bot),
             "templates": TemplatesConnector(bot),
+            "emojis": EmojisConnector(bot),
+            "events": EventsConnector(bot),
+            "stickers": StickersConnector(bot),
+            "soundboard": SoundboardConnector(bot),
+            "onboarding": OnboardingConnector(bot),
         }
         logger.info("DiscordConnector initialized: %d modules", len(self._connectors))
 

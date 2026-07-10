@@ -75,7 +75,7 @@ def create_api_router(services: dict) -> APIRouter:
                 return {
                     "ready": [], "pending": [], "total": 0,
                     "hint": "no_guilds_found",
-                    "message": "Không tìm thấy server nào bạn có quyền quản lý.",
+                    "message": "No servers found where you have manage permissions.",
                 }
 
         ready, pending = [], []
@@ -137,7 +137,7 @@ def create_api_router(services: dict) -> APIRouter:
     async def chat_v2(req: ChatRequest):
         """Chat endpoint — Unified Agent with native function calling."""
         if not unified_agent:
-            return {"ok": False, "type": "error", "content": "⚠️ AI chưa sẵn sàng (LLM not configured)."}
+            return {"ok": False, "type": "error", "content": "⚠️ AI is not ready (LLM not configured)."}
 
         guild_id = int(req.guild_id)
         user_id_int = int(req.user_id)
@@ -152,7 +152,7 @@ def create_api_router(services: dict) -> APIRouter:
             return {
                 "ok": False,
                 "type": "bot_not_installed",
-                "content": f"Bot chưa được cài vào server này. [Mời bot]({invite_url})",
+                "content": f"Bot has not been added to this server. [Invite bot]({invite_url})",
                 "invite_url": invite_url,
             }
 
@@ -161,7 +161,7 @@ def create_api_router(services: dict) -> APIRouter:
             return {
                 "ok": False,
                 "type": "bot_starting",
-                "content": "⏳ Bot đang kết nối Discord, vui lòng thử lại sau vài giây...",
+                "content": "⏳ Bot is connecting to Discord, please try again in a few seconds...",
             }
 
         # Get session history for context

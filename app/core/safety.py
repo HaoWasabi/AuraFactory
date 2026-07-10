@@ -394,8 +394,8 @@ class ConversationMemory:
     """Track resources created/modified in the current conversation.
 
     Allows multi-turn references like:
-      "tạo channel X" → "giờ sửa nó thành private"
-      (agent knows "nó" = channel just created)
+      "create channel X" → "now make it private"
+      (agent knows "it" = channel just created)
 
     Storage: per-guild, per-conversation session.
     """

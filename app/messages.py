@@ -88,19 +88,19 @@ MESSAGES = {
 }
 
 
-def msg(key: str, lang: str = "vi", **kwargs) -> str:
+def msg(key: str, lang: str = "en", **kwargs) -> str:
     """Get a message in the specified language.
     
     Args:
         key: Message key from MESSAGES dict.
-        lang: Language code ('vi' or 'en'). Defaults to 'vi'.
+        lang: Language code ('vi' or 'en'). Defaults to 'en'.
         **kwargs: Format variables for the message template.
     
     Returns:
         Formatted message string.
     """
     template = MESSAGES.get(key, {})
-    text = template.get(lang, template.get("vi", f"[{key}]"))
+    text = template.get(lang, template.get("en", f"[{key}]"))
     if kwargs:
         try:
             return text.format(**kwargs)

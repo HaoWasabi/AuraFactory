@@ -47,6 +47,14 @@ _ALL_TOOL_NAMES = [
     "discord.audit.query",
     "discord.safety.set_content_filter", "discord.safety.set_mfa",
     "discord.templates.create", "discord.templates.sync", "discord.templates.delete",
+    "discord.events.create", "discord.events.edit", "discord.events.delete",
+    "discord.events.list",
+    "discord.emojis.create", "discord.emojis.rename", "discord.emojis.delete",
+    "discord.emojis.list",
+    "discord.stickers.create", "discord.stickers.delete", "discord.stickers.list",
+    "discord.soundboard.create", "discord.soundboard.delete", "discord.soundboard.list",
+    "discord.onboarding.get", "discord.onboarding.setup",
+    "discord.onboarding.setup_welcome", "discord.onboarding.send_dm",
 ]
 
 

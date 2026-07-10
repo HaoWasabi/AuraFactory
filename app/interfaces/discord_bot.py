@@ -71,18 +71,18 @@ class DiscordBot(commands.Bot):
 
         self._tools_ready = True
 
-    # —— Admin: update Gemini API key ——————————————————————————————————————
+    # —— Admin: update Gemini API key ————————————————————————————————————————
 
     @nextcord.slash_command(
         name="setgeminikey",
-        description="[Bot Admin] Cập nhật Gemini API key cho toàn hệ thống",
+        description="[Bot Admin] Update Gemini API key for the system",
     )
     async def set_gemini_key(
         self,
         interaction: nextcord.Interaction,
         api_key: str = nextcord.SlashOption(
             name="api_key",
-            description="Gemini API key mới (bắt đầu bằng AIza...)",
+            description="New Gemini API key (starts with AIza...)",
             required=True,
         ),
     ):
@@ -91,7 +91,7 @@ class DiscordBot(commands.Bot):
 
         if interaction.user.id not in self._bot_owner_ids:
             await interaction.followup.send(
-                "❌ Không có quyền. Chỉ owner của bot application mới được sử dụng lệnh này.",
+                "❌ Permission denied. Only the bot application owner can use this command.",
                 ephemeral=True,
             )
             return
@@ -99,7 +99,7 @@ class DiscordBot(commands.Bot):
         new_key = api_key.strip()
         if not new_key or not new_key.startswith("AIza"):
             await interaction.followup.send(
-                "❌ API key không hợp lệ. Gemini key phải bắt đầu bằng `AIza`.",
+                "❌ Invalid API key. Gemini key must start with `AIza`.",
                 ephemeral=True,
             )
             return
@@ -121,11 +121,11 @@ class DiscordBot(commands.Bot):
 
         masked = f"{new_key[:8]}...{new_key[-4:]}" if len(new_key) > 12 else "***"
         await interaction.followup.send(
-            f"✅ Gemini API key đã được cập nhật thành công!\n🔑 Key mới: `{masked}`",
+            f"✅ Gemini API key updated successfully!\n🔑 New key: `{masked}`",
             ephemeral=True,
         )
 
-    # —— Guild events ——————————————————————————————————————————————————————
+    # —— Guild events ————————————————————————————————————————————————————————
 
     async def on_guild_join(self, guild: nextcord.Guild):
         """Bot was added to a guild."""
@@ -138,7 +138,7 @@ class DiscordBot(commands.Bot):
         await self.guild_sync_service.unregister_bot_install(guild.id)
         logger.info("Removed from guild: %s (%d)", guild.name, guild.id)
 
-    # —— Message handling ——————————————————————————————————————————————————
+    # —— Message handling ————————————————————————————————————————————————————
 
     async def on_message(self, message: nextcord.Message):
         """Main message handler — entry point for user commands.
@@ -181,12 +181,12 @@ class DiscordBot(commands.Bot):
         """Process message via UnifiedAgent."""
         # Guard: bot not ready yet
         if not self._tools_ready:
-            await message.reply("⏳ Bot đang khởi động, vui lòng thử lại sau vài giây...")
+            await message.reply("⏳ Bot is starting up, please try again in a few seconds...")
             return
 
         # Guard: unified agent not available (LLM init failed)
         if not self.unified_agent:
-            await message.reply("⚠️ AI chưa sẵn sàng. Vui lòng kiểm tra cấu hình LLM.")
+            await message.reply("⚠️ AI is not ready. Please check LLM configuration.")
             return
 
         try:
@@ -199,15 +199,15 @@ class DiscordBot(commands.Bot):
             response_text = result.get("content", "")
             if not response_text:
                 if result.get("type") == "action":
-                    response_text = "✅ Đã thực hiện xong."
+                    response_text = "✅ Done."
                 elif result.get("type") == "confirm_needed":
-                    response_text = "❓ Cần xác nhận (reply tin này với có/không)."
+                    response_text = "❓ Confirmation needed (reply with yes/no)."
                 else:
-                    response_text = "Không có phản hồi."
+                    response_text = "No response."
 
             # Discord message limit: 2000 chars
             if len(response_text) > 1900:
-                response_text = response_text[:1900] + "\n... *(bị cắt do quá dài)*"
+                response_text = response_text[:1900] + "\n... *(truncated)*"
 
             sent_msg = await message.reply(response_text)
 
@@ -219,7 +219,7 @@ class DiscordBot(commands.Bot):
 
         except Exception as e:
             logger.exception("Error processing message from user %d in guild %d: %s", user_id, guild_id, e)
-            await message.reply("⚠️ Đã xảy ra lỗi khi xử lý yêu cầu. Vui lòng thử lại.")
+            await message.reply("⚠️ An error occurred while processing your request. Please try again.")
 
     async def _cleanup_confirm_id(self, msg_id: int, delay: float = 300):
         """Remove tracked confirmation message after timeout."""
