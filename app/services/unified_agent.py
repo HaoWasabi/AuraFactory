@@ -605,8 +605,44 @@ class UnifiedAgent:
         if all_success and len(results) <= 2:
             return {"status": "done"}
 
-        # Any failure → done (report to user, don't loop)
+        # Failures present → ask LLM to diagnose
         if not all_success:
+            failed_summary = "\n".join(
+                f"✗ {r.get('tool', '?')}: {r.get('error', 'unknown')}"
+                for r in results if not r["success"]
+            )
+            success_summary = "\n".join(
+                f"✓ {r.get('tool', '?')}: success"
+                for r in results if r["success"]
+            )
+            reflect_input = (
+                f"Original goal: {original_message}\n\n"
+                f"Successes:\n{success_summary or '(none)'}\n\n"
+                f"Failures:\n{failed_summary}\n\n"
+                f"Should the agent: (a) retry with different params, "
+                f"(b) skip failed steps and continue, or (c) stop and report to user?"
+            )
+            try:
+                response = await self._llm.generate(
+                    messages=[{"role": "user", "content": reflect_input}],
+                    system_prompt=REFLECT_PROMPT,
+                    tools=None,
+                    temperature=self._cfg.temp_reflect,
+                    max_tokens=self._cfg.max_tokens_reflect,
+                )
+                if response and hasattr(response, 'usage') and response.usage:
+                    await record_token_usage(self._db, 0, 0, response.usage,
+                                             provider=settings.LLM_PROVIDER, phase="reflect")
+                if response and response.content:
+                    text = response.content.strip()
+                    if text.startswith("```"):
+                        text = text.split("\n", 1)[-1].rsplit("```", 1)[0].strip()
+                    return json.loads(text)
+            except (json.JSONDecodeError, Exception) as e:
+                logger.warning("Reflect on failure failed: %s", e)
+            # Fallback: if ALL failed, stop. If some succeeded, done.
+            if all(not r["success"] for r in results):
+                return {"status": "failed", "reason": "All actions failed"}
             return {"status": "done"}
 
         # Complex success → ask LLM if more steps needed

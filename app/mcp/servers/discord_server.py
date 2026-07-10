@@ -111,6 +111,10 @@ class DiscordMCPServer(MCPServer):
         if self._connector is None or self._bot is None:
             raise RuntimeError("Bot not attached — call set_bot() first.")
 
+        # Coerce all *_id params: float/scientific notation → proper int
+        # Discord snowflakes exceed JSON Number precision (>2^53), LLM may return as float
+        params = self._coerce_snowflake_ids(params)
+
         # Resolve guild from guild_id param
         guild: Optional[discord.Guild] = None
         guild_id = params.pop("guild_id", None)
@@ -133,6 +137,52 @@ class DiscordMCPServer(MCPServer):
                 request_id=request.request_id,
             )
         return await super().handle_request(request)
+
+    @staticmethod
+    def _coerce_snowflake_ids(params: Dict[str, Any]) -> Dict[str, Any]:
+        """Coerce all *_id params from float/scientific notation to proper int.
+
+        Discord snowflakes are 18-19 digit integers that exceed JSON Number
+        precision (2^53). Gemini may return them as floats (e.g. 1.472e+18).
+        This converts them back to correct integer values.
+
+        Also handles: string IDs, list of IDs (member_ids, allowed_role_ids).
+        """
+        coerced = {}
+        for key, value in params.items():
+            if key.endswith("_id") or key.endswith("_ids"):
+                if isinstance(value, float):
+                    coerced[key] = int(value)
+                elif isinstance(value, str):
+                    # Handle string IDs: "1472162687994826775" or "1.472e+18"
+                    try:
+                        if "e" in value.lower() or "." in value:
+                            coerced[key] = int(float(value))
+                        else:
+                            coerced[key] = int(value)
+                    except (ValueError, OverflowError):
+                        coerced[key] = value  # Pass through if not numeric
+                elif isinstance(value, list):
+                    coerced[key] = [self._coerce_single_id(v) for v in value]
+                else:
+                    coerced[key] = value
+            else:
+                coerced[key] = value
+        return coerced
+
+    @staticmethod
+    def _coerce_single_id(value: Any) -> Any:
+        """Coerce a single ID value to int."""
+        if isinstance(value, float):
+            return int(value)
+        if isinstance(value, str):
+            try:
+                if "e" in value.lower() or "." in value:
+                    return int(float(value))
+                return int(value)
+            except (ValueError, OverflowError):
+                return value
+        return value
 
     @staticmethod
     def _infer_risk(tool_name: str) -> str:

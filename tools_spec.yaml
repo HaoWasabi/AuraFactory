@@ -115,7 +115,7 @@ metadata:
       temperature_assemble: 0.7
       max_tokens_planning: 2048
       max_tokens_reflect: 256
-      max_tokens_assemble: 512
+      max_tokens_assemble: 1024
       context_max_categories: 20
       context_max_channels: 40
       context_max_roles: 20
@@ -223,7 +223,7 @@ discord.channels.create:
       topic: { type: string, max_length: 1024 }
 
   shared_params:
-    category_id: { type: integer, description: "Parent category ID" }
+    category_id: { type: string, description: "Parent category ID" }
     position: { type: integer, description: "Channel position in sidebar" }
     reason: { type: string, description: "Audit log reason" }
     is_private:
@@ -258,7 +258,7 @@ discord.channels.create:
 discord.channels.rename:
   description: "Rename an existing channel"
   required_params:
-    channel_id: { type: integer, description: "Channel ID to rename" }
+    channel_id: { type: string, description: "Channel ID to rename" }
     name: { type: string, description: "New channel name (2-100 chars)" }
   shared_params:
     reason: { type: string, description: "Audit log reason" }
@@ -268,7 +268,7 @@ discord.channels.rename:
 discord.channels.edit:
   description: "Edit channel properties. Only provided params are changed."
   required_params:
-    channel_id: { type: integer, description: "Target channel ID" }
+    channel_id: { type: string, description: "Target channel ID" }
   
   context_params:
     text:
@@ -294,13 +294,13 @@ discord.channels.edit:
 
   shared_params:
     position: { type: integer }
-    category_id: { type: integer, description: "Move to different category" }
+    category_id: { type: string, description: "Move to different category" }
     sync_permissions: { type: boolean, default: false, description: "Sync perms with parent category" }
     update_permissions:
       type: object
       description: "Granular permission update for a target"
       properties:
-        target_id: { type: integer, description: "Role or member ID" }
+        target_id: { type: string, description: "Role or member ID" }
         permissions: { type: object, description: "{perm_name: bool}" }
     reason: { type: string }
 
@@ -310,7 +310,7 @@ discord.channels.edit:
 discord.channels.delete:
   description: "Delete a channel permanently"
   required_params:
-    channel_id: { type: integer, description: "Channel to delete" }
+    channel_id: { type: string, description: "Channel to delete" }
   shared_params:
     reason: { type: string }
   required_permissions: [manage_channels]
@@ -321,9 +321,9 @@ discord.channels.delete:
 discord.channels.move:
   description: "Move a channel to a different category or position"
   required_params:
-    channel_id: { type: integer }
+    channel_id: { type: string }
   shared_params:
-    category_id: { type: integer, description: "New parent category" }
+    category_id: { type: string, description: "New parent category" }
     position: { type: integer, description: "New position" }
     sync_permissions: { type: boolean, default: false }
   required_permissions: [manage_channels]
@@ -333,7 +333,7 @@ discord.channels.list:
   description: "List all channels in the guild (or filtered by category)"
   required_params: {}
   shared_params:
-    category_id: { type: integer, description: "Filter by category" }
+    category_id: { type: string, description: "Filter by category" }
     type: { type: string, enum: [text, voice, stage, forum, news, all], description: "Filter by type" }
   required_permissions: [view_channel]
   risk_level: low
@@ -364,7 +364,7 @@ discord.categories.create:
 discord.categories.rename:
   description: "Rename an existing category"
   required_params:
-    category_id: { type: integer, description: "Category ID to rename" }
+    category_id: { type: string, description: "Category ID to rename" }
     name: { type: string, description: "New category name" }
   shared_params:
     reason: { type: string, description: "Audit log reason" }
@@ -374,14 +374,14 @@ discord.categories.rename:
 discord.categories.edit:
   description: "Edit category name or permissions"
   required_params:
-    category_id: { type: integer }
+    category_id: { type: string }
   shared_params:
     name: { type: string }
     position: { type: integer }
     update_permissions:
       type: object
       properties:
-        target_id: { type: integer }
+        target_id: { type: string }
         permissions: { type: object }
     reason: { type: string }
   required_permissions: [manage_channels]
@@ -390,7 +390,7 @@ discord.categories.edit:
 discord.categories.delete:
   description: "Delete a category (channels inside become uncategorized)"
   required_params:
-    category_id: { type: integer }
+    category_id: { type: string }
   shared_params:
     reason: { type: string }
   required_permissions: [manage_channels]
@@ -399,7 +399,7 @@ discord.categories.delete:
 discord.categories.sync:
   description: "Sync all child channel permissions with the category"
   required_params:
-    category_id: { type: integer }
+    category_id: { type: string }
   shared_params: {}
   required_permissions: [manage_channels]
   risk_level: medium
@@ -459,7 +459,7 @@ discord.roles.bulk_create:
 discord.roles.rename:
   description: "Rename an existing role"
   required_params:
-    role_id: { type: integer, description: "Role ID to rename" }
+    role_id: { type: string, description: "Role ID to rename" }
     name: { type: string, description: "New role name" }
   shared_params:
     reason: { type: string, description: "Audit log reason" }
@@ -469,7 +469,7 @@ discord.roles.rename:
 discord.roles.modify:
   description: "Edit role attributes. Permissions are MERGED (not replaced)."
   required_params:
-    role_id: { type: integer }
+    role_id: { type: string }
   shared_params:
     name: { type: string }
     color: { type: string }
@@ -486,7 +486,7 @@ discord.roles.modify:
 discord.roles.delete:
   description: "Delete a role from the guild"
   required_params:
-    role_id: { type: integer }
+    role_id: { type: string }
   shared_params:
     reason: { type: string }
   required_permissions: [manage_roles]
@@ -497,8 +497,8 @@ discord.roles.delete:
 discord.roles.assign:
   description: "Assign a role to a member"
   required_params:
-    member_id: { type: integer }
-    role_id: { type: integer }
+    member_id: { type: string }
+    role_id: { type: string }
   shared_params:
     reason: { type: string }
   required_permissions: [manage_roles]
@@ -510,8 +510,8 @@ discord.roles.assign:
 discord.roles.remove:
   description: "Remove a role from a member"
   required_params:
-    member_id: { type: integer }
-    role_id: { type: integer }
+    member_id: { type: string }
+    role_id: { type: string }
   shared_params:
     reason: { type: string }
   required_permissions: [manage_roles]
@@ -520,7 +520,7 @@ discord.roles.remove:
 discord.roles.batch_assign:
   description: "Assign or remove a role to/from multiple members at once"
   required_params:
-    role_id: { type: integer }
+    role_id: { type: string }
     member_ids: { type: array, items: integer }
   shared_params:
     action: { type: string, enum: [add, remove], default: "add" }
@@ -531,7 +531,7 @@ discord.roles.batch_assign:
 discord.roles.clone:
   description: "Clone a role — copy all attributes (color, perms, hoist, mentionable)"
   required_params:
-    source_role_id: { type: integer }
+    source_role_id: { type: string }
     new_name: { type: string }
   shared_params:
     reason: { type: string }
@@ -541,7 +541,7 @@ discord.roles.clone:
 discord.roles.set_position:
   description: "Change a role's hierarchy position"
   required_params:
-    role_id: { type: integer }
+    role_id: { type: string }
     position: { type: integer }
   shared_params: {}
   required_permissions: [manage_roles]
@@ -559,7 +559,7 @@ discord.roles.list:
 discord.roles.get_info:
   description: "Get detailed info about a specific role"
   required_params:
-    role_id: { type: integer }
+    role_id: { type: string }
   shared_params: {}
   required_permissions: []
   risk_level: low
@@ -570,7 +570,7 @@ discord.roles.get_info:
 discord.members.kick:
   description: "Kick a member from the guild (they can rejoin via invite)"
   required_params:
-    member_id: { type: integer }
+    member_id: { type: string }
   shared_params:
     reason: { type: string }
   required_permissions: [kick_members]
@@ -579,7 +579,7 @@ discord.members.kick:
 discord.members.ban:
   description: "Ban a member from the guild (cannot rejoin unless unbanned)"
   required_params:
-    member_id: { type: integer }
+    member_id: { type: string }
   shared_params:
     reason: { type: string }
     delete_message_seconds: { type: integer, range: [0, 604800], description: "Delete messages from last N seconds (max 7 days)" }
@@ -589,7 +589,7 @@ discord.members.ban:
 discord.members.unban:
   description: "Unban a previously banned user"
   required_params:
-    user_id: { type: integer }
+    user_id: { type: string }
   shared_params:
     reason: { type: string }
   required_permissions: [ban_members]
@@ -608,7 +608,7 @@ discord.members.bulk_ban:
 discord.members.timeout:
   description: "Timeout a member (disable communication temporarily)"
   required_params:
-    member_id: { type: integer }
+    member_id: { type: string }
     duration_minutes: { type: integer, range: [1, 40320], description: "Timeout duration (max 28 days)" }
   shared_params:
     reason: { type: string }
@@ -618,7 +618,7 @@ discord.members.timeout:
 discord.members.mute:
   description: "Server-mute a member in voice channels"
   required_params:
-    member_id: { type: integer }
+    member_id: { type: string }
   shared_params:
     reason: { type: string }
   required_permissions: [mute_members]
@@ -627,10 +627,10 @@ discord.members.mute:
 discord.members.purge:
   description: "Delete messages in a channel (optionally by a specific member)"
   required_params:
-    channel_id: { type: integer }
+    channel_id: { type: string }
   shared_params:
     limit: { type: integer, range: [1, 100], default: 10, description: "Number of messages to delete" }
-    member_id: { type: integer, description: "Only delete messages from this member" }
+    member_id: { type: string, description: "Only delete messages from this member" }
   required_permissions: [manage_messages]
   risk_level: high
 
@@ -644,7 +644,7 @@ discord.members.list:
 discord.members.get_info:
   description: "Get detailed info about a member (roles, permissions, join date)"
   required_params:
-    member_id: { type: integer }
+    member_id: { type: string }
   shared_params: {}
   required_permissions: []
   risk_level: low
@@ -684,10 +684,10 @@ discord.guild.set_community:
       description: "True to enable Community, False to disable"
   shared_params:
     rules_channel_id:
-      type: integer
+      type: string
       description: "Text channel to use as #rules (required by Discord when enabling)"
     updates_channel_id:
-      type: integer
+      type: string
       description: "Text channel for public updates/announcements"
   required_permissions: [manage_guild]
   risk_level: high
@@ -719,7 +719,7 @@ discord.guild.set_system_channels:
   description: "Configure system message channels and flags"
   required_params: {}
   shared_params:
-    system_channel_id: { type: integer, description: "Channel for join/boost messages" }
+    system_channel_id: { type: string, description: "Channel for join/boost messages" }
     suppress_join_notifications: { type: boolean }
     suppress_premium_subscriptions: { type: boolean }
     suppress_guild_reminder_notifications: { type: boolean }
@@ -731,7 +731,7 @@ discord.guild.set_afk:
   description: "Set AFK channel and timeout"
   required_params: {}
   shared_params:
-    afk_channel_id: { type: integer }
+    afk_channel_id: { type: string }
     afk_timeout: { type: integer, enum: [60, 300, 900, 1800, 3600], description: "Seconds before moving to AFK" }
   required_permissions: [manage_guild]
   risk_level: medium
@@ -749,7 +749,7 @@ discord.guild.set_widget:
   required_params: {}
   shared_params:
     widget_enabled: { type: boolean }
-    widget_channel_id: { type: integer }
+    widget_channel_id: { type: string }
   required_permissions: [manage_guild]
   risk_level: low
 
@@ -761,8 +761,8 @@ discord.community.toggle:
   required_params:
     enable: { type: boolean }
   shared_params:
-    rules_channel_id: { type: integer, depends_on: { enable: true } }
-    public_updates_channel_id: { type: integer, depends_on: { enable: true } }
+    rules_channel_id: { type: string, depends_on: { enable: true } }
+    public_updates_channel_id: { type: string, depends_on: { enable: true } }
   required_permissions: [manage_guild]
   risk_level: critical
   graph_edges:
@@ -802,7 +802,7 @@ discord.automod.create_rule:
         type: object
         properties:
           type: { type: integer, enum: [1, 2, 3], description: "1=block, 2=alert, 3=timeout" }
-          channel_id: { type: integer, description: "Required for type=2 (alert)" }
+          channel_id: { type: string, description: "Required for type=2 (alert)" }
           duration_seconds: { type: integer, description: "Required for type=3 (timeout)" }
           custom_message: { type: string, description: "Optional for type=1 (block)" }
   shared_params:
@@ -823,7 +823,7 @@ discord.automod.create_rule:
 discord.automod.delete_rule:
   description: "Delete an auto-moderation rule"
   required_params:
-    rule_id: { type: integer }
+    rule_id: { type: string }
   shared_params: {}
   required_permissions: [manage_guild]
   risk_level: high
@@ -841,7 +841,7 @@ discord.automod.list_rules:
 discord.webhooks.create:
   description: "Create a webhook for a text channel"
   required_params:
-    channel_id: { type: integer }
+    channel_id: { type: string }
     name: { type: string }
   shared_params:
     avatar_url: { type: string, description: "Webhook avatar image URL" }
@@ -852,7 +852,7 @@ discord.webhooks.create:
 discord.webhooks.delete:
   description: "Delete a webhook by ID"
   required_params:
-    webhook_id: { type: integer }
+    webhook_id: { type: string }
   shared_params:
     reason: { type: string }
   required_permissions: [manage_webhooks]
@@ -862,7 +862,7 @@ discord.webhooks.list:
   description: "List all webhooks in guild or a specific channel"
   required_params: {}
   shared_params:
-    channel_id: { type: integer, description: "Filter by channel" }
+    channel_id: { type: string, description: "Filter by channel" }
   required_permissions: [manage_webhooks]
   risk_level: low
 
@@ -872,10 +872,10 @@ discord.webhooks.list:
 discord.threads.create:
   description: "Create a new thread in a text channel"
   required_params:
-    channel_id: { type: integer }
+    channel_id: { type: string }
     name: { type: string }
   shared_params:
-    message_id: { type: integer, description: "Create thread from this message" }
+    message_id: { type: string, description: "Create thread from this message" }
     auto_archive: { type: integer, enum: [60, 1440, 4320, 10080], description: "Auto-archive minutes" }
     type: { type: string, enum: [public, private], default: "public" }
   required_permissions: [create_public_threads]
@@ -884,7 +884,7 @@ discord.threads.create:
 discord.threads.archive:
   description: "Archive a thread (can be unarchived later)"
   required_params:
-    thread_id: { type: integer }
+    thread_id: { type: string }
   shared_params: {}
   required_permissions: [manage_threads]
   risk_level: low
@@ -892,7 +892,7 @@ discord.threads.archive:
 discord.threads.delete:
   description: "Delete a thread permanently"
   required_params:
-    thread_id: { type: integer }
+    thread_id: { type: string }
   shared_params: {}
   required_permissions: [manage_threads]
   risk_level: medium
@@ -903,7 +903,7 @@ discord.threads.delete:
 discord.invites.create:
   description: "Create an invite link for a channel"
   required_params:
-    channel_id: { type: integer }
+    channel_id: { type: string }
   shared_params:
     max_age: { type: integer, default: 86400, description: "Expiration seconds (0=never)" }
     max_uses: { type: integer, default: 0, description: "Max uses (0=unlimited)" }
@@ -932,7 +932,7 @@ discord.invites.list:
 discord.onboarding.setup_welcome:
   description: "Set up a pinned welcome message in a channel"
   required_params:
-    channel_id: { type: integer }
+    channel_id: { type: string }
     message: { type: string }
   shared_params: {}
   required_permissions: [send_messages, manage_messages]
@@ -941,7 +941,7 @@ discord.onboarding.setup_welcome:
 discord.onboarding.send_dm:
   description: "Send a DM to a member (for onboarding, notifications)"
   required_params:
-    member_id: { type: integer }
+    member_id: { type: string }
     message: { type: string }
   shared_params: {}
   required_permissions: []
@@ -966,7 +966,7 @@ discord.events.create:
       description: "ISO8601 timestamp for event start"
   shared_params:
     channel_id:
-      type: integer
+      type: string
       description: "Channel ID (required for entity_type 1 or 2)"
       depends_on: { entity_type: [1, 2] }
     scheduled_end_time:
@@ -988,11 +988,11 @@ discord.events.create:
 discord.events.edit:
   description: "Edit an existing scheduled event"
   required_params:
-    event_id: { type: integer, description: "ID of the event to edit" }
+    event_id: { type: string, description: "ID of the event to edit" }
   shared_params:
     name: { type: string, validation: { max_length: 100 } }
     entity_type: { type: integer, enum: [1, 2, 3] }
-    channel_id: { type: integer }
+    channel_id: { type: string }
     scheduled_start_time: { type: string }
     scheduled_end_time: { type: string }
     description: { type: string, validation: { max_length: 1000 } }
@@ -1004,7 +1004,7 @@ discord.events.edit:
 discord.events.delete:
   description: "Delete a scheduled event"
   required_params:
-    event_id: { type: integer, description: "ID of the event to delete" }
+    event_id: { type: string, description: "ID of the event to delete" }
   shared_params: {}
   required_permissions: [manage_events]
   risk_level: high
@@ -1042,7 +1042,7 @@ discord.emojis.create:
 discord.emojis.delete:
   description: "Delete a custom emoji from the guild"
   required_params:
-    emoji_id: { type: integer, description: "ID of the emoji to delete" }
+    emoji_id: { type: string, description: "ID of the emoji to delete" }
   shared_params:
     reason: { type: string, description: "Audit log reason" }
   required_permissions: [manage_emojis_and_stickers]
@@ -1051,7 +1051,7 @@ discord.emojis.delete:
 discord.emojis.rename:
   description: "Rename a custom emoji"
   required_params:
-    emoji_id: { type: integer, description: "ID of the emoji to rename" }
+    emoji_id: { type: string, description: "ID of the emoji to rename" }
     new_name:
       type: string
       description: "New emoji name (2-32 chars, alphanumeric + underscores)"
@@ -1093,7 +1093,7 @@ discord.stickers.create:
 discord.stickers.delete:
   description: "Delete a custom sticker from the guild"
   required_params:
-    sticker_id: { type: integer, description: "ID of the sticker to delete" }
+    sticker_id: { type: string, description: "ID of the sticker to delete" }
   shared_params:
     reason: { type: string, description: "Audit log reason" }
   required_permissions: [manage_emojis_and_stickers]
@@ -1129,7 +1129,7 @@ discord.soundboard.create:
 discord.soundboard.delete:
   description: "Delete a custom sound from the guild soundboard"
   required_params:
-    sound_id: { type: integer, description: "ID of the sound to delete" }
+    sound_id: { type: string, description: "ID of the sound to delete" }
   shared_params:
     reason: { type: string, description: "Audit log reason" }
   required_permissions: [manage_guild_expressions]
@@ -1240,7 +1240,7 @@ discord.audit.query:
   required_params: {}
   shared_params:
     action_type: { type: integer, description: "Discord audit log action type ID" }
-    user_id: { type: integer, description: "Filter by user who performed action" }
+    user_id: { type: string, description: "Filter by user who performed action" }
     limit: { type: integer, range: [1, 100], default: 50 }
     before: { type: integer, description: "Audit entry ID to paginate before" }
   required_permissions: [view_audit_log]
@@ -1252,8 +1252,8 @@ discord.audit.query:
 discord.features.setup_verification:
   description: "Set up reaction-based role verification in a channel"
   required_params:
-    channel_id: { type: integer }
-    role_id: { type: integer, description: "Role to assign on verify" }
+    channel_id: { type: string }
+    role_id: { type: string, description: "Role to assign on verify" }
   shared_params:
     emoji: { type: string, default: "✅" }
     title: { type: string, default: "Verification" }
@@ -1264,7 +1264,7 @@ discord.features.setup_verification:
 discord.features.create_poll:
   description: "Create a reaction-based poll in a channel"
   required_params:
-    channel_id: { type: integer }
+    channel_id: { type: string }
     question: { type: string }
     options: { type: array, items: string, validation: { min_items: 2, max_items: 10 } }
   shared_params: {}
@@ -1274,7 +1274,7 @@ discord.features.create_poll:
 discord.features.setup_welcome:
   description: "Configure automated welcome message with template variables"
   required_params:
-    channel_id: { type: integer }
+    channel_id: { type: string }
   shared_params:
     welcome_title: { type: string }
     welcome_message_template: { type: string, description: "Supports {member_name}, {guild_name}, {member_count}" }
@@ -1284,7 +1284,7 @@ discord.features.setup_welcome:
 discord.features.configure_auto_delete:
   description: "Set auto-delete for messages in a channel after delay"
   required_params:
-    channel_id: { type: integer }
+    channel_id: { type: string }
     delay_seconds: { type: integer, range: [5, 86400] }
   shared_params: {}
   required_permissions: [manage_messages]
@@ -1294,10 +1294,10 @@ discord.permissions.set_channel_perms:
   description: "Set permission overrides for a specific role or member on a channel"
   required_params:
     channel_id:
-      type: integer
+      type: string
       description: "Target channel ID"
     target_id:
-      type: integer
+      type: string
       description: "Role ID or Member ID to set permissions for"
     target_type:
       type: string
@@ -1329,7 +1329,7 @@ discord.permissions.set_role_perms:
   description: "Set base guild-level permissions for a role"
   required_params:
     role_id:
-      type: integer
+      type: string
       description: "Role to modify permissions on"
   shared_params:
     administrator: { type: boolean, description: "Full admin access (dangerous)" }
@@ -1355,10 +1355,10 @@ discord.permissions.sync:
   description: "Sync a channel's permissions with its parent category"
   required_params:
     channel_id:
-      type: integer
+      type: string
       description: "Channel to sync"
   shared_params:
-    category_id: { type: integer, description: "Category to sync from (uses channel's current category if omitted)" }
+    category_id: { type: string, description: "Category to sync from (uses channel's current category if omitted)" }
   required_permissions: [manage_channels]
   risk_level: low
 

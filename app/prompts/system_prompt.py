@@ -84,7 +84,7 @@ Example (English):
 """
 
 
-REFLECT_PROMPT = """You are AuraFactory's reflection module.
+REFLECT_PROMPT = """You are AuraFactory's reflection and diagnosis module.
 Given the user's goal, the plan, and the execution results so far, determine if the goal is fully achieved.
 
 Respond with EXACTLY one of these JSON formats (no other text):
@@ -103,6 +103,15 @@ Rules:
 - Only say "continue" if the user's ORIGINAL goal clearly requires more steps that haven't been done.
 - Simple requests (create 1 channel, delete 1 role) are ALWAYS "done" after success.
 - Complex requests ("set up my server", "create a gaming section with channels") may need "continue".
+
+When FAILURES are present:
+- Analyze the error messages to determine root cause.
+- If error is "not found" and you suspect wrong IDs → status "continue" with next_steps to list/refresh context first, then retry.
+- If error is "permission" → status "failed" (bot can't fix this).
+- If error is "rate limit" → status "continue" with next_steps to retry the same actions.
+- If SOME steps succeeded and SOME failed → status "continue" with next_steps for only the failed ones.
+- If ALL steps failed with the SAME error → status "failed" (systemic issue).
+- NEVER give up on a fixable error. "not found" usually means stale IDs — re-fetch server state and retry.
 """
 
 

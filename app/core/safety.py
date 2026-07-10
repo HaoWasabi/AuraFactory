@@ -288,7 +288,7 @@ class AuditLogger:
                        VALUES ($1, $2, $3, $4::jsonb, $5, $6, $7)""",
                     guild_id, user_id, tool_name,
                     str(entry["kwargs"])[:500],
-                    entry["success"], risk_level, duration_ms,
+                    risk_level, entry["success"], duration_ms,
                 )
             except Exception as e:
                 logger.warning("Audit DB write failed: %s", e)
