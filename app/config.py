@@ -30,7 +30,7 @@ class Config:
         )
         
         # Safety Configuration
-        self.GUILD_LOCK_MODE: str = os.environ.get('GUILD_LOCK_MODE', 'whitelist')  # "open" or "whitelist"
+        self.GUILD_LOCK_MODE: str = os.environ.get('GUILD_LOCK_MODE', 'open')  # "open" or "whitelist" (set "whitelist" + ALLOWED_GUILD_IDS in production)
         self.RATE_LIMIT_DELAY: float = float(os.environ.get('RATE_LIMIT_DELAY', '0.5'))
         
         # LLM Configuration
