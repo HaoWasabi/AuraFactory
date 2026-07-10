@@ -1,0 +1,55 @@
+# AWS App Runner Configuration for AuraFactory Phase 2
+# =====================================================
+# Deploy via: AWS Console → App Runner → Create service → Source: ECR
+# Or via CLI: See DEPLOY.md for full instructions
+#
+# App Runner auto-scales and supports min instances for always-on (Discord bot needs WebSocket)
+# Pricing: ~$5-15/month with 1 min instance (0.25 vCPU, 0.5 GB)
+
+version: 1.0
+
+runtime: python311
+
+build:
+  commands:
+    pre-build:
+      - echo "Installing dependencies..."
+    build:
+      - pip install --no-cache-dir -r requirements.txt
+
+run:
+  command: uvicorn app.main:app --host 0.0.0.0 --port 8080
+  network:
+    port: 8080
+    env: APP_PORT
+  env:
+    # === Core ===
+    - name: PORT
+      value: "8080"
+
+    # === LLM (Bedrock) ===
+    - name: LLM_PROVIDER
+      value: "bedrock"
+    - name: BEDROCK_MODEL_ID
+      value: "amazon.nova-micro-v1:0"
+    - name: AWS_REGION
+      value: "us-east-1"
+
+    # === Database (DynamoDB) ===
+    - name: DATABASE_BACKEND
+      value: "dynamodb"
+    - name: DYNAMODB_TABLE_NAME
+      value: "aurafactory"
+
+    # === Safety ===
+    # Set BEDROCK_GUARDRAIL_ID after creating guardrail in Console
+    - name: BEDROCK_GUARDRAIL_VERSION
+      value: "DRAFT"
+
+    # === App Config ===
+    - name: DEBUG
+      value: "false"
+    - name: LOG_LEVEL
+      value: "INFO"
+    - name: GUILD_LOCK_MODE
+      value: "open"

@@ -39,6 +39,7 @@ from app.core.middleware import (
 )
 from app.core.safety import AuditLogger, GuildLock, ConversationMemory, InputGuardrail, TokenBudget
 from app.core.spec_loader import SpecRegistry
+from app.core.bedrock_guardrails import BedrockGuardrails, CombinedSafetyCheck
 from app.core.skill_loader import SkillLoader
 
 logger = logging.getLogger(__name__)
@@ -313,6 +314,13 @@ class UnifiedAgent:
         # Input guardrail
         self._input_guard = InputGuardrail()
 
+        # Bedrock Guardrails (managed safety — complementary to local regex)
+        self._bedrock_guard = BedrockGuardrails()  # Auto-reads from env vars
+        self._combined_safety = CombinedSafetyCheck(
+            local_guardrail=self._input_guard,
+            bedrock_guardrails=self._bedrock_guard,
+        )
+
         # Token budget
         self._token_budget = TokenBudget(
             db=db,
@@ -344,8 +352,8 @@ class UnifiedAgent:
         if len(message) > max_len:
             return self._respond("error", f"Message too long ({len(message)} chars, max {max_len}).")
 
-        # Gate 3: Prompt injection detection
-        is_safe, reason = self._input_guard.check(message)
+        # Gate 3: Combined safety check (local regex + Bedrock Guardrails)
+        is_safe, reason = await self._combined_safety.check_message(message)
         if not is_safe:
             logger.warning("Input blocked (guild=%d, user=%d): %s", guild_id, user_id, reason)
             return self._respond("error", "Your message was blocked by the safety filter.")

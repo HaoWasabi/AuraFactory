@@ -1,4 +1,10 @@
-import asyncpg
+try:
+    import asyncpg
+except ImportError:
+    raise ImportError(
+        "asyncpg is required for PostgreSQL backend. "
+        "Install with: pip install asyncpg  — or switch to DATABASE_BACKEND=dynamodb"
+    )
 import logging
 import ssl
 import os

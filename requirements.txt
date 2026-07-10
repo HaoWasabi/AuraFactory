@@ -8,14 +8,15 @@ uvicorn[standard]>=0.24.0
 # Discord bot
 nextcord>=2.6.0
 
-# Database (PostgreSQL)
-asyncpg>=0.29.0
+# Database (PostgreSQL — fallback, optional)
+# asyncpg>=0.29.0
 
-# Redis (caching layer)
-redis[hiredis]>=5.0.0
+# LLM providers (Gemini — fallback for local dev with free tier)
+google-generativeai>=0.8.0  # Optional: only needed if LLM_PROVIDER=gemini
 
-# LLM providers
-google-generativeai>=0.8.0
+# AWS Bedrock (Phase 2)
+boto3>=1.34.0
+aws-xray-sdk>=2.13.0
 
 # Ollama (local/self-hosted LLM)
 httpx>=0.27.0
@@ -37,9 +38,5 @@ python-multipart>=0.0.6
 # Templates (web dashboard)
 jinja2>=3.1.0
 
-# Observability
+# Observability (fallback — AWS uses CloudWatch EMF natively)
 prometheus-client>=0.20.0
-python-json-logger>=2.0.0
-
-# SQLite async (per-guild knowledge store)
-aiosqlite>=0.19.0

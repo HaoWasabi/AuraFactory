@@ -15,7 +15,13 @@ from fastapi.responses import FileResponse, Response
 from starlette.middleware.base import BaseHTTPMiddleware
 
 from app.config import settings
-from app.core.observability import configure_logging, metrics_endpoint, generate_request_id, set_request_context
+
+# Choose observability backend
+if settings.LLM_PROVIDER == "bedrock" or settings.DATABASE_BACKEND == "dynamodb":
+    from app.core.observability_aws import configure_logging, metrics_endpoint, generate_request_id, set_request_context
+else:
+    from app.core.observability import configure_logging, metrics_endpoint, generate_request_id, set_request_context
+
 
 # Configure structured logging
 configure_logging(
@@ -32,7 +38,12 @@ async def lifespan(app: FastAPI):
     start_time = time.time()
 
     # === Infrastructure ===
-    from app.database import Database
+    # Choose database backend
+    if settings.DATABASE_BACKEND == "dynamodb":
+        from app.database_dynamo import Database
+        logger.info("[DB] Using DynamoDB backend (table: %s)", settings.DYNAMODB_TABLE_NAME)
+    else:
+        from app.database import Database
     db = Database()
     for attempt in range(5):
         try:
@@ -53,7 +64,14 @@ async def lifespan(app: FastAPI):
     from app.llm import get_llm
     llm = None
     try:
-        if settings.LLM_PROVIDER == "ollama":
+        if settings.LLM_PROVIDER == "bedrock":
+            llm = get_llm(
+                provider="bedrock",
+                model=settings.BEDROCK_MODEL_ID,
+                region=settings.AWS_REGION,
+            )
+            logger.info("[OK] LLM provider: bedrock (%s @ %s)", settings.BEDROCK_MODEL_ID, settings.AWS_REGION)
+        elif settings.LLM_PROVIDER == "ollama":
             llm = get_llm(
                 provider="ollama",
                 model=settings.OLLAMA_MODEL,

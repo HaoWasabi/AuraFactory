@@ -50,6 +50,11 @@ def create_api_router(services: dict) -> APIRouter:
         guilds = await guild_sync_service.sync_user_guilds(
             user["discord_user_id"], user["access_token"]
         )
+        # Generate a session token (NOT the Discord access_token)
+        import hashlib, time as _time
+        session_token = hashlib.sha256(
+            f"{user['discord_user_id']}:{_time.time()}:{settings.SECRET_KEY}".encode()
+        ).hexdigest()
         return {
             "user": {
                 "id": str(user["discord_user_id"]),
@@ -57,7 +62,7 @@ def create_api_router(services: dict) -> APIRouter:
                 "avatar": user["avatar"],
             },
             "guilds": guilds,
-            "token": user["access_token"],
+            "token": session_token,
         }
 
     @router.get("/auth/guilds")

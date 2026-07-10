@@ -384,14 +384,19 @@ class MetricsMiddleware(Middleware):
     """Record execution metrics to Prometheus."""
 
     async def __call__(self, ctx: ExecutionContext, next_fn: NextFn) -> ExecutionResult:
-        from app.core.observability import tool_calls_total, tool_call_duration
-
         start = time.time()
         result = await next_fn(ctx)
         duration = time.time() - start
 
         status = "success" if result.success else "error"
-        tool_calls_total.labels(tool_name=ctx.tool_name, status=status).inc()
-        tool_call_duration.labels(tool_name=ctx.tool_name).observe(duration)
+
+        try:
+            from app.core.observability_aws import record_tool_execution
+            record_tool_execution(ctx.tool_name, status, duration)
+        except ImportError:
+            # Fallback to Prometheus
+            from app.core.observability import tool_calls_total, tool_call_duration
+            tool_calls_total.labels(tool_name=ctx.tool_name, status=status).inc()
+            tool_call_duration.labels(tool_name=ctx.tool_name).observe(duration)
 
         return result

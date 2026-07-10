@@ -38,6 +38,7 @@ class Config:
         self.GEMINI_API_KEY: str = os.environ.get('GEMINI_API_KEY', '')
         self.GEMINI_MODEL: str = os.environ.get('GEMINI_MODEL', 'gemini-2.5-flash')
         
+        
         # Ollama Configuration (for local/self-hosted models)
         self.OLLAMA_BASE_URL: str = os.environ.get('OLLAMA_BASE_URL', 'http://localhost:11434')
         self.OLLAMA_MODEL: str = os.environ.get('OLLAMA_MODEL', 'qwen2.5:7b-instruct')
@@ -61,6 +62,8 @@ class Config:
             'DATABASE_URL',
             'postgresql://localhost:5432/aurafactory'
         )
+        self.DATABASE_BACKEND: str = os.environ.get('DATABASE_BACKEND', 'postgresql')  # "postgresql" or "dynamodb"
+        self.DYNAMODB_TABLE_NAME: str = os.environ.get('DYNAMODB_TABLE_NAME', 'aurafactory')
         
         # Input limits
         self.MAX_MESSAGE_LENGTH: int = int(os.environ.get('MAX_MESSAGE_LENGTH', '2000'))
@@ -69,25 +72,17 @@ class Config:
         self.DAILY_TOKEN_BUDGET: int = int(os.environ.get('DAILY_TOKEN_BUDGET', '800000'))
         self.PER_REQUEST_TOKEN_LIMIT: int = int(os.environ.get('PER_REQUEST_TOKEN_LIMIT', '10000'))
         
-        # AWS/Bedrock Configuration
-        self.ENABLE_BEDROCK_LLM: bool = os.environ.get('ENABLE_BEDROCK_LLM', 'False').lower() == 'true'
+        # AWS/Bedrock Configuration 
         self.AWS_REGION: str = os.environ.get('AWS_REGION', 'us-east-1')
-        self.BEDROCK_MODEL_ID: str = os.environ.get('BEDROCK_MODEL_ID', '')
-
-        # Agentic Loop Configuration (override YAML defaults via env vars)
-        self.AGENTIC_MAX_ITERATIONS: int = int(os.environ.get('AGENTIC_MAX_ITERATIONS', '0'))
-        self.LLM_TEMP_PLANNING: float = float(os.environ.get('LLM_TEMP_PLANNING', '0'))
-        self.LLM_TEMP_REFLECT: float = float(os.environ.get('LLM_TEMP_REFLECT', '0'))
-        self.LLM_TEMP_ASSEMBLE: float = float(os.environ.get('LLM_TEMP_ASSEMBLE', '0'))
-        self.LLM_MAX_TOKENS_PLANNING: int = int(os.environ.get('LLM_MAX_TOKENS_PLANNING', '0'))
-        self.CONTEXT_MAX_CATEGORIES: int = int(os.environ.get('CONTEXT_MAX_CATEGORIES', '0'))
-        self.CONTEXT_MAX_CHANNELS: int = int(os.environ.get('CONTEXT_MAX_CHANNELS', '0'))
-        self.CONTEXT_MAX_ROLES: int = int(os.environ.get('CONTEXT_MAX_ROLES', '0'))
-        self.CONTEXT_HISTORY_TURNS: int = int(os.environ.get('CONTEXT_HISTORY_TURNS', '0'))
-        self.APPROVAL_TTL: int = int(os.environ.get('APPROVAL_TTL', '0'))
-        self.RATE_LIMIT_BURST: int = int(os.environ.get('RATE_LIMIT_BURST', '0'))
-        self.RETRY_MAX: int = int(os.environ.get('RETRY_MAX', '0'))
-        self.CONFIRMATION_WORDS: str = os.environ.get('CONFIRMATION_WORDS', '')
+        self.BEDROCK_MODEL_ID: str = os.environ.get('BEDROCK_MODEL_ID', 'amazon.nova-micro-v1:0')
+        
+        # Bedrock Guardrails Configuration
+        self.BEDROCK_GUARDRAIL_ID: str = os.environ.get('BEDROCK_GUARDRAIL_ID', '')
+        self.BEDROCK_GUARDRAIL_VERSION: str = os.environ.get('BEDROCK_GUARDRAIL_VERSION', 'DRAFT')
+        
+        # AWS Access (optional — prefers IAM role on App Runner/ECS)
+        self.AWS_ACCESS_KEY_ID: str = os.environ.get('AWS_ACCESS_KEY_ID', '')
+        self.AWS_SECRET_ACCESS_KEY: str = os.environ.get('AWS_SECRET_ACCESS_KEY', '')
         
         self._initialized = True
         self._validate_production()
