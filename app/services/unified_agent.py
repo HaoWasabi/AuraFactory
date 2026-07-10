@@ -37,7 +37,7 @@ from app.core.middleware import (
     ErrorBoundaryMiddleware, RateLimitMiddleware,
     RetryMiddleware, AuditMiddleware, MemoryMiddleware,
 )
-from app.core.safety import AuditLogger, GuildLock, ConversationMemory
+from app.core.safety import AuditLogger, GuildLock, ConversationMemory, InputGuardrail, TokenBudget
 from app.core.spec_loader import SpecRegistry
 from app.core.skill_loader import SkillLoader
 
@@ -283,9 +283,19 @@ class UnifiedAgent:
 
         # Middleware pipeline
         self._audit = AuditLogger(db=db)
+
+        from app.core.middleware import (
+            ExecutionPipeline, ExecutionContext, ExecutionResult,
+            ErrorBoundaryMiddleware, RateLimitMiddleware,
+            RetryMiddleware, AuditMiddleware, MemoryMiddleware,
+            CircuitBreakerMiddleware, MetricsMiddleware,
+        )
+
         self._pipeline = ExecutionPipeline(
             middlewares=[
                 ErrorBoundaryMiddleware(),
+                MetricsMiddleware(),
+                CircuitBreakerMiddleware(failure_threshold=5, cooldown_seconds=30.0),
                 AuditMiddleware(self._audit),
                 RateLimitMiddleware(min_delay=0.5, burst_limit=5),
                 RetryMiddleware(max_retries=3, base_delay=1.0),
@@ -298,6 +308,16 @@ class UnifiedAgent:
         self._guild_lock = GuildLock(
             mode=getattr(settings, "GUILD_LOCK_MODE", "open"),
             allowed_ids=set(int(x) for x in getattr(settings, "ALLOWED_GUILD_IDS", []) if x),
+        )
+
+        # Input guardrail
+        self._input_guard = InputGuardrail()
+
+        # Token budget
+        self._token_budget = TokenBudget(
+            db=db,
+            daily_limit=getattr(settings, 'DAILY_TOKEN_BUDGET', 800000),
+            per_request_limit=getattr(settings, 'PER_REQUEST_TOKEN_LIMIT', 10000),
         )
 
         logger.info("UnifiedAgent v6 initialized: %d tools, %d skills", len(self._tool_definitions), self._skills.skill_count)
@@ -317,7 +337,23 @@ class UnifiedAgent:
 
         # Gate: guild lock
         if not self._guild_lock.is_allowed(guild_id):
-            return self._respond("error", "⛔ This server is not authorized.")
+            return self._respond("error", "This server is not authorized.")
+
+        # Gate 2: Input length
+        max_len = getattr(settings, 'MAX_MESSAGE_LENGTH', 2000)
+        if len(message) > max_len:
+            return self._respond("error", f"Message too long ({len(message)} chars, max {max_len}).")
+
+        # Gate 3: Prompt injection detection
+        is_safe, reason = self._input_guard.check(message)
+        if not is_safe:
+            logger.warning("Input blocked (guild=%d, user=%d): %s", guild_id, user_id, reason)
+            return self._respond("error", "Your message was blocked by the safety filter.")
+
+        # Gate 4: Token budget
+        has_budget, remaining = await self._token_budget.check_budget(guild_id)
+        if not has_budget:
+            return self._respond("error", "Daily token budget exhausted for this server. Try again tomorrow.")
 
         # Check pending state (AWAITING_CLARIFY or AWAITING_APPROVAL)
         pending = self._requests.get_awaiting_approval(guild_id, user_id)

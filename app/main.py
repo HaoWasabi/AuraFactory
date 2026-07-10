@@ -8,18 +8,19 @@ import logging
 import time
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse, Response
+from starlette.middleware.base import BaseHTTPMiddleware
 
 from app.config import settings
+from app.core.observability import configure_logging, metrics_endpoint, generate_request_id, set_request_context
 
-# Configure logging
-logging.basicConfig(
-    level=getattr(logging, settings.LOG_LEVEL, logging.INFO),
-    format="%(asctime)s | %(levelname)-8s | %(name)s | %(message)s",
-    datefmt="%Y-%m-%d %H:%M:%S",
+# Configure structured logging
+configure_logging(
+    level=settings.LOG_LEVEL,
+    json_output=not settings.DEBUG,  # Human-readable in debug mode
 )
 logger = logging.getLogger(__name__)
 
@@ -27,7 +28,7 @@ logger = logging.getLogger(__name__)
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Application lifespan — initialize and teardown all services."""
-    logger.info("🚀 AuraFactory starting up...")
+    logger.info("[START] AuraFactory starting up...")
     start_time = time.time()
 
     # === Infrastructure ===
@@ -37,15 +38,15 @@ async def lifespan(app: FastAPI):
         try:
             await db.connect()
             await db.run_migrations("migrations")
-            logger.info("✅ Database connected + migrations applied")
+            logger.info("[OK] Database connected + migrations applied")
             break
         except Exception as e:
             if attempt < 4:
                 wait = 2 ** attempt
-                logger.warning("⚠️ DB connection attempt %d failed: %s — retrying in %ds...", attempt + 1, e, wait)
+                logger.warning("[WARN] DB connection attempt %d failed: %s — retrying in %ds...", attempt + 1, e, wait)
                 await asyncio.sleep(wait)
             else:
-                logger.error("❌ Database connection failed after 5 attempts: %s", e)
+                logger.error("[ERROR] Database connection failed after 5 attempts: %s", e)
                 raise RuntimeError(f"Cannot start without database: {e}")
 
     # === LLM ===
@@ -57,9 +58,9 @@ async def lifespan(app: FastAPI):
             model=settings.GEMINI_MODEL,
             api_key=settings.GEMINI_API_KEY,
         )
-        logger.info("✅ LLM provider: %s (%s)", settings.LLM_PROVIDER, settings.GEMINI_MODEL)
+        logger.info("[OK] LLM provider: %s (%s)", settings.LLM_PROVIDER, settings.GEMINI_MODEL)
     except Exception as e:
-        logger.error("❌ LLM initialization FAILED: %s", e, exc_info=True)
+        logger.error("[ERROR] LLM initialization FAILED: %s", e, exc_info=True)
         logger.error("   AI features will NOT work.")
 
     # === MCP ===
@@ -69,7 +70,7 @@ async def lifespan(app: FastAPI):
     mcp_client = MCPClient()
     discord_mcp_server = DiscordMCPServer()
     mcp_client.register_server(discord_mcp_server)
-    logger.info("✅ MCP client ready (discord server registered, awaiting bot)")
+    logger.info("[OK] MCP client ready (discord server registered, awaiting bot)")
 
     # === Services ===
     from app.services.context_service import ContextService
@@ -86,11 +87,11 @@ async def lifespan(app: FastAPI):
     try:
         from app.core.spec_loader import SpecRegistry
         registry = SpecRegistry.load()
-        logger.info("✅ SpecRegistry loaded: %d tools", len(registry.get_all_tools()))
+        logger.info("[OK] SpecRegistry loaded: %d tools", len(registry.get_all_tools()))
     except Exception as e:
-        logger.warning("⚠️ SpecRegistry not loaded (safety features degraded): %s", e)
+        logger.warning("[WARN] SpecRegistry not loaded (safety features degraded): %s", e)
 
-    # UnifiedAgent v2 — with db + registry for full safety layers
+    # UnifiedAgent v6 — with db + registry for full safety layers
     unified_agent = UnifiedAgent(llm, mcp_client, context_service, db=db, registry=registry) if llm else None
 
     services = {
@@ -101,7 +102,7 @@ async def lifespan(app: FastAPI):
         "_mcp_client": mcp_client,
         "_db": db,
     }
-    logger.info("✅ All services initialized")
+    logger.info("[OK] All services initialized")
 
     # === Interfaces ===
     from app.interfaces import DiscordBot, create_api_router
@@ -109,7 +110,7 @@ async def lifespan(app: FastAPI):
     # API routes
     api_router = create_api_router(services)
     app.include_router(api_router)
-    logger.info("✅ API routes registered")
+    logger.info("[OK] API routes registered")
 
     # Discord bot (background task)
     bot = None
@@ -117,22 +118,23 @@ async def lifespan(app: FastAPI):
     if settings.DISCORD_TOKEN:
         bot = DiscordBot(services=services, mcp_discord_server=discord_mcp_server)
         bot_task = asyncio.create_task(_run_bot(bot))
-        logger.info("🤖 Discord bot starting in background...")
+        logger.info("[BOT] Discord bot starting in background...")
     else:
-        logger.warning("⚠️ No DISCORD_TOKEN — bot will not connect")
+        logger.warning("[WARN] No DISCORD_TOKEN — bot will not connect")
 
     # Store refs on app.state for access in routes if needed
     app.state.db = db
     app.state.services = services
     app.state.bot = bot
+    app.state.start_time = time.time()
 
     elapsed = time.time() - start_time
-    logger.info("✅ AuraFactory ready in %.2fs", elapsed)
+    logger.info("[OK] AuraFactory ready in %.2fs", elapsed)
 
     yield  # App is running
 
     # === Shutdown ===
-    logger.info("🛑 AuraFactory shutting down...")
+    logger.info("[STOP] AuraFactory shutting down...")
     if bot:
         await bot.close()
     if bot_task and not bot_task.done():
@@ -142,7 +144,7 @@ async def lifespan(app: FastAPI):
         except asyncio.CancelledError:
             pass
     await db.disconnect()
-    logger.info("👋 AuraFactory stopped.")
+    logger.info("[BYE] AuraFactory stopped.")
 
 
 async def _run_bot(bot):
@@ -168,6 +170,35 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
+# === Security Headers Middleware ===
+class SecurityHeadersMiddleware(BaseHTTPMiddleware):
+    """Add security headers to all responses."""
+    async def dispatch(self, request: Request, call_next):
+        response = await call_next(request)
+        response.headers["X-Content-Type-Options"] = "nosniff"
+        response.headers["X-Frame-Options"] = "DENY"
+        response.headers["X-XSS-Protection"] = "1; mode=block"
+        response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
+        if not settings.DEBUG:
+            response.headers["Strict-Transport-Security"] = "max-age=31536000; includeSubDomains"
+        return response
+
+app.add_middleware(SecurityHeadersMiddleware)
+
+
+# === Request ID Middleware ===
+class RequestIDMiddleware(BaseHTTPMiddleware):
+    """Inject X-Request-ID into every request for tracing."""
+    async def dispatch(self, request: Request, call_next):
+        request_id = request.headers.get("X-Request-ID", generate_request_id())
+        set_request_context(request_id)
+        response = await call_next(request)
+        response.headers["X-Request-ID"] = request_id
+        return response
+
+app.add_middleware(RequestIDMiddleware)
 
 
 # === Static files + Page routes ===
@@ -202,6 +233,33 @@ async def serve_callback():
     return FileResponse("frontend/templates/callback.html", headers={"Cache-Control": "no-cache, no-store"})
 
 
+@app.get("/metrics")
+async def prometheus_metrics():
+    return await metrics_endpoint()
+
+
 @app.get("/health")
 async def health():
-    return {"status": "ok", "service": "AuraFactory", "version": "6.0"}
+    """Detailed health check with dependency status."""
+    db_ok = False
+    try:
+        if hasattr(app.state, 'db') and app.state.db and app.state.db.pool:
+            await app.state.db.fetchval("SELECT 1")
+            db_ok = True
+    except Exception:
+        pass
+
+    bot_ready = False
+    if hasattr(app.state, 'bot') and app.state.bot:
+        bot_ready = app.state.bot.is_ready() if hasattr(app.state.bot, 'is_ready') else False
+
+    status = "healthy" if db_ok else "degraded"
+    return {
+        "status": status,
+        "service": "AuraFactory",
+        "version": "6.0",
+        "dependencies": {
+            "database": "connected" if db_ok else "disconnected",
+            "discord_bot": "ready" if bot_ready else "not_ready",
+        },
+    }

@@ -30,7 +30,7 @@ class Config:
         )
         
         # Safety Configuration
-        self.GUILD_LOCK_MODE: str = os.environ.get('GUILD_LOCK_MODE', 'open')  # "open" or "whitelist"
+        self.GUILD_LOCK_MODE: str = os.environ.get('GUILD_LOCK_MODE', 'whitelist')  # "open" or "whitelist"
         self.RATE_LIMIT_DELAY: float = float(os.environ.get('RATE_LIMIT_DELAY', '0.5'))
         
         # LLM Configuration
@@ -40,7 +40,7 @@ class Config:
         
         # Server Configuration
         self.PORT: int = int(os.environ.get('PORT', 8000))
-        self.SECRET_KEY: str = os.environ.get('SECRET_KEY', 'dev-secret-key-change-in-production')
+        self.SECRET_KEY: str = os.environ.get('SECRET_KEY', '')
         self.DEBUG: bool = os.environ.get('DEBUG', 'False').lower() == 'true'
         self.LOG_LEVEL: str = os.environ.get('LOG_LEVEL', 'INFO')
         
@@ -49,7 +49,7 @@ class Config:
         self.ALLOWED_ORIGINS: List[str] = (
             [o.strip() for o in allowed_origins_str.split(',') if o.strip()]
             if allowed_origins_str.strip()
-            else ["*"]
+            else []  # Must be explicitly configured via ALLOWED_ORIGINS env var
         )
 
         # Database Configuration
@@ -57,6 +57,13 @@ class Config:
             'DATABASE_URL',
             'postgresql://localhost:5432/aurafactory'
         )
+        
+        # Input limits
+        self.MAX_MESSAGE_LENGTH: int = int(os.environ.get('MAX_MESSAGE_LENGTH', '2000'))
+        
+        # Token budget
+        self.DAILY_TOKEN_BUDGET: int = int(os.environ.get('DAILY_TOKEN_BUDGET', '800000'))
+        self.PER_REQUEST_TOKEN_LIMIT: int = int(os.environ.get('PER_REQUEST_TOKEN_LIMIT', '10000'))
         
         # AWS/Bedrock Configuration
         self.ENABLE_BEDROCK_LLM: bool = os.environ.get('ENABLE_BEDROCK_LLM', 'False').lower() == 'true'
@@ -79,6 +86,7 @@ class Config:
         self.CONFIRMATION_WORDS: str = os.environ.get('CONFIRMATION_WORDS', '')
         
         self._initialized = True
+        self._validate_production()
     
     @staticmethod
     def _parse_guild_ids(guild_ids_str: str) -> List[int]:
@@ -90,23 +98,21 @@ class Config:
         except ValueError:
             return []
     
+    def _validate_production(self) -> None:
+        """Validate required configuration for production deployments."""
+        if not self.DEBUG:
+            missing = []
+            if not self.SECRET_KEY:
+                missing.append('SECRET_KEY')
+            if not self.DATABASE_URL or self.DATABASE_URL == 'postgresql://localhost:5432/aurafactory':
+                missing.append('DATABASE_URL')
+            if missing:
+                raise RuntimeError(f"Production requires these env vars: {', '.join(missing)}")
+    
     @classmethod
     def get_instance(cls) -> 'Config':
         """Get or create the singleton instance."""
         return cls()
-
-    # Lowercase property aliases (used by services)
-    @property
-    def discord_client_id(self) -> str:
-        return self.DISCORD_CLIENT_ID
-
-    @property
-    def discord_client_secret(self) -> str:
-        return self.DISCORD_CLIENT_SECRET
-
-    @property
-    def discord_redirect_uri(self) -> str:
-        return self.DISCORD_REDIRECT_URI
 
 
 # Singleton instance

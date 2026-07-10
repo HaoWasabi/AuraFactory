@@ -54,14 +54,14 @@ def test_allowed_origins_parse_correctly(origins):
         os.environ.pop("ALLOWED_ORIGINS", None)
 
 
-def test_allowed_origins_default_star():
-    """Without ALLOWED_ORIGINS env var, ALLOWED_ORIGINS defaults to ['*']."""
+def test_allowed_origins_default_empty():
+    """Without ALLOWED_ORIGINS env var, ALLOWED_ORIGINS defaults to [] (secure)."""
     os.environ.pop("ALLOWED_ORIGINS", None)
     old_instance = _reset_config_singleton()
     try:
         from app.config import Config
         cfg = Config()
-        assert cfg.ALLOWED_ORIGINS == ["*"]
+        assert cfg.ALLOWED_ORIGINS == []
     finally:
         _restore_config_singleton(old_instance)
 

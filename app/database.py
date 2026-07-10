@@ -25,14 +25,14 @@ class Database:
         db_url = config.DATABASE_URL
         if 'render.com' in db_url or 'onrender.com' in db_url:
             ssl_ctx = ssl.create_default_context()
-            ssl_ctx.check_hostname = False
-            ssl_ctx.verify_mode = ssl.CERT_NONE
+            # Render provides valid certs — verify them
             kwargs['ssl'] = ssl_ctx
         
         self.pool = await asyncpg.create_pool(
             db_url,
             min_size=2,
             max_size=5,
+            command_timeout=30,  # 30s query timeout
             **kwargs,
         )
     
@@ -89,33 +89,37 @@ class Database:
         if not migrations_path.exists():
             return
 
-        # Create tracking table and fetch already-applied migrations
         async with self.pool.acquire() as conn:
-            await conn.execute("""
-                CREATE TABLE IF NOT EXISTS schema_migrations (
-                    filename TEXT PRIMARY KEY,
-                    applied_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-                )
-            """)
-            applied_rows = await conn.fetch("SELECT filename FROM schema_migrations")
-            applied = {r["filename"] for r in applied_rows}
+            # Advisory lock prevents concurrent migration runs
+            await conn.execute("SELECT pg_advisory_lock(1)")
+            try:
+                # Create tracking table and fetch already-applied migrations
+                await conn.execute("""
+                    CREATE TABLE IF NOT EXISTS schema_migrations (
+                        filename TEXT PRIMARY KEY,
+                        applied_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+                    )
+                """)
+                applied_rows = await conn.fetch("SELECT filename FROM schema_migrations")
+                applied = {r["filename"] for r in applied_rows}
 
-        sql_files = sorted(migrations_path.glob('*.sql'))
+                sql_files = sorted(migrations_path.glob('*.sql'))
 
-        async with self.pool.acquire() as conn:
-            for sql_file in sql_files:
-                if sql_file.name in applied:
-                    logger.info("Migration already applied, skipping: %s", sql_file.name)
-                    continue
-                sql = sql_file.read_text()
-                try:
-                    async with conn.transaction():
-                        await conn.execute(sql)
-                        await conn.execute(
-                            "INSERT INTO schema_migrations (filename) VALUES ($1)",
-                            sql_file.name
-                        )
-                    logger.info("Migration applied: %s", sql_file.name)
-                except Exception as e:
-                    logger.error("Migration FAILED: %s — %s", sql_file.name, e)
-                    raise  # Stop migration sequence
+                for sql_file in sql_files:
+                    if sql_file.name in applied:
+                        logger.info("Migration already applied, skipping: %s", sql_file.name)
+                        continue
+                    sql = sql_file.read_text()
+                    try:
+                        async with conn.transaction():
+                            await conn.execute(sql)
+                            await conn.execute(
+                                "INSERT INTO schema_migrations (filename) VALUES ($1)",
+                                sql_file.name
+                            )
+                        logger.info("Migration applied: %s", sql_file.name)
+                    except Exception as e:
+                        logger.error("Migration FAILED: %s — %s", sql_file.name, e)
+                        raise  # Stop migration sequence
+            finally:
+                await conn.execute("SELECT pg_advisory_unlock(1)")

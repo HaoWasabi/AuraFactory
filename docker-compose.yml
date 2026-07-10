@@ -6,10 +6,11 @@ services:
     image: postgres:16-alpine
     container_name: aurafactory-db
     restart: unless-stopped
+    env_file:
+      - .env
     environment:
       POSTGRES_DB: aurafactory
       POSTGRES_USER: aurafactory
-      POSTGRES_PASSWORD: aurafactory123
     ports:
       - "5432:5432"
     volumes:
@@ -19,6 +20,8 @@ services:
       interval: 10s
       timeout: 5s
       retries: 5
+    networks:
+      - internal
 
   # AuraFactory Application
   app:
@@ -32,7 +35,7 @@ services:
     env_file:
       - .env
     environment:
-      DATABASE_URL: postgresql://aurafactory:aurafactory123@postgres:5432/aurafactory
+      DATABASE_URL: postgresql://aurafactory:${POSTGRES_PASSWORD}@postgres:5432/aurafactory
       HOST: "0.0.0.0"
       PORT: "8000"
     depends_on:
@@ -41,12 +44,23 @@ services:
     volumes:
       - ./logs:/app/logs
     healthcheck:
-      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/')"]
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
       interval: 30s
       timeout: 10s
       start_period: 15s
       retries: 3
+    deploy:
+      resources:
+        limits:
+          memory: 512M
+          cpus: '1.0'
+    networks:
+      - internal
 
 volumes:
   postgres_data:
     driver: local
+
+networks:
+  internal:
+    driver: bridge

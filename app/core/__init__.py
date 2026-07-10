@@ -21,9 +21,10 @@ from app.core.middleware import (
     ExecutionPipeline, ExecutionContext, ExecutionResult,
     Middleware, ErrorBoundaryMiddleware, RateLimitMiddleware,
     RetryMiddleware, AuditMiddleware, MemoryMiddleware,
+    CircuitBreakerMiddleware, MetricsMiddleware,
 )
 from app.core.safety import (
-    ApprovalGate, RateLimiter, GuildLock,
+    ApprovalGate, GuildLock, InputGuardrail, TokenBudget,
     AuditLogger, RetryPolicy, ConversationMemory,
 )
 
@@ -38,7 +39,8 @@ __all__ = [
     "ExecutionPipeline", "ExecutionContext", "ExecutionResult",
     "Middleware", "ErrorBoundaryMiddleware", "RateLimitMiddleware",
     "RetryMiddleware", "AuditMiddleware", "MemoryMiddleware",
+    "CircuitBreakerMiddleware", "MetricsMiddleware",
     # Safety
-    "ApprovalGate", "RateLimiter", "GuildLock",
+    "ApprovalGate", "GuildLock", "InputGuardrail", "TokenBudget",
     "AuditLogger", "RetryPolicy", "ConversationMemory",
 ]

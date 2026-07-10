@@ -1,11 +1,13 @@
 """Safety Layer — Production guard rails for tool execution.
 
 Implements:
+  0. Input Guardrail — block prompt injection attempts
   1. Approval Gate — destructive actions require user confirmation
-  2. Rate Limiter — prevent Discord API rate limits
-  3. Guild Lock — only allowed guilds can be managed
-  4. Audit Logger — full trail of who did what, when
-  5. Retry Logic — exponential backoff on transient failures
+  2. Guild Lock — only allowed guilds can be managed
+  3. Audit Logger — full trail of who did what, when
+  4. Retry Logic — exponential backoff on transient failures
+  5. Token Budget — enforce daily token limits per guild
+  6. Conversation Memory — track resources in conversation context
 """
 
 from __future__ import annotations
@@ -19,6 +21,51 @@ from typing import Any, Dict, List, Optional, Set
 from app.core.spec_loader import SpecRegistry
 
 logger = logging.getLogger(__name__)
+
+
+# ===========================================================================
+# 0. INPUT GUARDRAIL
+# ===========================================================================
+
+class InputGuardrail:
+    """Detect and block prompt injection attempts.
+
+    Strategy: pattern matching + heuristics. NOT a replacement for
+    proper output validation, but catches obvious attacks.
+    """
+
+    _INJECTION_PATTERNS = [
+        r"ignore\s+(all\s+)?previous\s+instructions",
+        r"you\s+are\s+now\s+a",
+        r"system\s*:\s*",
+        r"forget\s+(everything|all|your\s+instructions)",
+        r"pretend\s+you\s+are",
+        r"new\s+instructions?\s*:",
+        r"override\s+(system|safety|rules)",
+        r"jailbreak",
+        r"DAN\s+mode",
+        r"\[SYSTEM\]",
+        r"<\|im_start\|>",
+    ]
+
+    def __init__(self) -> None:
+        import re
+        self._compiled = [re.compile(p, re.IGNORECASE) for p in self._INJECTION_PATTERNS]
+
+    def check(self, message: str) -> tuple[bool, str]:
+        """Check message for injection attempts.
+
+        Returns:
+            (is_safe, reason) — if is_safe=False, reason explains why.
+        """
+        if not message:
+            return True, ""
+
+        for pattern in self._compiled:
+            if pattern.search(message):
+                return False, f"Potential prompt injection detected (pattern: {pattern.pattern[:30]})"
+
+        return True, ""
 
 
 # ===========================================================================
@@ -134,56 +181,7 @@ class ApprovalGate:
 
 
 # ===========================================================================
-# 2. RATE LIMITER
-# ===========================================================================
-
-class RateLimiter:
-    """Prevent hitting Discord API rate limits.
-
-    Strategy:
-      - Minimum delay between tool executions: 0.5s (configurable)
-      - Max burst: 5 calls without delay
-      - After burst: enforce delay
-      - Track per-endpoint if needed (future)
-    """
-
-    def __init__(self, min_delay: float = 0.5, burst_limit: int = 5) -> None:
-        self._min_delay = min_delay
-        self._burst_limit = burst_limit
-        self._call_times: List[float] = []
-        self._lock = asyncio.Lock()
-
-    async def acquire(self) -> None:
-        """Wait if necessary to respect rate limits."""
-        async with self._lock:
-            now = time.time()
-
-            # Clean old timestamps (older than 10s)
-            self._call_times = [t for t in self._call_times if now - t < 10]
-
-            # If within burst limit, proceed immediately
-            if len(self._call_times) < self._burst_limit:
-                self._call_times.append(now)
-                return
-
-            # Otherwise, enforce delay since last call
-            if self._call_times:
-                elapsed = now - self._call_times[-1]
-                if elapsed < self._min_delay:
-                    wait = self._min_delay - elapsed
-                    await asyncio.sleep(wait)
-
-            self._call_times.append(time.time())
-
-    @property
-    def recent_calls(self) -> int:
-        """Number of calls in last 10 seconds."""
-        now = time.time()
-        return sum(1 for t in self._call_times if now - t < 10)
-
-
-# ===========================================================================
-# 3. GUILD LOCK
+# 2. GUILD LOCK
 # ===========================================================================
 
 class GuildLock:
@@ -225,7 +223,7 @@ class GuildLock:
 
 
 # ===========================================================================
-# 4. AUDIT LOGGER
+# 3. AUDIT LOGGER
 # ===========================================================================
 
 class AuditLogger:
@@ -327,7 +325,7 @@ class AuditLogger:
 
 
 # ===========================================================================
-# 5. RETRY LOGIC
+# 4. RETRY LOGIC
 # ===========================================================================
 
 class RetryPolicy:
@@ -384,6 +382,53 @@ class RetryPolicy:
                     await asyncio.sleep(delay)
 
         raise last_error
+
+
+# ===========================================================================
+# 5. TOKEN BUDGET
+# ===========================================================================
+
+class TokenBudget:
+    """Enforce daily token budget per guild.
+
+    Prevents cost overruns by rejecting requests when budget exhausted.
+    Budget resets daily (tracked in usage_daily table).
+    """
+
+    def __init__(self, db, daily_limit: int = 800_000, per_request_limit: int = 10_000) -> None:
+        self._db = db
+        self._daily_limit = daily_limit
+        self._per_request_limit = per_request_limit
+
+    async def check_budget(self, guild_id: int) -> tuple[bool, int]:
+        """Check if guild has remaining budget.
+
+        Returns:
+            (has_budget, remaining_tokens)
+        """
+        if not self._db:
+            return True, self._daily_limit
+
+        try:
+            usage = await self._db.fetchval(
+                "SELECT COALESCE(tokens_in + tokens_out, 0) FROM usage_daily WHERE guild_id = $1 AND date = CURRENT_DATE",
+                guild_id,
+            )
+            used = usage or 0
+            remaining = self._daily_limit - used
+            return remaining > 0, max(0, remaining)
+        except Exception:
+            # Budget check failure should not block requests
+            return True, self._daily_limit
+
+    def estimate_tokens(self, text: str) -> int:
+        """Rough token estimation (4 chars per token for English, 2 for CJK)."""
+        # Simple heuristic — good enough for budget gating
+        return len(text) // 3
+
+    @property
+    def per_request_limit(self) -> int:
+        return self._per_request_limit
 
 
 # ===========================================================================

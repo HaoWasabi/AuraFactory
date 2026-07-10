@@ -319,3 +319,79 @@ class ExecutionPipeline:
     @property
     def middleware_count(self) -> int:
         return len(self._middlewares)
+
+
+class CircuitBreakerMiddleware(Middleware):
+    """Prevent retry storms when Discord API is consistently failing.
+
+    States:
+      - CLOSED: normal operation, failures counted
+      - OPEN: all calls fail-fast (no execution), cooldown timer
+      - HALF_OPEN: allow 1 probe call, if success → CLOSED, if fail → OPEN
+
+    Thresholds configurable. Prevents wasting LLM calls on doomed executions.
+    """
+
+    def __init__(self, failure_threshold: int = 5, cooldown_seconds: float = 30.0) -> None:
+        self._failure_threshold = failure_threshold
+        self._cooldown = cooldown_seconds
+        self._failure_count = 0
+        self._state = "closed"  # closed | open | half_open
+        self._opened_at: float = 0.0
+
+    async def __call__(self, ctx: ExecutionContext, next_fn: NextFn) -> ExecutionResult:
+        # Check circuit state
+        if self._state == "open":
+            elapsed = time.time() - self._opened_at
+            if elapsed >= self._cooldown:
+                self._state = "half_open"
+                logger.info("CircuitBreaker: HALF_OPEN (cooldown elapsed)")
+            else:
+                return ExecutionResult(
+                    success=False,
+                    error="Circuit breaker OPEN — Discord API experiencing failures. Retry later.",
+                    should_retry=False,
+                    metadata={"circuit_breaker": "open", "retry_after": self._cooldown - elapsed},
+                )
+
+        # Execute
+        result = await next_fn(ctx)
+
+        # Update state based on result
+        if result.success:
+            if self._state == "half_open":
+                logger.info("CircuitBreaker: CLOSED (probe succeeded)")
+            self._state = "closed"
+            self._failure_count = 0
+        else:
+            self._failure_count += 1
+            if self._failure_count >= self._failure_threshold:
+                self._state = "open"
+                self._opened_at = time.time()
+                logger.warning(
+                    "CircuitBreaker: OPEN (failures=%d >= threshold=%d)",
+                    self._failure_count, self._failure_threshold,
+                )
+
+        return result
+
+    @property
+    def state(self) -> str:
+        return self._state
+
+
+class MetricsMiddleware(Middleware):
+    """Record execution metrics to Prometheus."""
+
+    async def __call__(self, ctx: ExecutionContext, next_fn: NextFn) -> ExecutionResult:
+        from app.core.observability import tool_calls_total, tool_call_duration
+
+        start = time.time()
+        result = await next_fn(ctx)
+        duration = time.time() - start
+
+        status = "success" if result.success else "error"
+        tool_calls_total.labels(tool_name=ctx.tool_name, status=status).inc()
+        tool_call_duration.labels(tool_name=ctx.tool_name).observe(duration)
+
+        return result
