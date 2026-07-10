@@ -78,6 +78,13 @@ metadata:
       sync_permissions: discord.permissions.sync
       rename_channel: discord.channels.rename
       rename_category: discord.categories.rename
+      list_channels: discord.channels.list
+      list_categories: discord.categories.list
+      list_roles: discord.roles.list
+      get_role_info: discord.roles.get_info
+      get_guild_info: discord.guild.get_info
+      list_members: discord.members.list
+      get_member_info: discord.members.get_info
       rename_role: discord.roles.rename
       bulk_create_roles: discord.roles.bulk_create
       set_community: discord.guild.set_community

@@ -41,12 +41,15 @@ async def record_token_usage(
 
     try:
         await db.execute(
-            """INSERT INTO audit_log (guild_id, user_id, action, details)
-               VALUES ($1, $2, $3, $4)""",
+            """INSERT INTO audit_log (guild_id, user_id, tool_name, tool_params, risk_level, success, duration_ms)
+               VALUES ($1, $2, $3, $4::jsonb, $5, $6, $7)""",
             guild_id,
             user_id,
-            "llm_token_usage",
-            f'{{"phase":"{phase}","provider":"{provider}","tokens_in":{tokens_in},"tokens_out":{tokens_out}}}',
+            f"llm.{phase}",
+            f'{{"provider":"{provider}","tokens_in":{tokens_in},"tokens_out":{tokens_out}}}',
+            "low",
+            True,
+            0,
         )
         logger.debug(
             "Token usage [%s/%s]: in=%d out=%d (guild=%d)",

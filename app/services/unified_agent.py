@@ -1,24 +1,21 @@
-"""UnifiedAgent v3.1 — Spec-Driven Agentic Architecture.
+"""UnifiedAgent v4 — Perceive-Plan-Act Loop Architecture.
 
 Architecture:
-    Request → LLM Planning → [Approval Gate] → Execute All Tools
-           → Observe Results → Reflect (goal achieved?)
-           → If not: Replan → Execute → Reflect (max N iterations)
-           → Assemble friendly response
+    Input → Perceive → Plan (sub-goals) → Loop:
+        ├─ Decide next action (tool call / ask user / answer)
+        ├─ If side-effect → approval gate
+        ├─ Execute
+        ├─ Reflect: goal met? error? re-plan?
+        └─ Stop when goals satisfied OR max iterations
+    → Self-check → Assemble & respond
 
 Design principles:
-  - ZERO hard-coded tool lists — everything derived from SpecRegistry
-  - Tunable via env vars OR tools_spec.yaml (env vars override YAML defaults)
-  - Approval is PRE-FLIGHT: check ALL tools before executing ANY
-  - Batch approval: one confirm for all high-risk ops
-  - remaining_tools stored as serializable dicts (not objects)
-  - Reflect uses fast-path for simple requests (≤2 tools, all success)
-  - Single clean loop — no recursion
-
-Sources of truth:
-  - tools_spec.yaml → SpecRegistry → tool schemas, risk levels, name maps
-  - app/config.py → env var overrides for runtime tuning
-  - app/prompts/ → LLM personality (kept separate, no logic)
+  - GOAL-ORIENTED: Plan produces sub-goals, not fixed tool lists
+  - ADAPTIVE: Each loop iteration decides 1 action based on current state
+  - PROACTIVE ERROR PREVENTION: Check conditions before execute
+  - SINGLE RESPONSIBILITY: Each phase has a clear, testable method
+  - SPEC-DRIVEN: Tools from SpecRegistry, knowledge from SkillLoader
+  - KWARGS PATTERN: All tool params via **kwargs, validated by KwargsFilter
 """
 
 from __future__ import annotations
@@ -33,64 +30,54 @@ from app.llm.base import BaseLLM, LLMResponse
 from app.mcp import MCPClient
 from app.services.context_service import ContextService
 
-# Token tracking (cost observability)
+# Token tracking
 from app.services._token_tracker import record_token_usage
 
-# Pattern 1: Normalizer
+# Normalizer
 from app.core.normalizer import LLMResponseNormalizer, NormalizedLLMOutput, NormalizedToolCall
 
-# Pattern 2: Request Lifecycle
+# Request Lifecycle
 from app.core.request_lifecycle import RequestStore, RequestLifecycle, RequestState
 
-# Pattern 3: Middleware Pipeline
+# Middleware Pipeline
 from app.core.middleware import (
     ExecutionPipeline, ExecutionContext, ExecutionResult,
     ErrorBoundaryMiddleware, RateLimitMiddleware,
     RetryMiddleware, AuditMiddleware, MemoryMiddleware,
 )
 
-# Safety (supporting)
+# Safety
 from app.core.safety import AuditLogger, GuildLock, ConversationMemory
 
-# Prompts (personality — no logic here)
+# Prompts
 from app.prompts.system_prompt import UNIFIED_SYSTEM_PROMPT, ASSEMBLE_PROMPT, REFLECT_PROMPT
 
-# Registry (the single source of truth)
+# Registry + Skills
 from app.core.spec_loader import SpecRegistry
-
-# Skills (knowledge docs for kwargs accuracy)
 from app.core.skill_loader import SkillLoader
 
 logger = logging.getLogger(__name__)
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# Config Resolver — env vars override YAML defaults
+# Config (unchanged from v3.1)
 # ═══════════════════════════════════════════════════════════════════════════════
 
 class AgentConfig:
-    """Resolves configuration: env var → YAML default → hardcoded fallback.
-
-    Priority chain: settings.X (env var) > registry.get_default(key) > fallback
-    All magic numbers live in tools_spec.yaml; env vars override for runtime tuning.
-    """
+    """Resolves configuration: env var → YAML default → hardcoded fallback."""
 
     def __init__(self, registry: Optional[SpecRegistry] = None) -> None:
         self._registry = registry
 
     def _resolve(self, env_value: Any, yaml_key: str, fallback: Any) -> Any:
-        """Resolve value with priority: env > yaml > fallback."""
-        # If env var is set (non-zero/non-empty), use it
         if env_value:
             return env_value
-        # Try YAML defaults
         if self._registry:
             yaml_val = self._registry.get_default(yaml_key)
             if yaml_val is not None:
                 return type(fallback)(yaml_val) if yaml_val != fallback else fallback
         return fallback
 
-    # ── Agentic Loop ──
     @property
     def max_iterations(self) -> int:
         return self._resolve(settings.AGENTIC_MAX_ITERATIONS, "max_iterations", 5)
@@ -119,7 +106,6 @@ class AgentConfig:
     def max_tokens_assemble(self) -> int:
         return self._resolve(0, "max_tokens_assemble", 512)
 
-    # ── Context Limits ──
     @property
     def context_max_categories(self) -> int:
         return self._resolve(settings.CONTEXT_MAX_CATEGORIES, "context_max_categories", 20)
@@ -136,7 +122,6 @@ class AgentConfig:
     def context_history_turns(self) -> int:
         return self._resolve(settings.CONTEXT_HISTORY_TURNS, "context_history_turns", 6)
 
-    # ── Safety ──
     @property
     def approval_ttl(self) -> float:
         return float(self._resolve(settings.APPROVAL_TTL, "approval_ttl_seconds", 300))
@@ -196,7 +181,8 @@ def build_server_context_block(server_context: dict, cfg: AgentConfig) -> str:
     if server_info:
         name = server_info.get("name", "?")
         members = server_info.get("member_count", server_info.get("approximate_member_count", "?"))
-        parts.append(f"Server: {name} ({members} members)")
+        features = server_info.get("features", [])
+        parts.append(f"Server: {name} ({members} members, features: {features})")
 
     if categories:
         cat_lines = [f"  {c.get('id', '?')}: {c.get('name', '?')}"
@@ -220,31 +206,23 @@ def build_server_context_block(server_context: dict, cfg: AgentConfig) -> str:
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# Helper: serialize/deserialize tool calls for payload storage
+# Serialization helpers
 # ═══════════════════════════════════════════════════════════════════════════════
 
 def _serialize_tool_calls(tool_calls: List[NormalizedToolCall]) -> List[Dict[str, Any]]:
-    """Convert NormalizedToolCall objects to JSON-safe dicts."""
-    return [
-        {"name": tc.name, "mcp_name": tc.mcp_name, "arguments": tc.arguments}
-        for tc in tool_calls
-    ]
+    return [{"name": tc.name, "mcp_name": tc.mcp_name, "arguments": tc.arguments} for tc in tool_calls]
 
 
 def _deserialize_tool_calls(data: List[Dict[str, Any]]) -> List[NormalizedToolCall]:
-    """Convert stored dicts back to NormalizedToolCall objects."""
-    return [
-        NormalizedToolCall(name=d["name"], mcp_name=d["mcp_name"], arguments=d.get("arguments", {}))
-        for d in data
-    ]
+    return [NormalizedToolCall(name=d["name"], mcp_name=d["mcp_name"], arguments=d.get("arguments", {})) for d in data]
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# Unified Agent
+# UnifiedAgent v4 — Perceive-Plan-Act Loop
 # ═══════════════════════════════════════════════════════════════════════════════
 
 class UnifiedAgent:
-    """Spec-driven Agentic AI assistant with Plan → Execute → Reflect loop."""
+    """Agentic AI with Perceive → Plan → Act Loop → Self-check → Assemble."""
 
     def __init__(
         self,
@@ -260,29 +238,31 @@ class UnifiedAgent:
         self._db = db
         self._registry = registry
 
-        # ── Config (env vars > YAML defaults > hardcoded fallback) ──
+        # Config
         self._cfg = AgentConfig(registry)
 
-        # ── Derived from SpecRegistry (zero hard-code) ──
+        # Tool definitions from SpecRegistry
         if registry:
             self._tool_definitions = registry.get_llm_definitions()
             self._tool_name_map = registry.get_tool_name_map()
             self._high_risk_tools = registry.get_high_risk_tools()
         else:
-            # Fallback: import from legacy file (graceful degradation)
             from app.core.tool_definitions import TOOL_DEFINITIONS, TOOL_NAME_MAP, HIGH_RISK_TOOLS
             self._tool_definitions = TOOL_DEFINITIONS
             self._tool_name_map = TOOL_NAME_MAP
             self._high_risk_tools = HIGH_RISK_TOOLS
             logger.warning("SpecRegistry not available — using legacy tool_definitions.py")
 
-        # ── Pattern 1: Normalizer ──
+        # Normalizer
         self._normalizer = LLMResponseNormalizer(tool_name_map=self._tool_name_map)
 
-        # ── Pattern 2: Request Store ──
+        # Request Store (in-memory state for approval flow)
         self._requests = RequestStore(default_ttl=self._cfg.approval_ttl)
 
-        # ── Pattern 3: Middleware Pipeline ──
+        # Skills (knowledge docs)
+        self._skills = SkillLoader()
+
+        # Middleware Pipeline
         self._memory = ConversationMemory()
         self._audit = AuditLogger(db=db)
         self._pipeline = ExecutionPipeline(
@@ -302,26 +282,21 @@ class UnifiedAgent:
             executor=self._mcp_execute,
         )
 
-        # ── Guild Lock ──
+        # Guild Lock
         self._guild_lock = GuildLock(
             mode=getattr(settings, "GUILD_LOCK_MODE", "open"),
             allowed_ids=set(int(x) for x in getattr(settings, "ALLOWED_GUILD_IDS", []) if x),
         )
 
-        # ── Skills (knowledge docs for LLM kwargs accuracy) ──
-        self._skills = SkillLoader()
-
         logger.info(
-            "UnifiedAgent v3.1 (Spec-Driven) initialized: %d tools visible, %d high-risk, "
-            "max_iter=%d, guild_lock=%s",
-            len(self._tool_definitions),
-            len(self._high_risk_tools),
-            self._cfg.max_iterations,
-            self._guild_lock.mode,
+            "UnifiedAgent v4 (Perceive-Plan-Act) initialized: %d tools, %d high-risk, "
+            "%d skills, max_iter=%d",
+            len(self._tool_definitions), len(self._high_risk_tools),
+            self._skills.skill_count, self._cfg.max_iterations,
         )
 
     # ─────────────────────────────────────────────────────────────────────────
-    # Main Entry Point
+    # MAIN ENTRY POINT
     # ─────────────────────────────────────────────────────────────────────────
 
     async def process(
@@ -331,7 +306,8 @@ class UnifiedAgent:
         user_id: int,
         history: Optional[List[Dict[str, str]]] = None,
     ) -> Dict[str, Any]:
-        """Process a user message end-to-end."""
+        """Process a user message end-to-end with the Perceive-Plan-Act loop."""
+
         # === Guild Lock ===
         if not self._guild_lock.is_allowed(guild_id):
             return self._response("error", "⛔ This server is not authorized to use the bot.")
@@ -344,15 +320,21 @@ class UnifiedAgent:
         # === Create request lifecycle ===
         req = self._requests.create(guild_id, user_id, message)
         req.set_payload("original_message", message)
+
+        # ══════════════════════════════════════════════════════════════════
+        # PHASE 1: PERCEIVE — Gather context, understand situation
+        # ══════════════════════════════════════════════════════════════════
         req.transition(RequestState.PLANNING)
 
-        # === Build context ===
         server_context = await self._context_service.get_server_context(guild_id)
         context_block = build_server_context_block(server_context, self._cfg)
         memory_block = self._memory.build_context_block(guild_id)
+        skills_block = self._skills.get_relevant_skills()
 
-        # === LLM Planning Call ===
-        messages = self._build_messages(context_block, memory_block, message, history)
+        # ══════════════════════════════════════════════════════════════════
+        # PHASE 2: PLAN — LLM decides what to do (tools or text response)
+        # ══════════════════════════════════════════════════════════════════
+        messages = self._build_messages(context_block, skills_block, memory_block, message, history)
 
         try:
             raw_response: LLMResponse = await self._llm.generate(
@@ -367,14 +349,12 @@ class UnifiedAgent:
             req.transition(RequestState.FAILED)
             return self._response("error", "⚠️ An error occurred while processing your request. Please try again.")
 
-        # === Track token usage ===
+        # Track tokens
         if hasattr(raw_response, 'usage') and raw_response.usage:
-            await record_token_usage(
-                self._db, guild_id, user_id, raw_response.usage,
-                provider=settings.LLM_PROVIDER, phase="planning",
-            )
+            await record_token_usage(self._db, guild_id, user_id, raw_response.usage,
+                                     provider=settings.LLM_PROVIDER, phase="planning")
 
-        # === Normalize ===
+        # === Normalize LLM output ===
         normalized = self._normalizer.normalize(raw_response)
 
         if not normalized.usable:
@@ -382,41 +362,41 @@ class UnifiedAgent:
             logger.warning("LLM response not usable: %s", normalized.failure_reason)
             return self._response("error", "⚠️ AI cannot process this request right now. Please try again.")
 
-        # === Branch: text-only response ===
+        # === Branch: text-only (query/clarify/out_of_scope) ===
         if normalized.is_text_only:
             req.transition(RequestState.COMPLETED)
             return self._response("answer", normalized.text)
 
-        # === Branch: tool calls → Agentic Loop ===
+        # === Branch: tool calls → Enter Act Loop ===
         if normalized.has_tool_calls:
-            return await self._agentic_execute(normalized.tool_calls, req, guild_id, user_id)
+            return await self._act_loop(normalized.tool_calls, req, guild_id, user_id, message)
 
         # Fallback
         req.transition(RequestState.COMPLETED)
         return self._response("answer", normalized.text or "No response.")
 
     # ─────────────────────────────────────────────────────────────────────────
-    # Agentic Execution Loop
+    # PHASE 3: ACT LOOP — Execute → Reflect → Adapt (per-action)
     # ─────────────────────────────────────────────────────────────────────────
 
-    async def _agentic_execute(
+    async def _act_loop(
         self,
         tool_calls: List[NormalizedToolCall],
         req: RequestLifecycle,
         guild_id: int,
         user_id: int,
+        original_message: str = "",
     ) -> Dict[str, Any]:
-        """Core agentic loop: Pre-flight → Execute → Observe → Reflect → Adapt."""
+        """Core act loop: for each iteration, execute tools → reflect → decide next."""
         all_results: List[Dict[str, Any]] = []
         current_tool_calls = tool_calls
-        original_message = req.get_payload("original_message", "")
 
         for iteration in range(1, self._cfg.max_iterations + 1):
-            logger.info("Agentic iteration %d/%d (guild=%d, tools=%d)",
+            logger.info("Act loop iter %d/%d (guild=%d, pending_tools=%d)",
                         iteration, self._cfg.max_iterations, guild_id, len(current_tool_calls))
 
             # ┌──────────────────────────────────────────────────────┐
-            # │ PHASE 1: PRE-FLIGHT APPROVAL CHECK                  │
+            # │ STEP A: APPROVAL GATE — side-effect check            │
             # └──────────────────────────────────────────────────────┘
             high_risk_in_batch = [
                 tc for tc in current_tool_calls
@@ -429,31 +409,29 @@ class UnifiedAgent:
                     "tool_calls": _serialize_tool_calls(current_tool_calls),
                     "results_so_far": all_results,
                     "iteration": iteration,
+                    "original_message": original_message,
                 })
 
-                # Build description using registry labels
                 desc_lines = [
                     f"• {self._get_action_label(tc.mcp_name, tc.arguments)}"
                     for tc in high_risk_in_batch
                 ]
-                desc = "\n".join(desc_lines)
-
                 return self._response(
                     "confirm_needed",
-                    f"🔒 **{len(desc_lines)} high-risk action(s) require confirmation:**\n{desc}\n\n"
-                    f"❓ **Confirm ALL?** (reply `yes` to proceed, `no` to cancel)",
+                    f"🔒 **{len(desc_lines)} high-risk action(s) require confirmation:**\n"
+                    + "\n".join(desc_lines) + "\n\n❓ **Confirm?** (yes/no)",
                     all_results,
                 )
 
             # ┌──────────────────────────────────────────────────────┐
-            # │ PHASE 2: EXECUTE ALL TOOLS                          │
+            # │ STEP B: EXECUTE — run tools sequentially             │
             # └──────────────────────────────────────────────────────┘
             req.transition(RequestState.EXECUTING)
             iteration_results = await self._run_tool_batch(current_tool_calls, guild_id, user_id, req)
             all_results.extend(iteration_results)
 
             # ┌──────────────────────────────────────────────────────┐
-            # │ PHASE 3: OBSERVE — Invalidate cache                 │
+            # │ STEP C: OBSERVE — invalidate cache on success        │
             # └──────────────────────────────────────────────────────┘
             try:
                 if any(r["success"] for r in iteration_results):
@@ -462,7 +440,7 @@ class UnifiedAgent:
                 logger.warning("Cache invalidation failed: %s", e)
 
             # ┌──────────────────────────────────────────────────────┐
-            # │ PHASE 4: REFLECT — Goal achieved?                   │
+            # │ STEP D: REFLECT — goal achieved? errors? re-plan?    │
             # └──────────────────────────────────────────────────────┘
             reflection = await self._reflect(original_message, all_results)
 
@@ -470,10 +448,10 @@ class UnifiedAgent:
                 break
 
             # ┌──────────────────────────────────────────────────────┐
-            # │ PHASE 5: ADAPT — Replan with fresh context          │
+            # │ STEP E: ADAPT — re-plan with fresh context           │
             # └──────────────────────────────────────────────────────┘
             next_steps = reflection.get("next_steps", [])
-            logger.info("Agentic loop continuing (iteration %d): %s", iteration, next_steps)
+            logger.info("Act loop continuing: %s", next_steps)
 
             next_tool_calls = await self._replan(original_message, all_results, next_steps, guild_id)
             if not next_tool_calls:
@@ -482,7 +460,15 @@ class UnifiedAgent:
             current_tool_calls = next_tool_calls
 
         # ┌─────────────────────────────────────────────────────────────┐
-        # │ FINAL: ASSEMBLE — Friendly natural language response        │
+        # │ PHASE 4: SELF-CHECK — verify results match original goal    │
+        # └─────────────────────────────────────────────────────────────┘
+        # (Simple version: check all success. Future: LLM verification)
+        failures = [r for r in all_results if not r["success"]]
+        if failures:
+            logger.warning("Self-check: %d/%d actions failed", len(failures), len(all_results))
+
+        # ┌─────────────────────────────────────────────────────────────┐
+        # │ PHASE 5: ASSEMBLE — natural language response               │
         # └─────────────────────────────────────────────────────────────┘
         req.transition(RequestState.COMPLETED)
         content = await self._assemble_response(original_message, all_results)
@@ -497,28 +483,28 @@ class UnifiedAgent:
         message: str,
         req: RequestLifecycle,
     ) -> Dict[str, Any]:
-        """Handle user's yes/no reply. On approval, resumes execution of ALL pending tools."""
+        """Handle user's yes/no reply to approval request."""
         msg_lower = message.lower().strip()
         affirmative = msg_lower in self._cfg.confirmation_words
 
         pending = req.get_payload("pending_batch", {})
         guild_id = req.guild_id
         user_id = req.user_id
+        original_message = pending.get("original_message", "")
 
         if not affirmative:
             req.transition(RequestState.CANCELLED)
             return self._response("answer", "✋ Cancelled. No changes were made.")
 
-        # === User approved → Execute ALL pending tools ===
+        # === User approved → resume act loop ===
         await self._audit.log_approval(guild_id, user_id, "batch", "approved")
         req.transition(RequestState.EXECUTING)
 
         tool_calls_data = pending.get("tool_calls", [])
         all_results: List[Dict[str, Any]] = pending.get("results_so_far", [])
-        original_message = req.get_payload("original_message", "")
         iteration = pending.get("iteration", 1)
 
-        # Deserialize and execute all tools
+        # Execute approved tools
         tool_calls = _deserialize_tool_calls(tool_calls_data)
         batch_results = await self._run_tool_batch(tool_calls, guild_id, user_id, req)
         all_results.extend(batch_results)
@@ -530,10 +516,9 @@ class UnifiedAgent:
         except Exception:
             pass
 
-        # === Continue agentic loop (reflect → adapt) ===
+        # Continue act loop for remaining iterations
         for loop_iter in range(iteration + 1, self._cfg.max_iterations + 1):
             reflection = await self._reflect(original_message, all_results)
-
             if reflection["status"] != "continue":
                 break
 
@@ -542,22 +527,17 @@ class UnifiedAgent:
             if not next_tool_calls:
                 break
 
-            # Check if new batch has high-risk
-            high_risk_in_batch = [
-                tc for tc in next_tool_calls
-                if tc.mcp_name in self._high_risk_tools
-            ]
-            if high_risk_in_batch:
+            # Check for new high-risk tools
+            high_risk = [tc for tc in next_tool_calls if tc.mcp_name in self._high_risk_tools]
+            if high_risk:
                 req.transition(RequestState.AWAITING_APPROVAL)
                 req.set_payload("pending_batch", {
                     "tool_calls": _serialize_tool_calls(next_tool_calls),
                     "results_so_far": all_results,
                     "iteration": loop_iter,
+                    "original_message": original_message,
                 })
-                desc_lines = [
-                    f"• {self._get_action_label(tc.mcp_name, tc.arguments)}"
-                    for tc in high_risk_in_batch
-                ]
+                desc_lines = [f"• {self._get_action_label(tc.mcp_name, tc.arguments)}" for tc in high_risk]
                 return self._response(
                     "confirm_needed",
                     f"🔒 **{len(desc_lines)} more action(s) need confirmation:**\n"
@@ -565,24 +545,22 @@ class UnifiedAgent:
                     all_results,
                 )
 
-            # Execute safe batch
             req.transition(RequestState.EXECUTING)
             batch_results = await self._run_tool_batch(next_tool_calls, guild_id, user_id, req)
             all_results.extend(batch_results)
-
             try:
                 if any(r["success"] for r in batch_results):
                     await self._context_service.invalidate(guild_id)
             except Exception:
                 pass
 
-        # === Assemble final response ===
+        # Assemble
         req.transition(RequestState.COMPLETED)
         content = await self._assemble_response(original_message, all_results)
         return self._response("action", content, all_results)
 
     # ─────────────────────────────────────────────────────────────────────────
-    # Tool Batch Executor (no approval logic — just runs tools)
+    # Tool Batch Executor
     # ─────────────────────────────────────────────────────────────────────────
 
     async def _run_tool_batch(
@@ -592,7 +570,7 @@ class UnifiedAgent:
         user_id: int,
         req: RequestLifecycle,
     ) -> List[Dict[str, Any]]:
-        """Execute a batch of tool calls sequentially."""
+        """Execute tools sequentially. Each tool gets output of previous (for dependencies)."""
         results = []
         for tc in tool_calls:
             params = dict(tc.arguments)
@@ -623,15 +601,15 @@ class UnifiedAgent:
         """Determine if the user's goal has been fully achieved."""
         all_success = all(r["success"] for r in results)
 
-        # Fast path: simple + all success → skip LLM
+        # Fast path: simple + all success → done
         if all_success and len(results) <= 2:
             return {"status": "done"}
 
-        # Any failure → report to user (don't loop)
+        # Any failure → done (report to user, don't loop)
         if not all_success:
             return {"status": "done"}
 
-        # Complex success → ask LLM
+        # Complex success → ask LLM if more steps needed
         result_summary = "\n".join(
             f"{'✓' if r['success'] else '✗'} {r.get('tool', '?')}: success"
             for r in results
@@ -647,8 +625,8 @@ class UnifiedAgent:
                 max_tokens=self._cfg.max_tokens_reflect,
             )
             if response and hasattr(response, 'usage') and response.usage:
-                await record_token_usage(
-                    self._db, 0, 0, response.usage, provider=settings.LLM_PROVIDER, phase="reflect")
+                await record_token_usage(self._db, 0, 0, response.usage,
+                                         provider=settings.LLM_PROVIDER, phase="reflect")
             if response and response.content:
                 text = response.content.strip()
                 if text.startswith("```"):
@@ -670,20 +648,20 @@ class UnifiedAgent:
         next_steps: List[str],
         guild_id: int,
     ) -> Optional[List[NormalizedToolCall]]:
-        """Ask LLM for next tool calls based on what's done and what's needed."""
+        """Re-plan with fresh context based on what's done and what's needed."""
         server_context = await self._context_service.get_server_context(guild_id, force_refresh=True)
         context_block = build_server_context_block(server_context, self._cfg)
+
+        # Targeted skills based on used tools
+        used_tools = [r.get("mcp_name", r.get("tool", "")) for r in results_so_far]
+        skills_block = self._skills.get_relevant_skills(tool_names=used_tools)
+        skills_section = f"\n\nTool knowledge:\n{skills_block}" if skills_block else ""
 
         result_summary = "\n".join(
             f"{'✓' if r['success'] else '✗'} {r.get('tool', '?')}: "
             f"{r.get('result', {}).get('name', '') if r['success'] else r.get('error', '')}"
             for r in results_so_far
         )
-
-        # Inject targeted skills based on what tools were already used
-        used_tools = [r.get("mcp_name", r.get("tool", "")) for r in results_so_far]
-        skills_block = self._skills.get_relevant_skills(tool_names=used_tools)
-        skills_section = f"\n\nTool knowledge:\n{skills_block}" if skills_block else ""
 
         replan_input = (
             f"Original request: {original_message}\n\n"
@@ -702,6 +680,9 @@ class UnifiedAgent:
                 temperature=self._cfg.temp_planning,
                 max_tokens=self._cfg.max_tokens_planning,
             )
+            if response and hasattr(response, 'usage') and response.usage:
+                await record_token_usage(self._db, 0, 0, response.usage,
+                                         provider=settings.LLM_PROVIDER, phase="replan")
             if response:
                 normalized = self._normalizer.normalize(response)
                 if normalized.usable and normalized.has_tool_calls:
@@ -725,7 +706,6 @@ class UnifiedAgent:
         for r in results:
             if r["success"]:
                 data = r.get("result") or {}
-                # Generic name extraction — works for any tool
                 name = (data.get("name") or data.get("channel_name") or
                         data.get("role_name") or data.get("id") or "")
                 result_lines.append(f"✓ {r.get('tool', 'action')}: {name} (success)")
@@ -743,8 +723,8 @@ class UnifiedAgent:
                 max_tokens=self._cfg.max_tokens_assemble,
             )
             if response and hasattr(response, 'usage') and response.usage:
-                await record_token_usage(
-                    self._db, 0, 0, response.usage, provider=settings.LLM_PROVIDER, phase="assemble")
+                await record_token_usage(self._db, 0, 0, response.usage,
+                                         provider=settings.LLM_PROVIDER, phase="assemble")
             if response and response.content:
                 return response.content.strip()
         except Exception as e:
@@ -753,7 +733,7 @@ class UnifiedAgent:
         return self._format_results_fallback(results)
 
     # ─────────────────────────────────────────────────────────────────────────
-    # Pipeline Executor (innermost MCP call)
+    # MCP Executor (innermost)
     # ─────────────────────────────────────────────────────────────────────────
 
     async def _mcp_execute(self, ctx: ExecutionContext) -> ExecutionResult:
@@ -767,31 +747,32 @@ class UnifiedAgent:
             return ExecutionResult(success=False, error=error, should_retry=should_retry)
 
     # ─────────────────────────────────────────────────────────────────────────
-    # Helpers
+    # Message Builder
     # ─────────────────────────────────────────────────────────────────────────
 
     def _build_messages(
         self,
         context_block: str,
+        skills_block: str,
         memory_block: str,
         user_message: str,
         history: Optional[List[Dict[str, str]]],
     ) -> List[Dict[str, str]]:
-        """Build LLM message array with server context + history."""
+        """Build LLM message array with server context + skills + history."""
         messages = [
             {"role": "user", "content": f"[CURRENT SERVER STATE]\n{context_block}"},
         ]
 
-        # Inject relevant skill knowledge (business logic + param rules)
-        skills_content = self._skills.get_relevant_skills()
-        if skills_content:
-            messages.append({"role": "user", "content": f"[TOOL KNOWLEDGE]\n{skills_content}"})
+        # Inject skill knowledge
+        if skills_block:
+            messages.append({"role": "user", "content": f"[TOOL KNOWLEDGE]\n{skills_block}"})
 
         if memory_block:
             messages.append({"role": "user", "content": memory_block})
 
         messages.append({"role": "assistant", "content": "I have the server state and tool knowledge. How can I help?"})
 
+        # Conversation history
         if history:
             for turn in history[-self._cfg.context_history_turns:]:
                 role = turn.get("role", "user")
@@ -802,14 +783,16 @@ class UnifiedAgent:
         messages.append({"role": "user", "content": user_message})
         return messages
 
+    # ─────────────────────────────────────────────────────────────────────────
+    # Helpers
+    # ─────────────────────────────────────────────────────────────────────────
+
     def _get_action_label(self, mcp_name: str, params: Dict[str, Any]) -> str:
-        """Human-readable label for confirmation prompts — derived from registry."""
+        """Human-readable label for confirmation prompts."""
         if self._registry:
             label = self._registry.get_human_label(mcp_name)
         else:
             label = f"⚠️ **{mcp_name}**"
-
-        # Append target info
         target = (params.get("channel_id") or params.get("role_id") or
                   params.get("member_id") or params.get("category_id") or
                   params.get("name") or "")
@@ -819,7 +802,6 @@ class UnifiedAgent:
 
     @staticmethod
     def _result_to_dict(result: ExecutionResult, mcp_name: str) -> Dict[str, Any]:
-        """Convert ExecutionResult to dict."""
         return {
             "tool": mcp_name.split(".")[-1] if "." in mcp_name else mcp_name,
             "mcp_name": mcp_name,
@@ -831,7 +813,6 @@ class UnifiedAgent:
 
     @staticmethod
     def _format_results_fallback(results: List[Dict]) -> str:
-        """Mechanical formatting fallback when LLM assemble fails."""
         lines = []
         for r in results:
             if r["success"]:
@@ -845,5 +826,4 @@ class UnifiedAgent:
 
     @staticmethod
     def _response(type_: str, content: str, tool_results: Optional[List] = None) -> Dict[str, Any]:
-        """Build standardized response dict."""
         return {"type": type_, "content": content, "tool_results": tool_results or []}
