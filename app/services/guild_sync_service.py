@@ -130,7 +130,7 @@ class GuildSyncService:
         permissions = 8  # ADMINISTRATOR
         return (
             f"https://discord.com/oauth2/authorize"
-            f"?client_id={settings.discord_client_id}"
+            f"?client_id={settings.DISCORD_CLIENT_ID}"
             f"&permissions={permissions}"
             f"&scope=bot"
             f"&guild_id={int(guild_id) if guild_id else 0}"

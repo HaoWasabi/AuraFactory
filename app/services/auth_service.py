@@ -25,8 +25,8 @@ class AuthService:
         Scopes: identify, guilds
         """
         params = {
-            "client_id": settings.discord_client_id,
-            "redirect_uri": settings.discord_redirect_uri,
+            "client_id": settings.DISCORD_CLIENT_ID,
+            "redirect_uri": settings.DISCORD_REDIRECT_URI,
             "response_type": "code",
             "scope": "identify guilds",
             "state": state,
@@ -39,11 +39,11 @@ class AuthService:
         async with aiohttp.ClientSession() as session:
             # Exchange code for token
             token_data = {
-                "client_id": settings.discord_client_id,
-                "client_secret": settings.discord_client_secret,
+                "client_id": settings.DISCORD_CLIENT_ID,
+                "client_secret": settings.DISCORD_CLIENT_SECRET,
                 "grant_type": "authorization_code",
                 "code": code,
-                "redirect_uri": settings.discord_redirect_uri,
+                "redirect_uri": settings.DISCORD_REDIRECT_URI,
             }
             async with session.post(DISCORD_OAUTH_TOKEN_URL, data=token_data) as resp:
                 if resp.status != 200:
