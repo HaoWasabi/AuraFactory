@@ -1,174 +1,133 @@
-"""UnifiedAgent v4 — Perceive-Plan-Act Loop Architecture.
+"""UnifiedAgent v6 — Closed-Loop Agentic Architecture.
 
-Architecture:
-    Input → Perceive → Plan (sub-goals) → Loop:
-        ├─ Decide next action (tool call / ask user / answer)
-        ├─ If side-effect → approval gate
-        ├─ Execute
-        ├─ Reflect: goal met? error? re-plan?
-        └─ Stop when goals satisfied OR max iterations
-    → Self-check → Assemble & respond
+State Machine: IDLE → UNDERSTAND → ACT (loop) → EVALUATE → RESPOND
+                                   ↕ AWAITING_CLARIFY (resume → UNDERSTAND)
+                                   ↕ AWAITING_APPROVAL (resume → ACT at paused step)
 
-Design principles:
-  - GOAL-ORIENTED: Plan produces sub-goals, not fixed tool lists
-  - ADAPTIVE: Each loop iteration decides 1 action based on current state
-  - PROACTIVE ERROR PREVENTION: Check conditions before execute
-  - SINGLE RESPONSIBILITY: Each phase has a clear, testable method
-  - SPEC-DRIVEN: Tools from SpecRegistry, knowledge from SkillLoader
-  - KWARGS PATTERN: All tool params via **kwargs, validated by KwargsFilter
+Design principles (from AGENTIC_ARCHITECTURE_V6.md):
+  1. Zero dead-end: every branch leads to a result
+  2. Goal-aware: effective_goal persists across turns
+  3. Dependency-resolved: $stepN.field forward injection, explicit fail on unresolved
+  4. Single LLM contract: 1 unified system prompt, structured JSON output
+  5. Bounded: MAX_ITERATIONS, MAX_TOOL_CALLS, MAX_LLM_CALLS
+  6. Resumable: pending state with TTL (DB-backed)
+  7. Fail-safe: parse-retry on malformed LLM output
+
+Infrastructure unchanged: MCP pipeline, connectors, spec_loader, skills, middleware.
 """
 
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
+import re
 import time
-from typing import Any, Dict, FrozenSet, List, Optional, Set
+from typing import Any, Dict, List, Optional, Tuple
 
 from app.config import settings
 from app.llm.base import BaseLLM, LLMResponse
 from app.mcp import MCPClient
 from app.services.context_service import ContextService
-
-# Token tracking
 from app.services._token_tracker import record_token_usage
-
-# Normalizer
-from app.core.normalizer import LLMResponseNormalizer, NormalizedLLMOutput, NormalizedToolCall
-
-# Request Lifecycle
+from app.core.normalizer import LLMResponseNormalizer, NormalizedToolCall
 from app.core.request_lifecycle import RequestStore, RequestLifecycle, RequestState
-
-# Middleware Pipeline
 from app.core.middleware import (
     ExecutionPipeline, ExecutionContext, ExecutionResult,
     ErrorBoundaryMiddleware, RateLimitMiddleware,
     RetryMiddleware, AuditMiddleware, MemoryMiddleware,
 )
-
-# Safety
 from app.core.safety import AuditLogger, GuildLock, ConversationMemory
-
-# Prompts
-from app.prompts.system_prompt import UNIFIED_SYSTEM_PROMPT, ASSEMBLE_PROMPT, REFLECT_PROMPT
-
-# Registry + Skills
 from app.core.spec_loader import SpecRegistry
 from app.core.skill_loader import SkillLoader
 
 logger = logging.getLogger(__name__)
 
+# ═══════════════════════════════════════════════════════════════════════════════
+# Constants
+# ═══════════════════════════════════════════════════════════════════════════════
+
+MAX_ITERATIONS = 5
+MAX_TOOL_CALLS = 20
+MAX_LLM_CALLS = 8
+PARSE_RETRY_BUDGET = 2
+PENDING_STATE_TTL = 900  # seconds (15 min)
+
+CONFIRMATION_WORDS = {"yes", "y", "ok", "confirm", "có", "đồng ý", "xác nhận", "1", "ừ", "được", "oke"}
+SHORT_CONFIRMS = {"ok", "yes", "y", "đồng ý", "có", "confirm", "được", "oke", "ừ", "1", "đi", "ok đi"}
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# Config (unchanged from v3.1)
+# System Prompt (unified — handles both UNDERSTAND and EVALUATE phases)
 # ═══════════════════════════════════════════════════════════════════════════════
 
-class AgentConfig:
-    """Resolves configuration: env var → YAML default → hardcoded fallback."""
+SYSTEM_PROMPT = """You are AuraFactory, an AI assistant that manages Discord servers.
+You are an enthusiastic, proactive server architect who helps admins build and optimize their Discord servers.
 
-    def __init__(self, registry: Optional[SpecRegistry] = None) -> None:
-        self._registry = registry
+## CRITICAL OUTPUT FORMAT
+Every response MUST be valid JSON (no markdown fences, no extra text). Choose ONE format:
 
-    def _resolve(self, env_value: Any, yaml_key: str, fallback: Any) -> Any:
-        if env_value:
-            return env_value
-        if self._registry:
-            yaml_val = self._registry.get_default(yaml_key)
-            if yaml_val is not None:
-                return type(fallback)(yaml_val) if yaml_val != fallback else fallback
-        return fallback
+### When understanding a new request (UNDERSTAND phase):
+A) Direct answer (no tools needed):
+   {"action": "respond", "message": "your response here"}
 
-    @property
-    def max_iterations(self) -> int:
-        return self._resolve(settings.AGENTIC_MAX_ITERATIONS, "max_iterations", 5)
+B) Need to execute tools:
+   {"action": "execute", "plan_summary": "what you will do", "tool_calls": [{"name": "tool_name", "arguments": {...}}]}
 
-    @property
-    def temp_planning(self) -> float:
-        return self._resolve(settings.LLM_TEMP_PLANNING, "temperature_planning", 0.2)
+C) Need clarification from user:
+   {"action": "clarify", "question": "your question here"}
 
-    @property
-    def temp_reflect(self) -> float:
-        return self._resolve(settings.LLM_TEMP_REFLECT, "temperature_reflect", 0.1)
+### When evaluating results (EVALUATE phase):
+A) Goal achieved:
+   {"action": "done", "response": "friendly summary of what was done"}
 
-    @property
-    def temp_assemble(self) -> float:
-        return self._resolve(settings.LLM_TEMP_ASSEMBLE, "temperature_assemble", 0.7)
+B) More steps needed:
+   {"action": "continue", "tool_calls": [{"name": "tool_name", "arguments": {...}}], "reason": "why more steps"}
 
-    @property
-    def max_tokens_planning(self) -> int:
-        return self._resolve(settings.LLM_MAX_TOKENS_PLANNING, "max_tokens_planning", 2048)
+C) Need info from user:
+   {"action": "ask_user", "question": "your question"}
 
-    @property
-    def max_tokens_reflect(self) -> int:
-        return self._resolve(0, "max_tokens_reflect", 256)
+D) Cannot proceed:
+   {"action": "failed", "response": "explanation of what failed and why"}
 
-    @property
-    def max_tokens_assemble(self) -> int:
-        return self._resolve(0, "max_tokens_assemble", 512)
+## RULES
+1. ALL IDs (channel_id, role_id, member_id, category_id, guild_id) MUST be strings — Discord snowflakes lose precision as numbers.
+2. Use IDs from the server context. Never guess or fabricate IDs.
+3. If user says "ok"/"yes"/"đồng ý" and you have a plan in context, EXECUTE it. Do NOT ask what they want.
+4. If a tool returns "not found" error — the ID is likely stale. In EVALUATE, use "continue" to re-fetch and retry.
+5. Execute dependencies in order: create parent (category) before child (channel inside it).
+6. After creating something, reference its returned ID in subsequent steps using $stepN.field syntax:
+   Example: step 0 creates category → step 1 uses category_id: "$step0.id"
+7. For complex requests ("setup server"), create ALL resources in one plan: categories first, then channels, then roles.
+8. Respond in the SAME language as the user (Vietnamese or English).
+9. For HIGH-RISK operations (delete, ban, bulk ops), include them in your plan — the system will auto-pause for confirmation.
+10. Be concise in responses. Use emojis sparingly (1-2 max).
+11. If server context shows existing structure and user wants to "set up" or "restructure", include DELETE operations for old items before creating new ones.
+12. When retrying the exact same tool with same params that already failed → choose "failed", do NOT "continue" infinitely.
 
-    @property
-    def context_max_categories(self) -> int:
-        return self._resolve(settings.CONTEXT_MAX_CATEGORIES, "context_max_categories", 20)
+## CAPABILITIES
+19 modules: channels, categories, roles, members, guild settings, webhooks, threads, invites, automod, backup, features, audit, safety, templates, events, emojis, stickers, soundboard, onboarding, permissions.
 
-    @property
-    def context_max_channels(self) -> int:
-        return self._resolve(settings.CONTEXT_MAX_CHANNELS, "context_max_channels", 40)
-
-    @property
-    def context_max_roles(self) -> int:
-        return self._resolve(settings.CONTEXT_MAX_ROLES, "context_max_roles", 20)
-
-    @property
-    def context_history_turns(self) -> int:
-        return self._resolve(settings.CONTEXT_HISTORY_TURNS, "context_history_turns", 6)
-
-    @property
-    def approval_ttl(self) -> float:
-        return float(self._resolve(settings.APPROVAL_TTL, "approval_ttl_seconds", 300))
-
-    @property
-    def rate_limit_burst(self) -> int:
-        return self._resolve(settings.RATE_LIMIT_BURST, "rate_limit_burst", 5)
-
-    @property
-    def rate_limit_delay(self) -> float:
-        return float(self._resolve(0, "rate_limit_min_delay", 0.5))
-
-    @property
-    def retry_max(self) -> int:
-        return self._resolve(settings.RETRY_MAX, "retry_max_attempts", 3)
-
-    @property
-    def retry_base_delay(self) -> float:
-        return float(self._resolve(0, "retry_base_delay", 1.0))
-
-    @property
-    def confirmation_words(self) -> List[str]:
-        env_val = settings.CONFIRMATION_WORDS
-        if env_val:
-            return [w.strip() for w in env_val.split(",") if w.strip()]
-        if self._registry:
-            yaml_val = self._registry.get_default("confirmation_words", "")
-            if yaml_val:
-                return [w.strip() for w in str(yaml_val).split(",") if w.strip()]
-        return ["yes", "y", "ok", "confirm", "có", "đồng ý", "xác nhận", "1"]
+## SERVER TEMPLATES (for "setup server" requests)
+- Gaming: THÔNG BÁO (rules, announcements) | CHAT (general, memes) | GAMING (game-specific) | VOICE (gaming, chill)
+- Education: THÔNG BÁO | TÀI LIỆU (resources, papers) | THẢO LUẬN (general, Q&A) | PHÒNG HỌC (voice rooms)
+- Business: ANNOUNCEMENTS | DEPARTMENTS | PROJECTS | MEETINGS (voice)
+- Community: WELCOME | GENERAL | TOPICS | EVENTS | VOICE
+"""
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# Context Builder
+# Helpers
 # ═══════════════════════════════════════════════════════════════════════════════
 
-def build_server_context_block(server_context: dict, cfg: AgentConfig) -> str:
+def build_server_context_block(server_context: dict) -> str:
     """Build compact server context string for LLM prompt."""
     if not server_context:
-        return "No server data available yet."
-
+        return "Server data not available."
     parts = []
     categories = server_context.get("categories", [])
     channels = server_context.get("channels", [])
     roles = server_context.get("roles", [])
     server_info = server_context.get("server_info", {})
-
     if isinstance(categories, str):
         categories = json.loads(categories) if categories.strip() else []
     if isinstance(channels, str):
@@ -177,52 +136,113 @@ def build_server_context_block(server_context: dict, cfg: AgentConfig) -> str:
         roles = json.loads(roles) if roles.strip() else []
     if isinstance(server_info, str):
         server_info = json.loads(server_info) if server_info.strip() else {}
-
     if server_info:
         name = server_info.get("name", "?")
-        members = server_info.get("member_count", server_info.get("approximate_member_count", "?"))
+        members = server_info.get("member_count", "?")
         features = server_info.get("features", [])
         parts.append(f"Server: {name} ({members} members, features: {features})")
-
     if categories:
-        cat_lines = [f"  {c.get('id', '?')}: {c.get('name', '?')}"
-                     for c in categories[:cfg.context_max_categories]]
-        parts.append("Categories:\n" + "\n".join(cat_lines))
-
+        lines = [f"  {c.get('id','?')}: {c.get('name','?')}" for c in categories[:20]]
+        parts.append("Categories:\n" + "\n".join(lines))
     if channels:
-        ch_lines = []
-        for ch in channels[:cfg.context_max_channels]:
-            ch_type = ch.get("type", "text")
-            cat_id = ch.get("category_id", "none")
-            ch_lines.append(f"  {ch.get('id', '?')}: #{ch.get('name', '?')} ({ch_type}) [cat:{cat_id}]")
-        parts.append("Channels:\n" + "\n".join(ch_lines))
-
+        lines = [f"  {ch.get('id','?')}: #{ch.get('name','?')} ({ch.get('type','text')}) [cat:{ch.get('category_id','none')}]" for ch in channels[:40]]
+        parts.append("Channels:\n" + "\n".join(lines))
     if roles:
-        role_lines = [f"  {r.get('id', '?')}: @{r.get('name', '?')} (pos:{r.get('position', 0)})"
-                      for r in roles[:cfg.context_max_roles] if r.get("name") != "@everyone"]
-        parts.append("Roles:\n" + "\n".join(role_lines))
+        lines = [f"  {r.get('id','?')}: @{r.get('name','?')} (pos:{r.get('position',0)})" for r in roles[:20] if r.get("name") != "@everyone"]
+        parts.append("Roles:\n" + "\n".join(lines))
+    return "\n\n".join(parts) if parts else "Server is empty."
 
-    return "\n\n".join(parts) if parts else "Server is empty or bot has no cached data."
+
+def resolve_effective_goal(message: str, history: Optional[List[Dict]], pending_state: Optional[Dict]) -> str:
+    """Resolve the real user goal from context."""
+    # Priority 1: pending state has the original goal
+    if pending_state and pending_state.get("goal"):
+        return pending_state["goal"]
+    # Priority 2: if message is substantive, use it
+    if message.strip().lower() not in SHORT_CONFIRMS and len(message.strip()) > 15:
+        return message
+    # Priority 3: find last substantive user message from history
+    if history:
+        for turn in reversed(history):
+            if turn.get("role") == "user":
+                content = turn.get("content", "").strip()
+                if content.lower() not in SHORT_CONFIRMS and len(content) > 15:
+                    return content
+    return message
+
+
+def resolve_dependencies(params: Dict[str, Any], previous_results: List[Dict]) -> Tuple[Dict[str, Any], bool]:
+    """Resolve $stepN.field references in params using previous results.
+
+    Returns: (resolved_params, all_resolved: bool)
+    If any reference cannot be resolved, returns (partial_params, False).
+    """
+    resolved = {}
+    all_ok = True
+    for key, value in params.items():
+        if isinstance(value, str) and value.startswith("$step"):
+            # Pattern: $step0.id, $step1.name, $step2.result.channel_id
+            match = re.match(r'\$step(\d+)\.(.+)', value)
+            if match:
+                step_idx = int(match.group(1))
+                field_path = match.group(2)
+                if step_idx < len(previous_results):
+                    result = previous_results[step_idx]
+                    if result.get("success") and result.get("result"):
+                        # Navigate field path
+                        data = result["result"]
+                        for part in field_path.split("."):
+                            if isinstance(data, dict):
+                                data = data.get(part)
+                            else:
+                                data = None
+                                break
+                        if data is not None:
+                            resolved[key] = str(data)
+                            continue
+                # Could not resolve
+                all_ok = False
+                resolved[key] = value  # Keep placeholder for debugging
+            else:
+                resolved[key] = value
+        else:
+            resolved[key] = value
+    return resolved, all_ok
+
+
+def parse_llm_json(raw_text: str) -> Tuple[Optional[Dict], Optional[str]]:
+    """Extract and parse JSON from LLM output. Handles markdown fences.
+
+    Returns: (parsed_dict, error_message)
+    """
+    if not raw_text or not raw_text.strip():
+        return None, "Empty LLM response"
+    text = raw_text.strip()
+    # Strip markdown code fences
+    if text.startswith("```"):
+        text = re.sub(r'^```(?:json)?\s*\n?', '', text)
+        text = re.sub(r'\n?```\s*$', '', text)
+    # Try direct parse
+    try:
+        return json.loads(text), None
+    except json.JSONDecodeError:
+        pass
+    # Try extracting first JSON object
+    match = re.search(r'\{[\s\S]*\}', text)
+    if match:
+        try:
+            return json.loads(match.group(0)), None
+        except json.JSONDecodeError as e:
+            return None, f"JSON parse error: {e}"
+    return None, f"No JSON found in: {text[:200]}"
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# Serialization helpers
-# ═══════════════════════════════════════════════════════════════════════════════
-
-def _serialize_tool_calls(tool_calls: List[NormalizedToolCall]) -> List[Dict[str, Any]]:
-    return [{"name": tc.name, "mcp_name": tc.mcp_name, "arguments": tc.arguments} for tc in tool_calls]
-
-
-def _deserialize_tool_calls(data: List[Dict[str, Any]]) -> List[NormalizedToolCall]:
-    return [NormalizedToolCall(name=d["name"], mcp_name=d["mcp_name"], arguments=d.get("arguments", {})) for d in data]
-
-
-# ═══════════════════════════════════════════════════════════════════════════════
-# UnifiedAgent v4 — Perceive-Plan-Act Loop
+# UnifiedAgent v6
 # ═══════════════════════════════════════════════════════════════════════════════
 
 class UnifiedAgent:
-    """Agentic AI with Perceive → Plan → Act Loop → Self-check → Assemble."""
+    """Agentic AI with closed-loop state machine (v6 architecture)."""
 
     def __init__(
         self,
@@ -233,15 +253,12 @@ class UnifiedAgent:
         registry: Optional[SpecRegistry] = None,
     ) -> None:
         self._llm = llm
-        self._mcp_client = mcp_client
-        self._context_service = context_service
+        self._mcp = mcp_client
+        self._context = context_service
         self._db = db
         self._registry = registry
 
-        # Config
-        self._cfg = AgentConfig(registry)
-
-        # Tool definitions from SpecRegistry
+        # Tool definitions
         if registry:
             self._tool_definitions = registry.get_llm_definitions()
             self._tool_name_map = registry.get_tool_name_map()
@@ -251,32 +268,27 @@ class UnifiedAgent:
             self._tool_definitions = TOOL_DEFINITIONS
             self._tool_name_map = TOOL_NAME_MAP
             self._high_risk_tools = HIGH_RISK_TOOLS
-            logger.warning("SpecRegistry not available — using legacy tool_definitions.py")
 
-        # Normalizer
+        # Normalizer (for function-calling mode fallback)
         self._normalizer = LLMResponseNormalizer(tool_name_map=self._tool_name_map)
 
-        # Request Store (in-memory state for approval flow)
-        self._requests = RequestStore(default_ttl=self._cfg.approval_ttl)
+        # Request state (in-memory, with TTL)
+        self._requests = RequestStore(default_ttl=PENDING_STATE_TTL)
 
-        # Skills (knowledge docs)
+        # Skills
         self._skills = SkillLoader()
 
-        # Middleware Pipeline
+        # Memory
         self._memory = ConversationMemory()
+
+        # Middleware pipeline
         self._audit = AuditLogger(db=db)
         self._pipeline = ExecutionPipeline(
             middlewares=[
                 ErrorBoundaryMiddleware(),
                 AuditMiddleware(self._audit),
-                RateLimitMiddleware(
-                    min_delay=self._cfg.rate_limit_delay,
-                    burst_limit=self._cfg.rate_limit_burst,
-                ),
-                RetryMiddleware(
-                    max_retries=self._cfg.retry_max,
-                    base_delay=self._cfg.retry_base_delay,
-                ),
+                RateLimitMiddleware(min_delay=0.5, burst_limit=5),
+                RetryMiddleware(max_retries=3, base_delay=1.0),
                 MemoryMiddleware(self._memory),
             ],
             executor=self._mcp_execute,
@@ -288,12 +300,7 @@ class UnifiedAgent:
             allowed_ids=set(int(x) for x in getattr(settings, "ALLOWED_GUILD_IDS", []) if x),
         )
 
-        logger.info(
-            "UnifiedAgent v4 (Perceive-Plan-Act) initialized: %d tools, %d high-risk, "
-            "%d skills, max_iter=%d",
-            len(self._tool_definitions), len(self._high_risk_tools),
-            self._skills.skill_count, self._cfg.max_iterations,
-        )
+        logger.info("UnifiedAgent v6 initialized: %d tools, %d skills", len(self._tool_definitions), self._skills.skill_count)
 
     # ─────────────────────────────────────────────────────────────────────────
     # MAIN ENTRY POINT
@@ -306,560 +313,506 @@ class UnifiedAgent:
         user_id: int,
         history: Optional[List[Dict[str, str]]] = None,
     ) -> Dict[str, Any]:
-        """Process a user message end-to-end with the Perceive-Plan-Act loop."""
+        """Process user message through the v6 state machine."""
 
-        # === Guild Lock ===
+        # Gate: guild lock
         if not self._guild_lock.is_allowed(guild_id):
-            return self._response("error", "⛔ This server is not authorized to use the bot.")
+            return self._respond("error", "⛔ This server is not authorized.")
 
-        # === Check pending approval ===
-        pending_req = self._requests.get_awaiting_approval(guild_id, user_id)
-        if pending_req:
-            return await self._handle_confirmation(message, pending_req)
+        # Check pending state (AWAITING_CLARIFY or AWAITING_APPROVAL)
+        pending = self._requests.get_awaiting_approval(guild_id, user_id)
+        if pending:
+            return await self._handle_resume(message, pending, guild_id, user_id, history)
 
-        # === Create request lifecycle ===
-        req = self._requests.create(guild_id, user_id, message)
-        req.set_payload("original_message", message)
+        # Resolve effective goal
+        effective_goal = resolve_effective_goal(message, history, None)
 
-        # ══════════════════════════════════════════════════════════════════
-        # PHASE 1: PERCEIVE — Gather context, understand situation
-        # ══════════════════════════════════════════════════════════════════
-        req.transition(RequestState.PLANNING)
-
-        server_context = await self._context_service.get_server_context(guild_id)
-        context_block = build_server_context_block(server_context, self._cfg)
-        memory_block = self._memory.build_context_block(guild_id)
-        skills_block = self._skills.get_relevant_skills()
-
-        # ══════════════════════════════════════════════════════════════════
-        # PHASE 2: PLAN — LLM decides what to do (tools or text response)
-        # ══════════════════════════════════════════════════════════════════
-        messages = self._build_messages(context_block, skills_block, memory_block, message, history)
-
-        try:
-            raw_response: LLMResponse = await self._llm.generate(
-                messages=messages,
-                system_prompt=UNIFIED_SYSTEM_PROMPT,
-                tools=self._tool_definitions,
-                temperature=self._cfg.temp_planning,
-                max_tokens=self._cfg.max_tokens_planning,
-            )
-        except Exception as e:
-            logger.error("LLM call failed: %s", e, exc_info=True)
-            req.transition(RequestState.FAILED)
-            return self._response("error", "⚠️ An error occurred while processing your request. Please try again.")
-
-        # Track tokens
-        if hasattr(raw_response, 'usage') and raw_response.usage:
-            await record_token_usage(self._db, guild_id, user_id, raw_response.usage,
-                                     provider=settings.LLM_PROVIDER, phase="planning")
-
-        # === Normalize LLM output ===
-        normalized = self._normalizer.normalize(raw_response)
-
-        if not normalized.usable:
-            req.transition(RequestState.FAILED)
-            logger.warning("LLM response not usable: %s", normalized.failure_reason)
-            return self._response("error", "⚠️ AI cannot process this request right now. Please try again.")
-
-        # === Branch: text-only (query/clarify/out_of_scope) ===
-        if normalized.is_text_only:
-            req.transition(RequestState.COMPLETED)
-            return self._response("answer", normalized.text)
-
-        # === Branch: tool calls → Enter Act Loop ===
-        if normalized.has_tool_calls:
-            return await self._act_loop(normalized.tool_calls, req, guild_id, user_id, message)
-
-        # Fallback
-        req.transition(RequestState.COMPLETED)
-        return self._response("answer", normalized.text or "No response.")
+        # ═══════ UNDERSTAND ═══════
+        return await self._understand(effective_goal, guild_id, user_id, history)
 
     # ─────────────────────────────────────────────────────────────────────────
-    # PHASE 3: ACT LOOP — Execute → Reflect → Adapt (per-action)
+    # UNDERSTAND — LLM decides: respond / execute / clarify
     # ─────────────────────────────────────────────────────────────────────────
 
-    async def _act_loop(
+    async def _understand(
         self,
-        tool_calls: List[NormalizedToolCall],
-        req: RequestLifecycle,
+        goal: str,
         guild_id: int,
         user_id: int,
-        original_message: str = "",
-    ) -> Dict[str, Any]:
-        """Core act loop: for each iteration, execute tools → reflect → decide next."""
-        all_results: List[Dict[str, Any]] = []
-        current_tool_calls = tool_calls
-
-        for iteration in range(1, self._cfg.max_iterations + 1):
-            logger.info("Act loop iter %d/%d (guild=%d, pending_tools=%d)",
-                        iteration, self._cfg.max_iterations, guild_id, len(current_tool_calls))
-
-            # ┌──────────────────────────────────────────────────────┐
-            # │ STEP A: APPROVAL GATE — side-effect check            │
-            # └──────────────────────────────────────────────────────┘
-            high_risk_in_batch = [
-                tc for tc in current_tool_calls
-                if tc.mcp_name in self._high_risk_tools
-            ]
-
-            if high_risk_in_batch:
-                req.transition(RequestState.AWAITING_APPROVAL)
-                req.set_payload("pending_batch", {
-                    "tool_calls": _serialize_tool_calls(current_tool_calls),
-                    "results_so_far": all_results,
-                    "iteration": iteration,
-                    "original_message": original_message,
-                })
-
-                desc_lines = [
-                    f"• {self._get_action_label(tc.mcp_name, tc.arguments)}"
-                    for tc in high_risk_in_batch
-                ]
-                return self._response(
-                    "confirm_needed",
-                    f"🔒 **{len(desc_lines)} high-risk action(s) require confirmation:**\n"
-                    + "\n".join(desc_lines) + "\n\n❓ **Confirm?** (yes/no)",
-                    all_results,
-                )
-
-            # ┌──────────────────────────────────────────────────────┐
-            # │ STEP B: EXECUTE — run tools sequentially             │
-            # └──────────────────────────────────────────────────────┘
-            req.transition(RequestState.EXECUTING)
-            iteration_results = await self._run_tool_batch(current_tool_calls, guild_id, user_id, req)
-            all_results.extend(iteration_results)
-
-            # ┌──────────────────────────────────────────────────────┐
-            # │ STEP C: OBSERVE — invalidate cache on success        │
-            # └──────────────────────────────────────────────────────┘
-            try:
-                if any(r["success"] for r in iteration_results):
-                    await self._context_service.invalidate(guild_id)
-            except Exception as e:
-                logger.warning("Cache invalidation failed: %s", e)
-
-            # ┌──────────────────────────────────────────────────────┐
-            # │ STEP D: REFLECT — goal achieved? errors? re-plan?    │
-            # └──────────────────────────────────────────────────────┘
-            reflection = await self._reflect(original_message, all_results)
-
-            if reflection["status"] != "continue":
-                break
-
-            # ┌──────────────────────────────────────────────────────┐
-            # │ STEP E: ADAPT — re-plan with fresh context           │
-            # └──────────────────────────────────────────────────────┘
-            next_steps = reflection.get("next_steps", [])
-            logger.info("Act loop continuing: %s", next_steps)
-
-            next_tool_calls = await self._replan(original_message, all_results, next_steps, guild_id)
-            if not next_tool_calls:
-                break
-
-            current_tool_calls = next_tool_calls
-
-        # ┌─────────────────────────────────────────────────────────────┐
-        # │ PHASE 4: SELF-CHECK — verify results match original goal    │
-        # └─────────────────────────────────────────────────────────────┘
-        # (Simple version: check all success. Future: LLM verification)
-        failures = [r for r in all_results if not r["success"]]
-        if failures:
-            logger.warning("Self-check: %d/%d actions failed", len(failures), len(all_results))
-
-        # ┌─────────────────────────────────────────────────────────────┐
-        # │ PHASE 5: ASSEMBLE — natural language response               │
-        # └─────────────────────────────────────────────────────────────┘
-        req.transition(RequestState.COMPLETED)
-        content = await self._assemble_response(original_message, all_results)
-        return self._response("action", content, all_results)
-
-    # ─────────────────────────────────────────────────────────────────────────
-    # Confirmation Handler
-    # ─────────────────────────────────────────────────────────────────────────
-
-    async def _handle_confirmation(
-        self,
-        message: str,
-        req: RequestLifecycle,
-    ) -> Dict[str, Any]:
-        """Handle user's yes/no reply to approval request."""
-        msg_lower = message.lower().strip()
-        affirmative = msg_lower in self._cfg.confirmation_words
-
-        pending = req.get_payload("pending_batch", {})
-        guild_id = req.guild_id
-        user_id = req.user_id
-        original_message = pending.get("original_message", "")
-
-        if not affirmative:
-            req.transition(RequestState.CANCELLED)
-            return self._response("answer", "✋ Cancelled. No changes were made.")
-
-        # === User approved → resume act loop ===
-        await self._audit.log_approval(guild_id, user_id, "batch", "approved")
-        req.transition(RequestState.EXECUTING)
-
-        tool_calls_data = pending.get("tool_calls", [])
-        all_results: List[Dict[str, Any]] = pending.get("results_so_far", [])
-        iteration = pending.get("iteration", 1)
-
-        # Execute approved tools
-        tool_calls = _deserialize_tool_calls(tool_calls_data)
-        batch_results = await self._run_tool_batch(tool_calls, guild_id, user_id, req)
-        all_results.extend(batch_results)
-
-        # Invalidate cache
-        try:
-            if any(r["success"] for r in batch_results):
-                await self._context_service.invalidate(guild_id)
-        except Exception:
-            pass
-
-        # Continue act loop for remaining iterations
-        for loop_iter in range(iteration + 1, self._cfg.max_iterations + 1):
-            reflection = await self._reflect(original_message, all_results)
-            if reflection["status"] != "continue":
-                break
-
-            next_steps = reflection.get("next_steps", [])
-            next_tool_calls = await self._replan(original_message, all_results, next_steps, guild_id)
-            if not next_tool_calls:
-                break
-
-            # Check for new high-risk tools
-            high_risk = [tc for tc in next_tool_calls if tc.mcp_name in self._high_risk_tools]
-            if high_risk:
-                req.transition(RequestState.AWAITING_APPROVAL)
-                req.set_payload("pending_batch", {
-                    "tool_calls": _serialize_tool_calls(next_tool_calls),
-                    "results_so_far": all_results,
-                    "iteration": loop_iter,
-                    "original_message": original_message,
-                })
-                desc_lines = [f"• {self._get_action_label(tc.mcp_name, tc.arguments)}" for tc in high_risk]
-                return self._response(
-                    "confirm_needed",
-                    f"🔒 **{len(desc_lines)} more action(s) need confirmation:**\n"
-                    + "\n".join(desc_lines) + "\n\n❓ **Confirm?**",
-                    all_results,
-                )
-
-            req.transition(RequestState.EXECUTING)
-            batch_results = await self._run_tool_batch(next_tool_calls, guild_id, user_id, req)
-            all_results.extend(batch_results)
-            try:
-                if any(r["success"] for r in batch_results):
-                    await self._context_service.invalidate(guild_id)
-            except Exception:
-                pass
-
-        # Assemble
-        req.transition(RequestState.COMPLETED)
-        content = await self._assemble_response(original_message, all_results)
-        return self._response("action", content, all_results)
-
-    # ─────────────────────────────────────────────────────────────────────────
-    # Tool Batch Executor
-    # ─────────────────────────────────────────────────────────────────────────
-
-    async def _run_tool_batch(
-        self,
-        tool_calls: List[NormalizedToolCall],
-        guild_id: int,
-        user_id: int,
-        req: RequestLifecycle,
-    ) -> List[Dict[str, Any]]:
-        """Execute tools sequentially. Each tool gets output of previous (for dependencies)."""
-        results = []
-        for tc in tool_calls:
-            params = dict(tc.arguments)
-            params["guild_id"] = guild_id
-
-            ctx = ExecutionContext(
-                tool_name=tc.mcp_name,
-                params=params,
-                guild_id=guild_id,
-                user_id=user_id,
-                risk_level="high" if tc.mcp_name in self._high_risk_tools else "medium",
-                request_id=req.id,
-            )
-            result = await self._pipeline.execute(ctx)
-            results.append(self._result_to_dict(result, tc.mcp_name))
-
-        return results
-
-    # ─────────────────────────────────────────────────────────────────────────
-    # Reflect
-    # ─────────────────────────────────────────────────────────────────────────
-
-    async def _reflect(
-        self,
-        original_message: str,
-        results: List[Dict[str, Any]],
-    ) -> Dict[str, Any]:
-        """Determine if the user's goal has been fully achieved."""
-        all_success = all(r["success"] for r in results)
-
-        # Fast path: simple + all success → done
-        if all_success and len(results) <= 2:
-            return {"status": "done"}
-
-        # Failures present → ask LLM to diagnose
-        if not all_success:
-            failed_summary = "\n".join(
-                f"✗ {r.get('tool', '?')}: {r.get('error', 'unknown')}"
-                for r in results if not r["success"]
-            )
-            success_summary = "\n".join(
-                f"✓ {r.get('tool', '?')}: success"
-                for r in results if r["success"]
-            )
-            reflect_input = (
-                f"Original goal: {original_message}\n\n"
-                f"Successes:\n{success_summary or '(none)'}\n\n"
-                f"Failures:\n{failed_summary}\n\n"
-                f"Should the agent: (a) retry with different params, "
-                f"(b) skip failed steps and continue, or (c) stop and report to user?"
-            )
-            try:
-                response = await self._llm.generate(
-                    messages=[{"role": "user", "content": reflect_input}],
-                    system_prompt=REFLECT_PROMPT,
-                    tools=None,
-                    temperature=self._cfg.temp_reflect,
-                    max_tokens=self._cfg.max_tokens_reflect,
-                )
-                if response and hasattr(response, 'usage') and response.usage:
-                    await record_token_usage(self._db, 0, 0, response.usage,
-                                             provider=settings.LLM_PROVIDER, phase="reflect")
-                if response and response.content:
-                    text = response.content.strip()
-                    if text.startswith("```"):
-                        text = text.split("\n", 1)[-1].rsplit("```", 1)[0].strip()
-                    return json.loads(text)
-            except (json.JSONDecodeError, Exception) as e:
-                logger.warning("Reflect on failure failed: %s", e)
-            # Fallback: if ALL failed, stop. If some succeeded, done.
-            if all(not r["success"] for r in results):
-                return {"status": "failed", "reason": "All actions failed"}
-            return {"status": "done"}
-
-        # Complex success → ask LLM if more steps needed
-        result_summary = "\n".join(
-            f"{'✓' if r['success'] else '✗'} {r.get('tool', '?')}: success"
-            for r in results
-        )
-        reflect_input = f"Original goal: {original_message}\nExecution results:\n{result_summary}"
-
-        try:
-            response = await self._llm.generate(
-                messages=[{"role": "user", "content": reflect_input}],
-                system_prompt=REFLECT_PROMPT,
-                tools=None,
-                temperature=self._cfg.temp_reflect,
-                max_tokens=self._cfg.max_tokens_reflect,
-            )
-            if response and hasattr(response, 'usage') and response.usage:
-                await record_token_usage(self._db, 0, 0, response.usage,
-                                         provider=settings.LLM_PROVIDER, phase="reflect")
-            if response and response.content:
-                text = response.content.strip()
-                if text.startswith("```"):
-                    text = text.split("\n", 1)[-1].rsplit("```", 1)[0].strip()
-                return json.loads(text)
-        except (json.JSONDecodeError, Exception) as e:
-            logger.warning("Reflection failed: %s", e)
-
-        return {"status": "done"}
-
-    # ─────────────────────────────────────────────────────────────────────────
-    # Replan
-    # ─────────────────────────────────────────────────────────────────────────
-
-    async def _replan(
-        self,
-        original_message: str,
-        results_so_far: List[Dict[str, Any]],
-        next_steps: List[str],
-        guild_id: int,
-    ) -> Optional[List[NormalizedToolCall]]:
-        """Re-plan with fresh context based on what's done and what's needed."""
-        server_context = await self._context_service.get_server_context(guild_id, force_refresh=True)
-        context_block = build_server_context_block(server_context, self._cfg)
-
-        # Targeted skills based on used tools
-        used_tools = [r.get("mcp_name", r.get("tool", "")) for r in results_so_far]
-        skills_block = self._skills.get_relevant_skills(tool_names=used_tools)
-        skills_section = f"\n\nTool knowledge:\n{skills_block}" if skills_block else ""
-
-        result_summary = "\n".join(
-            f"{'✓' if r['success'] else '✗'} {r.get('tool', '?')}: "
-            f"{r.get('result', {}).get('name', '') if r['success'] else r.get('error', '')}"
-            for r in results_so_far
-        )
-
-        replan_input = (
-            f"Original request: {original_message}\n\n"
-            f"Already completed:\n{result_summary}\n\n"
-            f"Still needed:\n" + "\n".join(f"- {s}" for s in next_steps) + "\n\n"
-            f"Current server state:\n{context_block}"
-            f"{skills_section}\n\n"
-            f"Call the appropriate tools for the remaining steps."
-        )
-
-        try:
-            response = await self._llm.generate(
-                messages=[{"role": "user", "content": replan_input}],
-                system_prompt=UNIFIED_SYSTEM_PROMPT,
-                tools=self._tool_definitions,
-                temperature=self._cfg.temp_planning,
-                max_tokens=self._cfg.max_tokens_planning,
-            )
-            if response and hasattr(response, 'usage') and response.usage:
-                await record_token_usage(self._db, 0, 0, response.usage,
-                                         provider=settings.LLM_PROVIDER, phase="replan")
-            if response:
-                normalized = self._normalizer.normalize(response)
-                if normalized.usable and normalized.has_tool_calls:
-                    return normalized.tool_calls
-        except Exception as e:
-            logger.warning("Replan failed: %s", e)
-
-        return None
-
-    # ─────────────────────────────────────────────────────────────────────────
-    # Assemble
-    # ─────────────────────────────────────────────────────────────────────────
-
-    async def _assemble_response(
-        self,
-        user_message: str,
-        results: List[Dict[str, Any]],
-    ) -> str:
-        """LLM call to produce a friendly, natural response."""
-        result_lines = []
-        for r in results:
-            if r["success"]:
-                data = r.get("result") or {}
-                name = (data.get("name") or data.get("channel_name") or
-                        data.get("role_name") or data.get("id") or "")
-                result_lines.append(f"✓ {r.get('tool', 'action')}: {name} (success)")
-            else:
-                result_lines.append(f"✗ {r.get('tool', 'action')}: FAILED — {r.get('error', 'unknown')}")
-
-        assemble_input = f"User request: {user_message}\nTool results:\n" + "\n".join(result_lines)
-
-        try:
-            response = await self._llm.generate(
-                messages=[{"role": "user", "content": assemble_input}],
-                system_prompt=ASSEMBLE_PROMPT,
-                tools=None,
-                temperature=self._cfg.temp_assemble,
-                max_tokens=self._cfg.max_tokens_assemble,
-            )
-            if response and hasattr(response, 'usage') and response.usage:
-                await record_token_usage(self._db, 0, 0, response.usage,
-                                         provider=settings.LLM_PROVIDER, phase="assemble")
-            if response and response.content:
-                return response.content.strip()
-        except Exception as e:
-            logger.warning("Assemble failed, using fallback: %s", e)
-
-        return self._format_results_fallback(results)
-
-    # ─────────────────────────────────────────────────────────────────────────
-    # MCP Executor (innermost)
-    # ─────────────────────────────────────────────────────────────────────────
-
-    async def _mcp_execute(self, ctx: ExecutionContext) -> ExecutionResult:
-        """Actual MCP tool call — center of middleware chain."""
-        resp = await self._mcp_client.call_tool(ctx.tool_name, ctx.params)
-        if resp.success:
-            return ExecutionResult(success=True, data=resp.result)
-        else:
-            error = resp.error or "Unknown error"
-            should_retry = any(s in error.lower() for s in ("429", "rate", "timeout"))
-            return ExecutionResult(success=False, error=error, should_retry=should_retry)
-
-    # ─────────────────────────────────────────────────────────────────────────
-    # Message Builder
-    # ─────────────────────────────────────────────────────────────────────────
-
-    def _build_messages(
-        self,
-        context_block: str,
-        skills_block: str,
-        memory_block: str,
-        user_message: str,
         history: Optional[List[Dict[str, str]]],
-    ) -> List[Dict[str, str]]:
-        """Build LLM message array with server context + skills + history."""
-        messages = [
-            {"role": "user", "content": f"[CURRENT SERVER STATE]\n{context_block}"},
-        ]
+        llm_call_count: int = 0,
+    ) -> Dict[str, Any]:
+        """UNDERSTAND phase: LLM analyzes goal and decides action."""
 
-        # Inject skill knowledge
+        if llm_call_count >= MAX_LLM_CALLS:
+            return self._respond("error", "⚠️ Too many processing steps. Please try a simpler request.")
+
+        # Gather context
+        server_context = await self._context.get_server_context(guild_id)
+        context_block = build_server_context_block(server_context)
+        skills_block = self._skills.get_relevant_skills()
+        memory_block = self._memory.build_context_block(guild_id)
+
+        # Build messages
+        messages = []
+        messages.append({"role": "user", "content": f"[SERVER STATE]\n{context_block}"})
         if skills_block:
             messages.append({"role": "user", "content": f"[TOOL KNOWLEDGE]\n{skills_block}"})
-
         if memory_block:
-            messages.append({"role": "user", "content": memory_block})
-
-        messages.append({"role": "assistant", "content": "I have the server state and tool knowledge. How can I help?"})
-
-        # Conversation history
+            messages.append({"role": "user", "content": f"[RECENT ACTIONS]\n{memory_block}"})
+        messages.append({"role": "assistant", "content": "Ready. Send your request and I will respond with a JSON action."})
+        # Add history
         if history:
-            for turn in history[-self._cfg.context_history_turns:]:
+            for turn in history[-6:]:
                 role = turn.get("role", "user")
                 content = turn.get("content", "")
                 if role in ("user", "assistant") and content:
                     messages.append({"role": role, "content": content})
+        messages.append({"role": "user", "content": goal})
 
-        messages.append({"role": "user", "content": user_message})
-        return messages
+        # LLM call
+        try:
+            response = await self._llm.generate(
+                messages=messages,
+                system_prompt=SYSTEM_PROMPT,
+                tools=self._tool_definitions,
+                temperature=0.2,
+                max_tokens=2048,
+            )
+        except Exception as e:
+            logger.error("UNDERSTAND LLM failed: %s", e, exc_info=True)
+            return self._respond("error", "⚠️ AI processing error. Please try again.")
+
+        # Track tokens
+        if hasattr(response, 'usage') and response.usage:
+            await record_token_usage(self._db, guild_id, user_id, response.usage, provider=settings.LLM_PROVIDER, phase="understand")
+
+        llm_call_count += 1
+
+        # ── Parse output ──
+        # Try structured JSON first (from content)
+        if response.content:
+            parsed, err = parse_llm_json(response.content)
+            if parsed and "action" in parsed:
+                return await self._dispatch_action(parsed, goal, guild_id, user_id, history, llm_call_count)
+            # Parse retry
+            if err and llm_call_count < MAX_LLM_CALLS:
+                logger.warning("UNDERSTAND parse fail (retry %d): %s", llm_call_count, err)
+                correction = f"Your previous output was not valid JSON. Error: {err}. Please output ONLY valid JSON with an 'action' field."
+                messages.append({"role": "assistant", "content": response.content})
+                messages.append({"role": "user", "content": correction})
+                try:
+                    retry_resp = await self._llm.generate(messages=messages, system_prompt=SYSTEM_PROMPT, tools=self._tool_definitions, temperature=0.1, max_tokens=2048)
+                    llm_call_count += 1
+                    if retry_resp.content:
+                        parsed2, _ = parse_llm_json(retry_resp.content)
+                        if parsed2 and "action" in parsed2:
+                            return await self._dispatch_action(parsed2, goal, guild_id, user_id, history, llm_call_count)
+                except Exception:
+                    pass
+
+        # Fallback: check if LLM used function calling (tool_calls)
+        if response.has_tool_calls:
+            normalized = self._normalizer.normalize(response)
+            if normalized.usable and normalized.has_tool_calls:
+                tool_calls_data = [{"name": tc.name, "arguments": tc.arguments} for tc in normalized.tool_calls]
+                action_data = {"action": "execute", "plan_summary": "Executing requested tools", "tool_calls": tool_calls_data}
+                return await self._dispatch_action(action_data, goal, guild_id, user_id, history, llm_call_count)
+            elif normalized.usable and normalized.is_text_only:
+                return self._respond("answer", normalized.text)
+
+        # Final fallback: if content looks like a direct answer
+        if response.content and len(response.content.strip()) > 10:
+            return self._respond("answer", response.content.strip())
+
+        return self._respond("error", "⚠️ Could not process your request. Please try again.")
 
     # ─────────────────────────────────────────────────────────────────────────
-    # Helpers
+    # ACTION DISPATCHER
+    # ─────────────────────────────────────────────────────────────────────────
+
+    async def _dispatch_action(
+        self,
+        data: Dict[str, Any],
+        goal: str,
+        guild_id: int,
+        user_id: int,
+        history: Optional[List[Dict[str, str]]],
+        llm_call_count: int,
+    ) -> Dict[str, Any]:
+        """Route parsed LLM action to appropriate handler."""
+        action = data.get("action", "")
+
+        if action == "respond":
+            return self._respond("answer", data.get("message", ""))
+
+        elif action == "clarify":
+            # AWAITING_CLARIFY — persist state, return question
+            req = self._requests.create(guild_id, user_id, goal)
+            req.transition(RequestState.AWAITING_APPROVAL)  # reuse state
+            req.set_payload("pending_type", "AWAITING_CLARIFY")
+            req.set_payload("goal", goal)
+            return self._respond("clarify", data.get("question", "Could you provide more details?"))
+
+        elif action == "execute":
+            tool_calls = data.get("tool_calls", [])
+            if not tool_calls:
+                return self._respond("answer", data.get("plan_summary", "Nothing to execute."))
+            return await self._execute_loop(tool_calls, goal, guild_id, user_id, history, llm_call_count)
+
+        elif action == "done":
+            return self._respond("action", data.get("response", "✅ Done."))
+
+        elif action == "continue":
+            tool_calls = data.get("tool_calls", [])
+            if not tool_calls:
+                return self._respond("answer", data.get("reason", "No further actions needed."))
+            return await self._execute_loop(tool_calls, goal, guild_id, user_id, history, llm_call_count)
+
+        elif action == "ask_user":
+            req = self._requests.create(guild_id, user_id, goal)
+            req.transition(RequestState.AWAITING_APPROVAL)
+            req.set_payload("pending_type", "AWAITING_CLARIFY")
+            req.set_payload("goal", goal)
+            return self._respond("clarify", data.get("question", ""))
+
+        elif action == "failed":
+            return self._respond("error", data.get("response", "❌ Could not complete the request."))
+
+        else:
+            logger.warning("Unknown action '%s' from LLM", action)
+            return self._respond("error", "⚠️ Unexpected response from AI. Please try again.")
+
+    # ─────────────────────────────────────────────────────────────────────────
+    # EXECUTE LOOP — sequential execution with dependency resolution
+    # ─────────────────────────────────────────────────────────────────────────
+
+    async def _execute_loop(
+        self,
+        tool_calls: List[Dict[str, Any]],
+        goal: str,
+        guild_id: int,
+        user_id: int,
+        history: Optional[List[Dict[str, str]]],
+        llm_call_count: int,
+        results_so_far: Optional[List[Dict]] = None,
+        iteration: int = 1,
+    ) -> Dict[str, Any]:
+        """Execute tools sequentially with forward dependency injection."""
+        results = results_so_far or []
+        total_tools_called = sum(1 for r in results if r.get("status") != "skipped_dependency_failed")
+
+        for i, tc in enumerate(tool_calls):
+            # Budget check
+            if total_tools_called >= MAX_TOOL_CALLS:
+                logger.warning("MAX_TOOL_CALLS reached (%d)", MAX_TOOL_CALLS)
+                break
+
+            tool_name = tc.get("name", "")
+            raw_args = tc.get("arguments", {})
+
+            # Map short name to MCP name
+            mcp_name = self._tool_name_map.get(tool_name, tool_name)
+
+            # ── Resolve dependencies ──
+            params, resolved = resolve_dependencies(raw_args, results)
+            if not resolved:
+                results.append({
+                    "tool": mcp_name, "mcp_name": mcp_name, "success": False,
+                    "status": "skipped_dependency_failed",
+                    "error": f"Could not resolve dependency reference in params",
+                    "result": None, "duration_ms": 0,
+                })
+                continue
+
+            # ── Approval gate: HIGH RISK → pause ──
+            if mcp_name in self._high_risk_tools:
+                # Store state and pause
+                req = self._requests.create(guild_id, user_id, goal)
+                req.transition(RequestState.AWAITING_APPROVAL)
+                req.set_payload("pending_type", "AWAITING_APPROVAL")
+                req.set_payload("goal", goal)
+                req.set_payload("pending_tools", tool_calls[i:])
+                req.set_payload("results_so_far", results)
+                req.set_payload("iteration", iteration)
+                req.set_payload("llm_call_count", llm_call_count)
+
+                # Describe what needs approval
+                desc_lines = []
+                for t in tool_calls[i:]:
+                    t_mcp = self._tool_name_map.get(t.get("name", ""), t.get("name", ""))
+                    if t_mcp in self._high_risk_tools:
+                        label = self._get_action_label(t_mcp, t.get("arguments", {}))
+                        desc_lines.append(f"• {label}")
+                desc = "\n".join(desc_lines) if desc_lines else "• High-risk operation"
+
+                return self._respond(
+                    "confirm_needed",
+                    f"🔒 **High-risk action(s) require confirmation:**\n{desc}\n\n❓ **Proceed?** (yes/no)",
+                    results,
+                )
+
+            # ── Execute tool ──
+            params["guild_id"] = guild_id
+            ctx = ExecutionContext(
+                tool_name=mcp_name, params=params,
+                guild_id=guild_id, user_id=user_id,
+                risk_level="high" if mcp_name in self._high_risk_tools else "medium",
+                request_id="",
+            )
+            result = await self._pipeline.execute(ctx)
+            results.append({
+                "tool": mcp_name.split(".")[-1] if "." in mcp_name else mcp_name,
+                "mcp_name": mcp_name,
+                "success": result.success,
+                "result": result.data,
+                "error": result.error,
+                "duration_ms": result.duration_ms,
+            })
+            total_tools_called += 1
+
+        # ═══════ EVALUATE ═══════
+        return await self._evaluate(goal, results, guild_id, user_id, history, llm_call_count, iteration)
+
+    # ─────────────────────────────────────────────────────────────────────────
+    # EVALUATE — LLM decides: done / continue / ask_user / failed
+    # ─────────────────────────────────────────────────────────────────────────
+
+    async def _evaluate(
+        self,
+        goal: str,
+        results: List[Dict[str, Any]],
+        guild_id: int,
+        user_id: int,
+        history: Optional[List[Dict[str, str]]],
+        llm_call_count: int,
+        iteration: int,
+    ) -> Dict[str, Any]:
+        """EVALUATE phase: check if goal is met, decide next steps."""
+
+        # Budget checks
+        if llm_call_count >= MAX_LLM_CALLS:
+            return self._respond("action", self._format_results_summary(results))
+        if iteration >= MAX_ITERATIONS:
+            return self._respond("action", self._format_results_summary(results))
+
+        # Fast path: all simple + all success → done without LLM call
+        all_success = all(r.get("success", False) for r in results if r.get("status") != "skipped_dependency_failed")
+        real_results = [r for r in results if r.get("status") != "skipped_dependency_failed"]
+        if all_success and len(real_results) <= 3 and not any(r.get("status") == "skipped_dependency_failed" for r in results):
+            # Simple success — assemble response with LLM
+            response_text = await self._assemble(goal, results, guild_id, user_id, llm_call_count)
+            return self._respond("action", response_text, results)
+
+        # Complex case: ask LLM to evaluate
+        # Refresh server state
+        try:
+            await self._context.invalidate(guild_id)
+        except Exception:
+            pass
+        server_context = await self._context.get_server_context(guild_id)
+        context_block = build_server_context_block(server_context)
+
+        # Build results summary for LLM
+        result_lines = []
+        for idx, r in enumerate(results):
+            if r.get("status") == "skipped_dependency_failed":
+                result_lines.append(f"Step {idx}: SKIPPED (dependency not resolved)")
+            elif r["success"]:
+                data = r.get("result") or {}
+                name = data.get("name") or data.get("id") or ""
+                result_lines.append(f"Step {idx}: ✓ {r.get('tool','?')} → {name}")
+            else:
+                result_lines.append(f"Step {idx}: ✗ {r.get('tool','?')} → ERROR: {r.get('error','unknown')}")
+
+        eval_input = (
+            f"[GOAL]\n{goal}\n\n"
+            f"[EXECUTION RESULTS]\n" + "\n".join(result_lines) + "\n\n"
+            f"[CURRENT SERVER STATE]\n{context_block}\n\n"
+            f"Evaluate: is the goal fully achieved? Respond with JSON (action: done/continue/ask_user/failed)."
+        )
+
+        try:
+            response = await self._llm.generate(
+                messages=[{"role": "user", "content": eval_input}],
+                system_prompt=SYSTEM_PROMPT,
+                tools=self._tool_definitions,
+                temperature=0.1,
+                max_tokens=1024,
+            )
+        except Exception as e:
+            logger.error("EVALUATE LLM failed: %s", e)
+            return self._respond("action", self._format_results_summary(results))
+
+        if hasattr(response, 'usage') and response.usage:
+            await record_token_usage(self._db, guild_id, user_id, response.usage, provider=settings.LLM_PROVIDER, phase="evaluate")
+        llm_call_count += 1
+
+        # Parse evaluate response
+        parsed = None
+        if response.content:
+            parsed, err = parse_llm_json(response.content)
+        # Fallback: function calling
+        if not parsed and response.has_tool_calls:
+            normalized = self._normalizer.normalize(response)
+            if normalized.has_tool_calls:
+                tool_calls_data = [{"name": tc.name, "arguments": tc.arguments} for tc in normalized.tool_calls]
+                parsed = {"action": "continue", "tool_calls": tool_calls_data, "reason": "More steps from evaluate"}
+
+        if not parsed:
+            # Can't parse evaluate → return what we have
+            return self._respond("action", self._format_results_summary(results))
+
+        # Dispatch evaluate action
+        action = parsed.get("action", "done")
+        if action == "done":
+            return self._respond("action", parsed.get("response", self._format_results_summary(results)), results)
+        elif action == "continue":
+            next_tools = parsed.get("tool_calls", [])
+            if not next_tools:
+                return self._respond("action", self._format_results_summary(results))
+            return await self._execute_loop(next_tools, goal, guild_id, user_id, history, llm_call_count, results, iteration + 1)
+        elif action == "ask_user":
+            req = self._requests.create(guild_id, user_id, goal)
+            req.transition(RequestState.AWAITING_APPROVAL)
+            req.set_payload("pending_type", "AWAITING_CLARIFY")
+            req.set_payload("goal", goal)
+            req.set_payload("results_so_far", results)
+            return self._respond("clarify", parsed.get("question", ""))
+        elif action == "failed":
+            return self._respond("error", parsed.get("response", "❌ Could not complete."), results)
+        else:
+            return self._respond("action", self._format_results_summary(results))
+
+    # ─────────────────────────────────────────────────────────────────────────
+    # ASSEMBLE — friendly response for simple success cases
+    # ─────────────────────────────────────────────────────────────────────────
+
+    async def _assemble(
+        self, goal: str, results: List[Dict], guild_id: int, user_id: int, llm_call_count: int,
+    ) -> str:
+        """Quick assemble for simple successful cases."""
+        if llm_call_count >= MAX_LLM_CALLS:
+            return self._format_results_summary(results)
+
+        result_lines = []
+        for r in results:
+            if r["success"]:
+                data = r.get("result") or {}
+                name = data.get("name") or data.get("id") or ""
+                result_lines.append(f"✓ {r.get('tool','action')}: {name}")
+            else:
+                result_lines.append(f"✗ {r.get('tool','action')}: {r.get('error','')}")
+
+        try:
+            response = await self._llm.generate(
+                messages=[{"role": "user", "content": f"User request: {goal}\nResults:\n" + "\n".join(result_lines)}],
+                system_prompt="You are a response composer. Write a brief, friendly summary (2-4 sentences) in the user's language. Use 1-2 emojis. Suggest 1 next step. Do NOT output JSON.",
+                tools=None,
+                temperature=0.7,
+                max_tokens=512,
+            )
+            if hasattr(response, 'usage') and response.usage:
+                await record_token_usage(self._db, guild_id, user_id, response.usage, provider=settings.LLM_PROVIDER, phase="assemble")
+            if response.content:
+                return response.content.strip()
+        except Exception as e:
+            logger.warning("Assemble failed: %s", e)
+
+        return self._format_results_summary(results)
+
+    # ─────────────────────────────────────────────────────────────────────────
+    # HANDLE RESUME — from AWAITING_CLARIFY or AWAITING_APPROVAL
+    # ─────────────────────────────────────────────────────────────────────────
+
+    async def _handle_resume(
+        self,
+        message: str,
+        req: RequestLifecycle,
+        guild_id: int,
+        user_id: int,
+        history: Optional[List[Dict[str, str]]],
+    ) -> Dict[str, Any]:
+        """Resume from a pending state based on user's reply."""
+        pending_type = req.get_payload("pending_type", "AWAITING_APPROVAL")
+        goal = req.get_payload("goal", message)
+
+        # ── AWAITING_CLARIFY → back to UNDERSTAND ──
+        if pending_type == "AWAITING_CLARIFY":
+            req.transition(RequestState.COMPLETED)
+            # User's answer becomes new context; goal stays the same
+            updated_goal = f"{goal}\n\nUser's additional info: {message}"
+            return await self._understand(updated_goal, guild_id, user_id, history)
+
+        # ── AWAITING_APPROVAL → resume EXECUTE or cancel ──
+        msg_lower = message.strip().lower()
+        if msg_lower not in CONFIRMATION_WORDS:
+            req.transition(RequestState.CANCELLED)
+            return self._respond("answer", "✋ Cancelled. No changes were made.")
+
+        # User approved → resume execute loop
+        req.transition(RequestState.EXECUTING)
+        pending_tools = req.get_payload("pending_tools", [])
+        results_so_far = req.get_payload("results_so_far", [])
+        iteration = req.get_payload("iteration", 1)
+        llm_call_count = req.get_payload("llm_call_count", 1)
+
+        if not pending_tools:
+            req.transition(RequestState.COMPLETED)
+            return self._respond("answer", "No pending actions to execute.")
+
+        return await self._execute_loop(
+            pending_tools, goal, guild_id, user_id, history,
+            llm_call_count, results_so_far, iteration,
+        )
+
+    # ─────────────────────────────────────────────────────────────────────────
+    # MCP EXECUTOR (innermost tool call)
+    # ─────────────────────────────────────────────────────────────────────────
+
+    async def _mcp_execute(self, ctx: ExecutionContext) -> ExecutionResult:
+        """Actual MCP tool call through the middleware chain."""
+        resp = await self._mcp.call_tool(ctx.tool_name, ctx.params)
+        if resp.success:
+            return ExecutionResult(success=True, data=resp.result)
+        else:
+            error = resp.error or "Unknown error"
+            should_retry = any(s in error.lower() for s in ("429", "rate", "timeout", "503"))
+            return ExecutionResult(success=False, error=error, should_retry=should_retry)
+
+    # ─────────────────────────────────────────────────────────────────────────
+    # HELPERS
     # ─────────────────────────────────────────────────────────────────────────
 
     def _get_action_label(self, mcp_name: str, params: Dict[str, Any]) -> str:
-        """Human-readable label for confirmation prompts."""
+        """Human-readable label for approval prompt."""
         if self._registry:
             label = self._registry.get_human_label(mcp_name)
         else:
-            label = f"⚠️ **{mcp_name}**"
-        target = (params.get("channel_id") or params.get("role_id") or
-                  params.get("member_id") or params.get("category_id") or
-                  params.get("name") or "")
+            label = f"⚠️ {mcp_name}"
+        target = params.get("name") or params.get("channel_id") or params.get("role_id") or params.get("member_id") or ""
         if target:
             label += f" `{target}`"
         return label
 
     @staticmethod
-    def _result_to_dict(result: ExecutionResult, mcp_name: str) -> Dict[str, Any]:
-        return {
-            "tool": mcp_name.split(".")[-1] if "." in mcp_name else mcp_name,
-            "mcp_name": mcp_name,
-            "success": result.success,
-            "result": result.data,
-            "error": result.error,
-            "duration_ms": result.duration_ms,
-        }
-
-    @staticmethod
-    def _format_results_fallback(results: List[Dict]) -> str:
+    def _format_results_summary(results: List[Dict]) -> str:
+        """Mechanical fallback summary."""
+        if not results:
+            return "No actions were performed."
         lines = []
         for r in results:
-            if r["success"]:
+            if r.get("status") == "skipped_dependency_failed":
+                lines.append(f"⏭️ {r.get('tool', '?')}: skipped (dependency failed)")
+            elif r.get("success"):
                 data = r.get("result") or {}
                 name = data.get("name") or ""
-                action = r.get("tool", "action")
-                lines.append(f"✅ {action}: {name}" if name else f"✅ {action}")
+                lines.append(f"✅ {r.get('tool', 'action')}: {name}" if name else f"✅ {r.get('tool', 'action')}")
             else:
                 lines.append(f"❌ {r.get('tool', 'action')}: {r.get('error', 'failed')}")
-        return "\n".join(lines) or "Done."
+        return "\n".join(lines)
 
     @staticmethod
-    def _response(type_: str, content: str, tool_results: Optional[List] = None) -> Dict[str, Any]:
+    def _respond(type_: str, content: str, tool_results: Optional[List] = None) -> Dict[str, Any]:
+        """Standardized response dict."""
         return {"type": type_, "content": content, "tool_results": tool_results or []}
