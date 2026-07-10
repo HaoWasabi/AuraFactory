@@ -53,12 +53,20 @@ async def lifespan(app: FastAPI):
     from app.llm import get_llm
     llm = None
     try:
-        llm = get_llm(
-            provider=settings.LLM_PROVIDER,
-            model=settings.GEMINI_MODEL,
-            api_key=settings.GEMINI_API_KEY,
-        )
-        logger.info("[OK] LLM provider: %s (%s)", settings.LLM_PROVIDER, settings.GEMINI_MODEL)
+        if settings.LLM_PROVIDER == "ollama":
+            llm = get_llm(
+                provider="ollama",
+                model=settings.OLLAMA_MODEL,
+                base_url=settings.OLLAMA_BASE_URL,
+            )
+            logger.info("[OK] LLM provider: ollama (%s @ %s)", settings.OLLAMA_MODEL, settings.OLLAMA_BASE_URL)
+        else:
+            llm = get_llm(
+                provider=settings.LLM_PROVIDER,
+                model=settings.GEMINI_MODEL,
+                api_key=settings.GEMINI_API_KEY,
+            )
+            logger.info("[OK] LLM provider: %s (%s)", settings.LLM_PROVIDER, settings.GEMINI_MODEL)
     except Exception as e:
         logger.error("[ERROR] LLM initialization FAILED: %s", e, exc_info=True)
         logger.error("   AI features will NOT work.")
