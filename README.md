@@ -1,124 +1,97 @@
-# AuraFactory v2.1 🏭
+# AuraFactory 
 
-**AI-Powered Discord Server Management** — Spec-driven Agentic Architecture
+**AI Agent that automates Discord server setup & management via natural language.**
+
+> Built for [Agentic AI Build Week 2026](https://agentic-ai-build-week-2026.devpost.com/) — Track: **Built with AWS**
+
+---
+
+## Demo
+
+```
+User: "Tạo cho tui server gaming với 5 kênh voice, role cho mỗi game, và setup automod"
+
+AuraFactory: 📋 Plan (3 steps):
+  1. Create category "Gaming" with 5 voice channels
+  2. Create roles: Valorant, LoL, CS2, Genshin, Minecraft
+  3. Setup AutoMod rule blocking spam links
+
+⚙️ Executing... ✅ Done! 8/8 actions completed.
+```
+
+---
 
 ## Architecture
 
 ```
-┌─────────────────────────────────────────────────────────────────┐
-│  User Request (Discord mention / Dashboard)                      │
-└────────────────────────────┬────────────────────────────────────┘
-                             │
-                             ▼
-┌─────────────────────────────────────────────────────────────────┐
-│  UnifiedAgent v2                                                 │
-│  ┌──────────┐  ┌──────────┐  ┌───────────┐  ┌───────────────┐  │
-│  │Guild Lock│→ │ LLM Call │→ │ Approval  │→ │ Rate Limiter  │  │
-│  │(security)│  │(Gemini)  │  │   Gate    │  │ + Retry       │  │
-│  └──────────┘  └──────────┘  └───────────┘  └───────────────┘  │
-│                                                    │             │
-│  ┌──────────┐  ┌──────────┐  ┌───────────┐       ▼             │
-│  │  Audit   │← │ Memory   │← │  Format   │← │MCP Execute│     │
-│  │  Logger  │  │(context) │  │ Response  │  └───────────┘     │
-│  └──────────┘  └──────────┘  └───────────┘                     │
-└─────────────────────────────────────────────────────────────────┘
-                             │
-                             ▼
-┌─────────────────────────────────────────────────────────────────┐
-│  MCP Server → Discord Connector Facade                           │
-│  ┌──────────┐ ┌──────────┐ ┌────────┐ ┌─────────┐ ┌────────┐  │
-│  │ Channels │ │  Roles   │ │Members │ │  Guild  │ │Features│  │
-│  │ Category │ │  Assign  │ │  Mod   │ │Settings │ │  Polls │  │
-│  └──────────┘ └──────────┘ └────────┘ └─────────┘ └────────┘  │
-│  + Webhooks, Threads, Invites, AutoMod, Backup, Templates,      │
-│    Audit, Safety, Events, Emojis, Stickers, Soundboard,         │
-│    Onboarding                                                    │
-└─────────────────────────────────────────────────────────────────┘
+┌────────────────────────────────────────────────────────────────┐
+│  Discord User (@mention)  │  Web Dashboard  │  REST API        │
+└──────────────────────────────────┬─────────────────────────────┘
+                                   │
+    ┌──────────────────────────────▼──────────────────────────────┐
+    │  AWS App Runner (Container)                                 │
+    │  ├── L1: Interface Layer (Discord Bot + REST API)           │
+    │  ├── L2: Gateway & Safety → Bedrock Guardrails              │
+    │  ├── L3: Agent (ReAct Loop) → Amazon Bedrock (Nova)         │
+    │  ├── L4: Tools & Skills (MCP Protocol, 80+ tools)           │
+    │  ├── L5: Connectors (19 Discord modules)                    │
+    │  ├── L6: Memory → DynamoDB (single-table)                   │
+    │  └── L7: Observability → CloudWatch + X-Ray                 │
+    └─────────────────────────────────────────────────────────────┘
 ```
 
-## Key Design Decisions
+### Key Design
 
-### Spec-Driven (**kwargs pattern**)
-- Single source of truth: `tools_spec.yaml` (1200+ lines, 80+ tools)
-- Tool code uses pure `**kwargs` — zero validation logic in connectors
-- `KwargsFilter` (from spec) validates before execution
-- `ToolGraph` (NetworkX) handles intelligent tool retrieval
+| Principle | Implementation |
+|-----------|---------------|
+| **Spec-driven** | `tools_spec.yaml` (80+ tools) → auto-generates schemas, validation, risk levels |
+| **ReAct Loop** | Understand → Act → Observe → Think → Evaluate (bounded: max 5 iterations) |
+| **Multi-model routing** | Nova Micro (fast JSON) + Nova Lite (complex reasoning) |
+| **Fail-safe** | 4 safety gates, approval for destructive actions, parse-retry on bad LLM output |
+| **MCP Protocol** | Standard Model Context Protocol for tool execution |
 
-### Safety Layers (Production)
-1. **Guild Lock** — whitelist or open mode (`GUILD_LOCK_MODE=whitelist`)
-2. **Approval Gate** — destructive actions (delete/ban/kick) ask user first
-3. **Rate Limiter** — 0.5s delay between Discord API calls, burst=5
-4. **Retry Policy** — exponential backoff (3 retries) on transient 5xx/429
-5. **Audit Logger** — every tool execution logged (who, what, when, result)
-6. **Conversation Memory** — tracks created resources for multi-turn references
+---
 
-### Token Efficiency
-- 1 LLM call per request (Gemini native function calling)
-- ~800-1200 tokens/request
-- Future: top-k graph retrieval saves 90% tool context tokens
+## AWS Services Used
+
+| Service | Role | Why |
+|---------|------|-----|
+| **Amazon Bedrock** (Nova Micro/Lite) | Core AI reasoning | 75% cheaper than alternatives, native tool calling |
+| **Bedrock Guardrails** | Input/output safety | Content filtering, PII detection, denied topics |
+| **DynamoDB** | State & memory | Serverless, free tier 25GB, single-table design |
+| **App Runner** | Hosting | Auto-scale, deploy from Docker, always-on for bot |
+| **CloudWatch + X-Ray** | Observability | Logs, metrics (EMF), distributed tracing |
+| **S3** | Knowledge storage | Guild templates, skill files |
+
+---
 
 ## Project Structure
 
 ```
 AuraFactory/
-├── tools_spec.yaml              ← SOURCE OF TRUTH (all tools defined here)
 ├── app/
-│   ├── config.py                ← Environment config + safety settings
-│   ├── main.py                  ← FastAPI entrypoint + lifespan
-│   ├── database.py              ← PostgreSQL (Phase 2: DynamoDB)
-│   ├── core/                    ← 🧠 Brain
-│   │   ├── spec_loader.py      ← Parse tools_spec.yaml
-│   │   ├── tool_graph.py       ← NetworkX dependency graph
-│   │   ├── kwargs_filter.py    ← Runtime kwarg validation
-│   │   ├── unified_agent.py    ← Graph-based orchestrator (Phase 2)
-│   │   └── safety.py           ← All safety layers
-│   ├── connectors/              ← 🔌 Discord API wrappers
-│   │   ├── base.py             ← BaseConnector + shared helpers
-│   │   └── discord/
-│   │       ├── connector.py    ← Facade (dispatches to sub-connectors)
-│   │       ├── channels.py     ← create, edit, delete, move, list
-│   │       ├── categories.py   ← create, edit, delete, sync, reorder, list
-│   │       ├── roles.py        ← create, modify, delete, assign, remove, batch, clone
-│   │       ├── members.py      ← kick, ban, unban, bulk_ban, timeout, mute, purge
-│   │       ├── guild.py        ← get_info, edit_profile, set_verification...
-│   │       ├── webhooks.py     ← create, delete, list
-│   │       ├── threads.py      ← create, archive, delete
-│   │       ├── invites.py      ← create, delete, list
-│   │       ├── automod.py      ← create_rule, delete_rule, list_rules
-│   │       ├── backup.py       ← export, restore
-│   │       ├── features.py     ← verification, polls, welcome, auto-delete
-│   │       ├── audit.py        ← query audit logs
-│   │       ├── safety.py       ← content filter, MFA
-│   │       ├── events.py       ← scheduled events CRUD
-│   │       ├── emojis.py       ← create, rename, delete, list
-│   │       ├── stickers.py     ← create, delete, list
-│   │       ├── soundboard.py   ← create, delete, list (REST-based)
-│   │       ├── onboarding.py   ← get config, setup prompts
-│   │       └── templates.py    ← create, sync, delete
-│   ├── services/                ← 🔧 Business logic
-│   │   ├── unified_agent.py    ← Main agent (v2 with safety)
-│   │   ├── context_service.py  ← Server state cache
-│   │   ├── auth_service.py     ← OAuth + session management
-│   │   └── guild_sync_service.py
-│   ├── interfaces/              ← 🖥️ Entry points
-│   │   ├── discord_bot.py      ← Discord bot (mentions → agent)
-│   │   └── api_routes.py       ← REST API for dashboard
-│   ├── llm/                     ← 🤖 LLM abstraction
-│   │   ├── base.py             ← BaseLLM interface
-│   │   └── gemini.py           ← Gemini implementation
-│   └── mcp/                     ← 📡 MCP protocol layer
-│       ├── client.py           ← MCP client (tool dispatcher)
-│       └── servers/
-│           └── discord_server.py
-├── frontend/                    ← Dashboard (static HTML/JS/CSS)
-├── migrations/                  ← SQL migrations
-├── tests/                       ← Test suite
-├── Dockerfile                   ← Container build
-├── docker-compose.yml           ← Local dev stack
-└── render.yaml                  ← Render.com deployment
+│   ├── llm/                 ← LLM providers (Bedrock, Gemini, Ollama)
+│   ├── core/                ← Brain (spec_loader, tool_graph, safety, guardrails)
+│   ├── services/            ← Business logic (UnifiedAgent, context, auth)
+│   ├── connectors/discord/  ← 19 Discord API modules (channels, roles, members...)
+│   ├── mcp/                 ← MCP protocol + Discord server
+│   ├── interfaces/          ← Entry points (Discord bot, REST API)
+│   ├── database_dynamo.py   ← DynamoDB single-table layer
+│   └── main.py              ← FastAPI app + lifespan
+├── frontend/                ← Web dashboard (HTML/JS/CSS)
+├── skills/                  ← Skill .md files for agent context
+├── tests/                   ← Test suite (pytest)
+├── tools_spec.yaml          ← SOURCE OF TRUTH (all 80+ tools defined here)
+├── DEPLOY.md                ← AWS deployment guide (step-by-step)
+├── Dockerfile               ← Container build
+└── apprunner.yaml           ← App Runner config
 ```
 
+---
+
 ## Quick Start
+
+### Local Development (with AWS services)
 
 ```bash
 # 1. Clone + install
@@ -126,47 +99,82 @@ git clone <repo>
 cd AuraFactory
 pip install -r requirements.txt
 
-# 2. Configure environment
-cp .env.example .env
-# Edit .env with your Discord token, Gemini API key, DB URL
+# 2. Configure
+cp .env.aws.example .env
+# Fill in: DISCORD_TOKEN, AWS credentials
 
 # 3. Run
-uvicorn app.main:app --host 0.0.0.0 --port 8000
+uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
 ```
+
+### Deploy to AWS
+
+See **[DEPLOY.md](DEPLOY.md)** for full step-by-step guide.
+
+```bash
+# TL;DR
+docker build -t aurafactory .
+# Push to ECR → Create App Runner service
+# Total cost: ~$12-15 for hackathon week
+```
+
+---
 
 ## Environment Variables
 
 | Variable | Required | Default | Description |
 |----------|----------|---------|-------------|
-| `DISCORD_TOKEN` | ✅ | — | Bot token from Discord Developer Portal |
-| `GEMINI_API_KEY` | ✅ | — | Google AI API key |
-| `GEMINI_MODEL` | ❌ | `gemini-2.5-flash` | Gemini model name |
-| `DATABASE_URL` | ✅ | `postgresql://localhost:5432/aurafactory` | PostgreSQL connection |
-| `ALLOWED_GUILD_IDS` | ❌ | — | Comma-separated guild IDs (for whitelist mode) |
-| `GUILD_LOCK_MODE` | ❌ | `open` | `open` (all guilds) or `whitelist` |
-| `RATE_LIMIT_DELAY` | ❌ | `0.5` | Seconds between API calls |
-| `SECRET_KEY` | ❌ | `dev-secret...` | Session encryption key |
-| `LOG_LEVEL` | ❌ | `INFO` | Logging level |
+| `LLM_PROVIDER` | ✅ | `bedrock` | LLM backend (`bedrock` / `gemini` / `ollama`) |
+| `BEDROCK_MODEL_ID` | ✅ | `amazon.nova-micro-v1:0` | Bedrock model ID |
+| `AWS_REGION` | ✅ | `us-east-1` | AWS region |
+| `DATABASE_BACKEND` | ✅ | `dynamodb` | Database (`dynamodb` / `postgresql`) |
+| `DISCORD_TOKEN` | ✅ | — | Bot token |
+| `DISCORD_CLIENT_ID` | ✅ | — | OAuth2 client ID |
+| `SECRET_KEY` | ✅ | — | Session signing key |
+| `BEDROCK_GUARDRAIL_ID` | ⚡ | — | Guardrail ID (optional) |
+| `GUILD_LOCK_MODE` | — | `open` | `open` or `whitelist` |
 
-## Phases
+---
 
-### Phase 1 (Current) — Open Source
-- ✅ Gemini Flash LLM (free tier: 1M tokens/day)
-- ✅ PostgreSQL database
-- ✅ NetworkX in-memory graph
-- ✅ Full safety layers
-- ✅ 19 Discord connector modules, 80+ actions
-- ✅ Spec-driven validation (KwargsFilter + error_taxonomy)
-- ✅ Rate-limit profiles (4 tiers: light/standard/heavy/critical)
-- ✅ Middleware pipeline (ErrorBoundary → RateLimit → Retry → Audit → Memory)
+## Safety & Security
 
-### Phase 2 — AWS Integration
-- 🔲 LLM: Gemini → AWS Bedrock (Claude/Titan)
-- 🔲 Database: PostgreSQL → DynamoDB
-- 🔲 Graph: NetworkX → AWS Neptune
-- 🔲 Storage: Local → S3
-- 🔲 Monitoring: File logs → CloudWatch
-- 🔲 Retrieval: Keyword → Bedrock embedding top-k
+| Layer | Mechanism |
+|-------|-----------|
+| **Input Guardrail** | Regex injection detection (local, ~0ms) |
+| **Bedrock Guardrails** | Managed content filtering, PII, denied topics (~50ms) |
+| **Approval Gate** | HIGH-risk actions (delete/ban/kick) require user confirmation |
+| **Guild Lock** | Whitelist mode restricts to authorized servers |
+| **Token Budget** | Daily per-guild cap prevents runaway costs |
+| **Rate Limiter** | 0.5s delay + burst=5 to respect Discord API limits |
+| **Audit Logger** | Every tool execution logged (DynamoDB, 90-day TTL) |
+
+---
+
+## Cost Estimate
+
+| Scenario | Monthly Cost |
+|----------|-------------|
+| Hackathon (7 days, low traffic) | **~$12-15 total** |
+| Production (500 req/day) | ~$20-30/month |
+| Development (local + remote AWS) | **~$0.10-0.30/day** |
+
+---
+
+## Tech Stack
+
+| Layer | Technology |
+|-------|-----------|
+| Language | Python 3.11 |
+| Web Framework | FastAPI + Uvicorn |
+| Discord | Nextcord |
+| AI/LLM | Amazon Bedrock (Nova Micro/Lite) |
+| Database | DynamoDB (single-table) |
+| Safety | Bedrock Guardrails + custom regex |
+| Observability | CloudWatch EMF + X-Ray |
+| Hosting | AWS App Runner (Docker) |
+| Tool Protocol | MCP (Model Context Protocol) |
+
+---
 
 ## License
 
