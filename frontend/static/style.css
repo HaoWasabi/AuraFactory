@@ -1021,3 +1021,156 @@ body {
     margin-top: 6px;
 }
 .btn-refresh:hover { background: var(--bg-hover, #2a2a2a); }
+
+/* ===== Chat History / Sessions Panel ===== */
+.sessions-panel {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    padding: 0;
+    overflow-y: auto;
+    flex: 1;
+    max-height: 260px;
+}
+
+.session-item {
+    display: flex;
+    align-items: flex-start;
+    gap: 8px;
+    padding: 9px 12px;
+    border-radius: var(--radius-sm);
+    cursor: pointer;
+    transition: var(--transition);
+    border: 1px solid transparent;
+    position: relative;
+}
+
+.session-item:hover {
+    background: var(--bg-hover);
+    border-color: var(--border-subtle);
+}
+
+.session-item.active {
+    background: rgba(88, 101, 242, 0.12);
+    border-color: var(--accent-primary);
+}
+
+.session-icon {
+    font-size: 14px;
+    margin-top: 1px;
+    flex-shrink: 0;
+    opacity: 0.7;
+}
+
+.session-item.active .session-icon {
+    opacity: 1;
+}
+
+.session-meta {
+    flex: 1;
+    min-width: 0;
+}
+
+.session-title {
+    font-size: 12px;
+    font-weight: 500;
+    color: var(--text-primary);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    line-height: 1.4;
+}
+
+.session-preview {
+    font-size: 11px;
+    color: var(--text-muted);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    margin-top: 1px;
+}
+
+.session-time {
+    font-size: 10px;
+    color: var(--text-muted);
+    flex-shrink: 0;
+    margin-top: 1px;
+}
+
+/* New chat button in sessions section */
+.btn-new-chat {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    width: 100%;
+    padding: 9px 12px;
+    background: rgba(88, 101, 242, 0.08);
+    border: 1px dashed rgba(88, 101, 242, 0.3);
+    border-radius: var(--radius-sm);
+    color: var(--text-accent);
+    font-size: 12px;
+    font-weight: 500;
+    cursor: pointer;
+    transition: var(--transition);
+    margin-bottom: 6px;
+}
+
+.btn-new-chat:hover {
+    background: rgba(88, 101, 242, 0.15);
+    border-color: var(--accent-primary);
+}
+
+/* Chat header bar above messages */
+.chat-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 10px 20px;
+    background: var(--bg-secondary);
+    border-bottom: 1px solid var(--border-subtle);
+    flex-shrink: 0;
+    min-height: 44px;
+}
+
+.chat-session-title {
+    font-size: 13px;
+    font-weight: 600;
+    color: var(--text-primary);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    max-width: 340px;
+}
+
+.chat-session-origin {
+    font-size: 11px;
+    color: var(--text-muted);
+    margin-left: 8px;
+}
+
+.btn-edit-title {
+    background: none;
+    border: none;
+    color: var(--text-muted);
+    cursor: pointer;
+    font-size: 14px;
+    padding: 4px;
+    border-radius: var(--radius-sm);
+    transition: var(--transition);
+}
+
+.btn-edit-title:hover {
+    color: var(--text-accent);
+    background: var(--bg-hover);
+}
+
+.message-time {
+    font-size: 10px;
+    color: var(--text-muted);
+    margin-top: 4px;
+    text-align: right;
+}
+
+.message.bot .message-time {
+    text-align: left;
+}

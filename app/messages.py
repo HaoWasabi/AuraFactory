@@ -111,6 +111,55 @@ MESSAGES = {
         "vi": "🚫 Đã huỷ. Kênh {channel_type} sẽ không được tạo cho đến khi Community được bật.",
         "en": "🚫 Cancelled. The {channel_type} channel won't be created until Community is enabled.",
     },
+    # ── LLM Quota / API key errors ─────────────────────────────────────
+    "llm_quota_exhausted": {
+        "vi": (
+            "⚠️ **Hết quota Gemini API.**\n"
+            "Bot đã sử dụng hết giới hạn miễn phí của ngày hôm nay. "
+            "Vui lòng thử lại vào ngày mai, hoặc cập nhật API key có quota cao hơn "
+            "bằng lệnh `/setgeminikey` (Discord) hoặc ⚙️ Bot Admin trên dashboard."
+        ),
+        "en": (
+            "⚠️ **Gemini API quota exhausted.**\n"
+            "The bot has used up today's free tier limit. "
+            "Please try again tomorrow, or update the API key with a higher quota "
+            "via `/setgeminikey` (Discord) or ⚙️ Bot Admin on the dashboard."
+        ),
+    },
+    "llm_rate_limited": {
+        "vi": (
+            "⚠️ **Gemini API đang bị giới hạn tốc độ (rate limit).**\n"
+            "Quá nhiều yêu cầu trong thời gian ngắn. Vui lòng đợi 1–2 phút rồi thử lại."
+        ),
+        "en": (
+            "⚠️ **Gemini API rate limit hit.**\n"
+            "Too many requests in a short time. Please wait 1–2 minutes and try again."
+        ),
+    },
+    "llm_invalid_key": {
+        "vi": (
+            "❌ **API key Gemini không hợp lệ hoặc đã bị thu hồi.**\n"
+            "Bot không thể kết nối đến Gemini. "
+            "Owner cần cập nhật lại API key bằng lệnh `/setgeminikey` (Discord) "
+            "hoặc ⚙️ Bot Admin trên dashboard."
+        ),
+        "en": (
+            "❌ **Gemini API key is invalid or revoked.**\n"
+            "The bot cannot connect to Gemini. "
+            "The owner needs to update the API key via `/setgeminikey` (Discord) "
+            "or ⚙️ Bot Admin on the dashboard."
+        ),
+    },
+    "llm_permission_denied": {
+        "vi": (
+            "❌ **API key không có quyền truy cập model Gemini này.**\n"
+            "Vui lòng kiểm tra lại API key hoặc liên hệ owner bot."
+        ),
+        "en": (
+            "❌ **API key does not have access to this Gemini model.**\n"
+            "Please check the API key or contact the bot owner."
+        ),
+    },
 }
 
 
@@ -133,3 +182,20 @@ def msg(key: str, lang: str = "vi", **kwargs) -> str:
         except (KeyError, IndexError):
             return text
     return text
+
+
+def msg_for_quota_error(reason: str, lang: str = "vi") -> str:
+    """Return a user-facing message for an LLMQuotaError reason code.
+
+    Args:
+        reason: LLMQuotaError.reason — one of:
+            'quota_exhausted', 'rate_limited', 'invalid_key', 'permission_denied'
+        lang: 'vi' or 'en'
+    """
+    key_map = {
+        "quota_exhausted": "llm_quota_exhausted",
+        "rate_limited":    "llm_rate_limited",
+        "invalid_key":     "llm_invalid_key",
+        "permission_denied": "llm_permission_denied",
+    }
+    return msg(key_map.get(reason, "llm_quota_exhausted"), lang=lang)

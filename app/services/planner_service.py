@@ -6,7 +6,7 @@ from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
 from app.database import Database
-from app.llm.base import BaseLLM
+from app.llm.base import BaseLLM, LLMQuotaError
 from app.mcp import MCPClient
 from app.services._token_tracker import record_token_usage
 from app.services.context_service import ContextService
@@ -389,6 +389,8 @@ class PlannerService:
                 "auto_approved": plan_status == "approved",
             }
 
+        except LLMQuotaError:
+            raise  # let callers handle quota errors with user-friendly messages
         except Exception as e:
             logger.exception("Plan generation failed for request %s: %s", request_id, e)
             await self._fail_request(request_id, str(e))

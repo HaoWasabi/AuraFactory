@@ -6,9 +6,9 @@ import os
 from typing import Any, Dict, List, Optional
 
 import google.generativeai as genai
-from google.api_core.exceptions import DeadlineExceeded
+from google.api_core.exceptions import DeadlineExceeded, ResourceExhausted, PermissionDenied, Unauthenticated
 
-from .base import BaseLLM, LLMResponse, ToolCall, UsageStats
+from .base import BaseLLM, LLMResponse, LLMQuotaError, ToolCall, UsageStats
 
 logger = logging.getLogger(__name__)
 
@@ -211,6 +211,18 @@ class GeminiLLM(BaseLLM):
                     raise
                 logger.warning(f"Gemini API timeout, retrying in 2s (attempt {attempt}/{max_retries})")
                 await asyncio.sleep(2)
+            except ResourceExhausted as e:
+                # 429 — quota or rate limit
+                msg = str(e).lower()
+                reason = "rate_limited" if "rate" in msg else "quota_exhausted"
+                logger.warning("Gemini %s: %s", reason, e)
+                raise LLMQuotaError(reason, original=e) from e
+            except (PermissionDenied, Unauthenticated) as e:
+                # 403/401 — bad API key or no access to model
+                msg = str(e).lower()
+                reason = "invalid_key" if "api key" in msg or "apikey" in msg else "permission_denied"
+                logger.warning("Gemini %s: %s", reason, e)
+                raise LLMQuotaError(reason, original=e) from e
         
         if response is None:
             raise RuntimeError("Failed to get response from Gemini API")

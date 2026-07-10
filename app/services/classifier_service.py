@@ -3,7 +3,7 @@ import json
 import logging
 from typing import Optional
 
-from app.llm.base import BaseLLM
+from app.llm.base import BaseLLM, LLMQuotaError
 from app.services._token_tracker import record_token_usage
 
 logger = logging.getLogger(__name__)
@@ -111,6 +111,8 @@ class ClassifierService:
             if result.get("lang") not in ("vi", "en"):
                 result["lang"] = self._detect_lang_simple(message)
             return result
+        except LLMQuotaError:
+            raise  # propagate — callers handle quota errors specifically
         except (json.JSONDecodeError, Exception) as e:
             logger.warning("Classification failed: %s — defaulting to clarify", e)
             return {"intent": "clarify", "tool_mode": "none", "confidence": 0.0, "lang": self._detect_lang_simple(message)}
@@ -167,6 +169,8 @@ class ClassifierService:
                 )
             content = response.content.strip() if response.content else ""
             return f"🤔 {content}" if content else self._fallback_clarify(lang)
+        except LLMQuotaError:
+            raise  # propagate
         except Exception as e:
             logger.warning("generate_clarify LLM call failed: %s", e)
             return self._fallback_clarify(lang)

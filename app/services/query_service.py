@@ -12,7 +12,7 @@ from __future__ import annotations
 import logging
 from typing import Dict, List, Optional
 
-from app.llm.base import BaseLLM, LLMResponse
+from app.llm.base import BaseLLM, LLMResponse, LLMQuotaError
 from app.mcp.client import MCPClient
 from app.services.context_service import ContextService
 from app.services._token_tracker import record_token_usage
@@ -94,6 +94,8 @@ class QueryService:
                 temperature=0.3,  # Low temperature for factual accuracy
                 max_tokens=2048,
             )
+        except LLMQuotaError:
+            raise  # propagate for caller to show user-friendly message
         except Exception as e:
             logger.error(
                 "[QueryService] LLM generation failed for guild %d: %s",

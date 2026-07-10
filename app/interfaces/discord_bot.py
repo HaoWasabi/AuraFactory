@@ -1,13 +1,14 @@
 """Discord Bot Interface — I/O layer only, delegates all logic to services."""
 import asyncio
 import logging
-from typing import Set
+from typing import Optional, Set
 
 import nextcord
 from nextcord.ext import commands
 
 from app.config import settings
-from app.messages import msg
+from app.llm.base import LLMQuotaError
+from app.messages import msg, msg_for_quota_error
 
 logger = logging.getLogger(__name__)
 
@@ -37,6 +38,7 @@ class DiscordBot(commands.Bot):
         self.executor_service = services["executor_service"]
         self.query_service = services["query_service"]
         self.guild_sync_service = services["guild_sync_service"]
+        self.session_service = services.get("session_service")
         self.mcp_discord_server = mcp_discord_server
         self._mcp_client = services.get("_mcp_client")
         # DB reference for token tracking
@@ -158,8 +160,30 @@ class DiscordBot(commands.Bot):
         # Ignore self messages and non-guild messages
         if message.author.bot or not message.guild:
             return
-        # Only respond to mentions or DMs with bot
-        if not (self.user.mentioned_in(message) or isinstance(message.channel, nextcord.DMChannel)):
+
+        guild_id = message.guild.id
+        user_id = message.author.id
+
+        # ── Case 1: Message is inside a thread that belongs to this bot ──
+        if isinstance(message.channel, nextcord.Thread):
+            # Only respond if this thread was created by the bot
+            if message.channel.owner_id == self.user.id:
+                content = message.content.strip()
+                if not content:
+                    return
+                async with message.channel.typing():
+                    await self._process_message(
+                        message=message,
+                        content=content,
+                        guild_id=guild_id,
+                        user_id=user_id,
+                        reply_channel=message.channel,  # continue in thread
+                        is_thread_continuation=True,
+                    )
+            return
+
+        # ── Case 2: Regular channel — only respond to @mentions ──
+        if not self.user.mentioned_in(message):
             return
 
         # Clean message content (remove mention)
@@ -167,94 +191,252 @@ class DiscordBot(commands.Bot):
         if not content:
             return
 
-        guild_id = message.guild.id
-        user_id = message.author.id
-
-        # Show typing indicator
+        # Show typing indicator while creating thread
         async with message.channel.typing():
-            await self._process_message(message, content, guild_id, user_id)
+            await self._process_message(
+                message=message,
+                content=content,
+                guild_id=guild_id,
+                user_id=user_id,
+                reply_channel=None,  # will create a thread
+                is_thread_continuation=False,
+            )
 
-    async def _process_message(self, message: nextcord.Message, content: str, guild_id: int, user_id: int):
-        """Full pipeline: request → classify → plan/query → execute."""
-        # Step 1: Create request (with lock check)
+    async def _create_reply_thread(
+        self,
+        message: nextcord.Message,
+        thread_name: str,
+    ) -> Optional[nextcord.Thread]:
+        """Create a public thread on the original message as the reply channel."""
+        try:
+            # Truncate thread name to Discord's 100-char limit
+            name = thread_name[:100]
+            thread = await message.create_thread(name=name, auto_archive_duration=60)
+            return thread
+        except nextcord.Forbidden:
+            logger.warning("No permission to create thread in channel %d", message.channel.id)
+            return None
+        except Exception as e:
+            logger.warning("Failed to create thread: %s", e)
+            return None
+
+    async def _process_message(
+        self,
+        message: nextcord.Message,
+        content: str,
+        guild_id: int,
+        user_id: int,
+        reply_channel: Optional[nextcord.abc.Messageable],
+        is_thread_continuation: bool,
+    ):
+        """Full pipeline: session → request → classify → plan/query → execute."""
+
+        # ── Step 0: Resolve or create session ──────────────────────────
+        session_id: Optional[str] = None
+        thread_channel = reply_channel  # may be None for new mentions
+
+        if self.session_service:
+            if is_thread_continuation and isinstance(reply_channel, nextcord.Thread):
+                # Continuation: look up session by thread ID
+                session_id = await self.session_service.get_or_create_session(
+                    guild_id=guild_id,
+                    user_id=user_id,
+                    origin="discord",
+                    discord_thread_id=reply_channel.id,
+                    title=reply_channel.name,
+                )
+            else:
+                # New conversation: create session first (thread ID bound later)
+                thread_name = content[:60] + ("…" if len(content) > 60 else "")
+                session_id = await self.session_service.create_session(
+                    guild_id=guild_id,
+                    user_id=user_id,
+                    origin="discord",
+                    title=thread_name,
+                )
+
+        # ── Step 1: Create the reply thread (new mentions only) ─────────
+        if not is_thread_continuation:
+            thread_name = content[:80] + ("…" if len(content) > 80 else "")
+            created_thread = await self._create_reply_thread(message, thread_name)
+            if created_thread:
+                thread_channel = created_thread
+                # Bind thread to session
+                if session_id and self.session_service:
+                    await self.session_service.update_thread_id(session_id, created_thread.id)
+            else:
+                # Fallback: reply in original channel
+                thread_channel = message.channel
+
+        # ── Step 2: Store user message in memory ────────────────────────
+        if session_id and self.session_service:
+            await self.session_service.add_message(
+                session_id=session_id,
+                guild_id=guild_id,
+                user_id=user_id,
+                role="user",
+                content=content,
+                origin="discord",
+            )
+
+        # ── Step 3: Get conversation history ────────────────────────────
+        history: list = []
+        if session_id and self.session_service:
+            history = await self.session_service.get_history(session_id)
+
+        # ── Step 4: Create request (with lock check) ─────────────────────
         req_result = await self.request_service.create_request(
             guild_id=guild_id,
             user_id=user_id,
             message=content,
             origin="discord",
             origin_channel_id=message.channel.id,
+            session_id=session_id,
         )
         if not req_result["ok"]:
-            await message.reply(msg("request_locked", lang="vi"))
+            reply_text = msg("request_locked", lang="vi")
+            await thread_channel.send(reply_text)
+            if session_id and self.session_service:
+                await self.session_service.add_message(
+                    session_id=session_id, guild_id=guild_id, user_id=user_id,
+                    role="bot", content=reply_text, origin="discord",
+                )
             return
 
         request_id = req_result["request_id"]
 
-        # Step 2: Classify intent + detect language
-        classification = await self.classifier_service.classify(
-            content, db=self._db, request_id=request_id
-        )
+        # ── Step 5: Classify intent + detect language ─────────────────────
+        try:
+            classification = await self.classifier_service.classify(
+                content, db=self._db, request_id=request_id
+            )
+        except LLMQuotaError as qe:
+            reply_text = msg_for_quota_error(qe.reason, lang="vi")
+            await thread_channel.send(reply_text)
+            if session_id and self.session_service:
+                await self.session_service.add_message(
+                    session_id=session_id, guild_id=guild_id, user_id=user_id,
+                    role="bot", content=reply_text, origin="discord",
+                )
+            await self.request_service.update_status(request_id, "failed", error_message=f"quota:{qe.reason}")
+            return
+
         intent = classification["intent"]
         tool_mode = classification["tool_mode"]
         lang = classification.get("lang", "vi")
 
         await self.request_service.update_status(request_id, "classified", intent=intent, tool_mode=tool_mode)
 
-        # Step 3: Route by intent
+        # ── Step 6: Route by intent ──────────────────────────────────────
         if intent == "query":
-            answer = await self.query_service.answer(
-                content, guild_id, db=self._db, request_id=request_id
-            )
-            await message.reply(answer)
-            await self.request_service.update_status(request_id, "completed", response=answer)
+            try:
+                answer = await self.query_service.answer(
+                    content, guild_id, db=self._db, request_id=request_id, history=history
+                )
+            except LLMQuotaError as qe:
+                answer = msg_for_quota_error(qe.reason, lang=lang)
+                await self.request_service.update_status(request_id, "failed", error_message=f"quota:{qe.reason}")
+            else:
+                await self.request_service.update_status(request_id, "completed", response=answer)
+            await thread_channel.send(answer)
+            if session_id and self.session_service:
+                await self.session_service.add_message(
+                    session_id=session_id, guild_id=guild_id, user_id=user_id,
+                    role="bot", content=answer, origin="discord",
+                )
             return
 
         if intent in ("clarify", "out_of_scope"):
             if intent == "clarify":
-                reply = await self.classifier_service.generate_clarify(
-                    content, lang=lang, db=self._db, request_id=request_id
-                )
+                try:
+                    reply = await self.classifier_service.generate_clarify(
+                        content, lang=lang, db=self._db, request_id=request_id
+                    )
+                except LLMQuotaError as qe:
+                    reply = msg_for_quota_error(qe.reason, lang=lang)
+                    await self.request_service.update_status(request_id, "failed", error_message=f"quota:{qe.reason}")
+                    await thread_channel.send(reply)
+                    if session_id and self.session_service:
+                        await self.session_service.add_message(
+                            session_id=session_id, guild_id=guild_id, user_id=user_id,
+                            role="bot", content=reply, origin="discord",
+                        )
+                    return
             else:
                 reply = msg("out_of_scope", lang=lang)
-            await message.reply(reply)
+            await thread_channel.send(reply)
             await self.request_service.update_status(request_id, "completed", response=reply)
+            if session_id and self.session_service:
+                await self.session_service.add_message(
+                    session_id=session_id, guild_id=guild_id, user_id=user_id,
+                    role="bot", content=reply, origin="discord",
+                )
             return
 
-        # Step 4: Generate plan (action intents)
-        plan_result = await self.planner_service.generate_plan(
-            request_id=request_id,
-            guild_id=guild_id,
-            user_id=user_id,
-            message=content,
-            intent=intent,
-        )
+        # ── Step 7: Generate plan (action intents) ───────────────────────
+        try:
+            plan_result = await self.planner_service.generate_plan(
+                request_id=request_id,
+                guild_id=guild_id,
+                user_id=user_id,
+                message=content,
+                intent=intent,
+                history=history,
+            )
+        except LLMQuotaError as qe:
+            err_msg = msg_for_quota_error(qe.reason, lang=lang)
+            await thread_channel.send(err_msg)
+            await self.request_service.update_status(request_id, "failed", error_message=f"quota:{qe.reason}")
+            if session_id and self.session_service:
+                await self.session_service.add_message(
+                    session_id=session_id, guild_id=guild_id, user_id=user_id,
+                    role="bot", content=err_msg, origin="discord",
+                )
+            return
         if not plan_result.get("ok"):
-            await message.reply(msg("plan_failed", lang=lang, error=plan_result.get("error", "Unknown error")))
+            err_msg = msg("plan_failed", lang=lang, error=plan_result.get("error", "Unknown error"))
+            await thread_channel.send(err_msg)
             await self.request_service.update_status(request_id, "failed", error_message=plan_result.get("error"))
+            if session_id and self.session_service:
+                await self.session_service.add_message(
+                    session_id=session_id, guild_id=guild_id, user_id=user_id,
+                    role="bot", content=err_msg, origin="discord",
+                )
             return
 
         plan_id = plan_result["plan_id"]
 
-        # Step 5: Show plan to user
+        # ── Step 8: Show plan to user ─────────────────────────────────────
         plan_text = self._format_plan(plan_result, lang=lang)
 
         if plan_result["risk_level"] in ("HIGH", "CRITICAL"):
             # Need approval — send with buttons
+            plan_header = msg("plan_header_approval", lang=lang, risk=plan_result["risk_level"], plan_text=plan_text)
             view = ApprovalView(self, plan_id, user_id, lang=lang)
-            sent_msg = await message.reply(
-                msg("plan_header_approval", lang=lang, risk=plan_result["risk_level"], plan_text=plan_text),
-                view=view,
-            )
+            sent_msg = await thread_channel.send(plan_header, view=view)
             view.message = sent_msg
+            if session_id and self.session_service:
+                await self.session_service.add_message(
+                    session_id=session_id, guild_id=guild_id, user_id=user_id,
+                    role="bot", content=plan_header, origin="discord",
+                )
         else:
             # Auto-approved — execute in background, reply when done
-            await message.reply(msg("plan_header_auto", lang=lang, plan_text=plan_text))
+            plan_header = msg("plan_header_auto", lang=lang, plan_text=plan_text)
+            await thread_channel.send(plan_header)
+            if session_id and self.session_service:
+                await self.session_service.add_message(
+                    session_id=session_id, guild_id=guild_id, user_id=user_id,
+                    role="bot", content=plan_header, origin="discord",
+                )
+
+            _session_id = session_id  # capture for closure
 
             async def _execute_and_reply():
                 try:
                     exec_result = await self.executor_service.execute_plan(plan_id)
 
-                    # Community upgrade needed — show prompt with confirm/decline buttons
+                    # Community upgrade needed
                     if exec_result.get("status") == "community_upgrade_needed":
                         community_payload = exec_result.get("community_payload", {})
                         ch_type = community_payload.get("channel_type", "stage")
@@ -272,17 +454,28 @@ class DiscordBot(commands.Bot):
                             request_id=request_id,
                             lang=lang,
                         )
-                        sent = await message.reply(prompt_text, view=view)
+                        sent = await thread_channel.send(prompt_text, view=view)
                         view.message = sent
+                        if _session_id and self.session_service:
+                            await self.session_service.add_message(
+                                session_id=_session_id, guild_id=guild_id, user_id=user_id,
+                                role="bot", content=prompt_text, origin="discord",
+                            )
                         return
 
                     summary = self._format_execution_result(exec_result, lang=lang)
-                    await message.reply(summary)
+                    await thread_channel.send(summary)
                     await self.request_service.update_status(request_id, "completed", response=summary)
+                    if _session_id and self.session_service:
+                        await self.session_service.add_message(
+                            session_id=_session_id, guild_id=guild_id, user_id=user_id,
+                            role="bot", content=summary, origin="discord",
+                        )
                 except Exception as e:
                     logger.error("Background execution error for plan %s: %s", plan_id, e)
                     try:
-                        await message.reply(msg("exec_error", lang=lang, error=str(e)[:200], done=0, total="?"))
+                        err_text = msg("exec_error", lang=lang, error=str(e)[:200], done=0, total="?")
+                        await thread_channel.send(err_text)
                     except Exception:
                         pass
 

@@ -7,6 +7,22 @@ from typing import Any, Dict, List, Optional
 logger = logging.getLogger(__name__)
 
 
+class LLMQuotaError(Exception):
+    """Raised when the LLM API key is exhausted, invalid, or rate-limited.
+
+    Attributes:
+        reason: Short machine-readable reason code.
+            - "quota_exhausted"  — daily/monthly free quota used up
+            - "rate_limited"     — too many requests per minute
+            - "invalid_key"      — API key rejected (wrong key / revoked)
+            - "permission_denied"— key exists but lacks access to this model
+    """
+    def __init__(self, reason: str, original: Exception = None):
+        self.reason = reason
+        self.original = original
+        super().__init__(reason)
+
+
 @dataclass
 class ToolCall:
     """Represents a tool/function call returned by the LLM."""

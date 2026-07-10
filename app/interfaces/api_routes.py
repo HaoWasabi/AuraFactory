@@ -7,7 +7,7 @@ from typing import Optional
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from pydantic import BaseModel
 
-from app.messages import msg
+from app.messages import msg, msg_for_quota_error
 
 logger = logging.getLogger(__name__)
 
@@ -16,7 +16,8 @@ logger = logging.getLogger(__name__)
 class ChatRequest(BaseModel):
     message: str
     guild_id: str  # String to preserve Discord snowflake precision
-    user_id: str  # String to preserve Discord snowflake precision
+    user_id: str   # String to preserve Discord snowflake precision
+    session_id: Optional[str] = None  # Continue existing session or None for new
 
 class ApprovalRequest(BaseModel):
     plan_id: str
@@ -70,6 +71,7 @@ def create_api_router(services: dict) -> APIRouter:
     approval_service = services["approval_service"]
     executor_service = services["executor_service"]
     query_service = services["query_service"]
+    session_service = services.get("session_service")
 
     # === Auth endpoints (§5.1) ===
 
@@ -157,9 +159,10 @@ def create_api_router(services: dict) -> APIRouter:
     async def chat(req: ChatRequest):
         """Main chat endpoint — same pipeline as Discord bot.
         
-        Flow: check bot → request → classify → plan/query → execute (if auto-approve)
+        Flow: check bot → session → request → classify → plan/query → execute (if auto-approve)
         """
         guild_id = int(req.guild_id)
+        user_id = int(req.user_id)
 
         # §5.1 step 3: Check bot is installed in this guild
         bot_row = await guild_sync_service.db.fetchrow(
@@ -175,74 +178,162 @@ def create_api_router(services: dict) -> APIRouter:
                 "invite_url": invite_url,
             }
 
+        # ── Session management ──────────────────────────────────────────
+        session_id = req.session_id
+        if session_service:
+            if session_id:
+                # Verify session belongs to this user/guild
+                sess = await session_service.get_session(session_id)
+                if not sess or sess["guild_id"] != guild_id or sess["user_id"] != user_id:
+                    session_id = None  # Reset — will create fresh
+
+            if not session_id:
+                session_id = await session_service.create_session(
+                    guild_id=guild_id,
+                    user_id=user_id,
+                    origin="web",
+                    title=req.message[:60] + ("…" if len(req.message) > 60 else ""),
+                )
+
+            # Persist user message
+            await session_service.add_message(
+                session_id=session_id,
+                guild_id=guild_id,
+                user_id=user_id,
+                role="user",
+                content=req.message,
+                origin="web",
+            )
+
+        # Get conversation history for context
+        history = []
+        if session_service and session_id:
+            history = await session_service.get_history(session_id)
+
         # Create request
         req_result = await request_service.create_request(
             guild_id=guild_id,
-            user_id=int(req.user_id),
+            user_id=user_id,
             message=req.message,
             origin="web",
+            session_id=session_id,
         )
         if not req_result["ok"]:
-            return {"ok": False, "type": "locked", "error": msg("request_locked", lang="vi")}
+            return {"ok": False, "type": "locked", "error": msg("request_locked", lang="vi"),
+                    "session_id": session_id}
 
         request_id = req_result["request_id"]
 
         # Classify
-        classification = await classifier_service.classify(req.message)
+        try:
+            classification = await classifier_service.classify(req.message)
+        except Exception as qe:
+            from app.llm.base import LLMQuotaError as _QE
+            if isinstance(qe, _QE):
+                err_text = msg_for_quota_error(qe.reason, lang="vi")
+                await _save_bot_reply(err_text)
+                await request_service.update_status(request_id, "failed", error_message=f"quota:{qe.reason}")
+                return {"ok": False, "type": "quota_error", "error": err_text, "session_id": session_id}
+            raise
         intent = classification["intent"]
         tool_mode = classification["tool_mode"]
         lang = classification.get("lang", "vi")
         await request_service.update_status(request_id, "classified", intent=intent, tool_mode=tool_mode)
 
+        async def _save_bot_reply(content: str):
+            if session_service and session_id:
+                await session_service.add_message(
+                    session_id=session_id, guild_id=guild_id, user_id=user_id,
+                    role="bot", content=content, origin="web",
+                )
+
         # Route by intent
         if intent == "query":
-            answer = await query_service.answer(req.message, guild_id)
+            try:
+                answer = await query_service.answer(req.message, guild_id, history=history)
+            except Exception as qe:
+                from app.llm.base import LLMQuotaError as _QE
+                if isinstance(qe, _QE):
+                    answer = msg_for_quota_error(qe.reason, lang=lang)
+                    await request_service.update_status(request_id, "failed", error_message=f"quota:{qe.reason}")
+                    await _save_bot_reply(answer)
+                    return {"ok": False, "type": "quota_error", "error": answer, "session_id": session_id}
+                raise
             await request_service.update_status(request_id, "completed", response=answer)
-            return {"ok": True, "type": "answer", "content": answer, "request_id": request_id}
+            await _save_bot_reply(answer)
+            return {"ok": True, "type": "answer", "content": answer,
+                    "request_id": request_id, "session_id": session_id}
 
         if intent in ("clarify", "out_of_scope"):
             if intent == "clarify":
-                reply = await classifier_service.generate_clarify(req.message, lang=lang)
+                try:
+                    reply = await classifier_service.generate_clarify(req.message, lang=lang)
+                except Exception as qe:
+                    from app.llm.base import LLMQuotaError as _QE
+                    if isinstance(qe, _QE):
+                        reply = msg_for_quota_error(qe.reason, lang=lang)
+                        await request_service.update_status(request_id, "failed", error_message=f"quota:{qe.reason}")
+                        await _save_bot_reply(reply)
+                        return {"ok": False, "type": "quota_error", "error": reply, "session_id": session_id}
+                    raise
             else:
                 reply = msg("out_of_scope", lang=lang)
             await request_service.update_status(request_id, "completed", response=reply)
-            return {"ok": True, "type": "clarify", "content": reply, "request_id": request_id}
+            await _save_bot_reply(reply)
+            return {"ok": True, "type": "clarify", "content": reply,
+                    "request_id": request_id, "session_id": session_id}
 
         # Action intents → plan
-        plan_result = await planner_service.generate_plan(
-            request_id=request_id,
-            guild_id=guild_id,
-            user_id=int(req.user_id),
-            message=req.message,
-            intent=intent,
-        )
+        try:
+            plan_result = await planner_service.generate_plan(
+                request_id=request_id,
+                guild_id=guild_id,
+                user_id=user_id,
+                message=req.message,
+                intent=intent,
+                history=history,
+            )
+        except Exception as qe:
+            from app.llm.base import LLMQuotaError as _QE
+            if isinstance(qe, _QE):
+                err_text = msg_for_quota_error(qe.reason, lang="vi")
+                await _save_bot_reply(err_text)
+                return {"ok": False, "type": "quota_error", "error": err_text, "session_id": session_id}
+            raise
         if not plan_result.get("ok"):
-            return {"ok": False, "error": plan_result.get("error", "Planning failed")}
+            return {"ok": False, "error": plan_result.get("error", "Planning failed"),
+                    "session_id": session_id}
 
         plan_id = plan_result["plan_id"]
 
         if plan_result["risk_level"] in ("HIGH", "CRITICAL"):
             # Needs approval
+            plan_summary = f"📋 Kế hoạch (risk: {plan_result['risk_level']}): {plan_result.get('description', '')}"
+            await _save_bot_reply(plan_summary)
             return {
                 "ok": True,
                 "type": "approval_needed",
                 "plan_id": plan_id,
                 "plan": plan_result,
                 "request_id": request_id,
+                "session_id": session_id,
             }
         else:
-            # Auto-approved → execute in background, watch for community upgrade
+            # Auto-approved → execute in background
             asyncio.create_task(
                 _run_execution_background_with_community_check(
                     executor_service, plan_id, approval_service.db
                 )
             )
+            plan_summary = f"⏳ Đang thực thi kế hoạch: {plan_result.get('description', '')}"
+            await _save_bot_reply(plan_summary)
             return {
                 "ok": True,
                 "type": "executing",
                 "status": "executing",
                 "plan_id": plan_id,
                 "request_id": request_id,
+                "session_id": session_id,
             }
 
     # === Approval endpoints (§5.5) ===
@@ -475,6 +566,46 @@ def create_api_router(services: dict) -> APIRouter:
             }
 
         raise HTTPException(status_code=400, detail="action must be 'confirm' or 'decline'")
+
+    # === Session / Chat Memory endpoints ===
+
+    @router.get("/sessions")
+    async def list_sessions(guild_id: int, user_id: int, limit: int = 30):
+        """List chat sessions for a user in a guild (newest first)."""
+        if not session_service:
+            return {"sessions": []}
+        sessions = await session_service.list_sessions(guild_id, user_id, limit=limit)
+        return {"sessions": sessions}
+
+    @router.get("/sessions/{session_id}/messages")
+    async def get_session_messages(session_id: str, limit: int = 100, before_id: Optional[str] = None):
+        """Get messages for a specific session."""
+        if not session_service:
+            raise HTTPException(status_code=503, detail="Session service unavailable")
+        sess = await session_service.get_session(session_id)
+        if not sess:
+            raise HTTPException(status_code=404, detail="Session not found")
+        messages = await session_service.get_session_messages(session_id, limit=limit, before_id=before_id)
+        return {"session": sess, "messages": messages}
+
+    class RenameSessionRequest(BaseModel):
+        title: str
+
+    @router.patch("/sessions/{session_id}")
+    async def rename_session(session_id: str, req: RenameSessionRequest):
+        """Rename a session."""
+        if not session_service:
+            raise HTTPException(status_code=503, detail="Session service unavailable")
+        await session_service.rename_session(session_id, req.title)
+        return {"ok": True}
+
+    @router.delete("/sessions/{session_id}")
+    async def delete_session(session_id: str):
+        """Soft-close a session (marks as inactive)."""
+        if not session_service:
+            raise HTTPException(status_code=503, detail="Session service unavailable")
+        await session_service.close_session(session_id)
+        return {"ok": True}
 
     # === Health ===
 
