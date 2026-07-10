@@ -63,9 +63,15 @@ class GeminiLLM(BaseLLM):
         """Recursively convert a JSON Schema dict to a Gemini proto Schema.
 
         Handles: string, number, integer, boolean, array (with items), object (with properties).
+        Also handles shorthand from tools_spec.yaml where items/properties values
+        may be plain strings (e.g. "integer") instead of full schema dicts.
         This is the ONLY Gemini-specific conversion layer. Tool definitions stay as standard
         JSON Schema everywhere else — making Bedrock swap trivial (Bedrock accepts JSON Schema directly).
         """
+        # Guard: if schema is a plain string (shorthand), wrap it
+        if isinstance(schema, str):
+            return genai.protos.Schema(type=self._map_type(schema), description="")
+
         json_type = schema.get("type", "string")
         proto_type = self._map_type(json_type)
         description = schema.get("description", "")
