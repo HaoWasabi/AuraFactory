@@ -21,7 +21,7 @@ from .base import BaseLLM, LLMResponse, ToolCall, UsageStats
 logger = logging.getLogger(__name__)
 
 # Default timeout for Ollama (local models can be slow on first load)
-_DEFAULT_TIMEOUT = 120.0  # seconds
+_DEFAULT_TIMEOUT = 300.0  # seconds (7B on Colab T4 needs time with large tool context)
 
 
 class OllamaLLM(BaseLLM):
