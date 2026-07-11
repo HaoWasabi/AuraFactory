@@ -209,6 +209,87 @@ User: "setup server: đổi tên 'Gaming Hub', bật Community, bảo mật medi
    Step 4: discord.guild.set_system_channels (disable_join_messages=true, risk: MEDIUM)
    Step 5: discord.guild.set_preferred_locale (locale="vi", risk: LOW)
 
+EXAMPLE — Tạo server từ đầu theo chủ đề (FULL SETUP — roles + categories + channels):
+User: "tạo server công ty cho tôi"
+→ This is a FULL SERVER SETUP. You MUST create:
+   - All roles first (1 bulk_create step)
+   - Then all categories (one step each)
+   - Then channels inside each category (one step each)
+   MINIMUM: 5 roles, 4 categories, 2+ text channels + 1 voice channel per category.
+
+   Step 1: discord.roles.bulk_create — tạo tất cả roles trong 1 bước
+     roles=[
+       {"name":"CEO","color":"#e74c3c","permissions":{"administrator":true},"hoist":true},
+       {"name":"Manager","color":"#e67e22","permissions":{"manage_channels":true,"manage_roles":true,"manage_messages":true,"kick_members":true},"hoist":true},
+       {"name":"Developer","color":"#3498db","permissions":{"send_messages":true,"view_channel":true,"attach_files":true,"embed_links":true},"hoist":true},
+       {"name":"Marketing","color":"#2ecc71","permissions":{"send_messages":true,"view_channel":true,"attach_files":true},"hoist":true},
+       {"name":"HR","color":"#9b59b6","permissions":{"send_messages":true,"view_channel":true,"manage_nicknames":true},"hoist":true},
+       {"name":"Intern","color":"#95a5a6","permissions":{"send_messages":true,"view_channel":true},"hoist":false},
+       {"name":"Member","color":"#bdc3c7","permissions":{"send_messages":true,"view_channel":true},"hoist":false}
+     ], risk: HIGH
+
+   Step 2: discord.categories.create — name="📢 THÔNG BÁO", risk: MEDIUM
+   Step 3: discord.channels.create — name="thong-bao-chung", type="text",
+     category_id="📢 THÔNG BÁO",
+     advanced_permissions={"send_messages":false,"view_channel":true}, risk: MEDIUM
+   Step 4: discord.channels.create — name="quy-dinh-cong-ty", type="text",
+     category_id="📢 THÔNG BÁO",
+     advanced_permissions={"send_messages":false,"view_channel":true}, risk: MEDIUM
+   Step 5: discord.channels.create — name="su-kien", type="text",
+     category_id="📢 THÔNG BÁO", risk: MEDIUM
+
+   Step 6: discord.categories.create — name="💼 CHUNG", risk: MEDIUM
+   Step 7: discord.channels.create — name="gioi-thieu", type="text",
+     category_id="💼 CHUNG", risk: MEDIUM
+   Step 8: discord.channels.create — name="trao-doi-chung", type="text",
+     category_id="💼 CHUNG", risk: MEDIUM
+   Step 9: discord.channels.create — name="off-topic", type="text",
+     category_id="💼 CHUNG", risk: MEDIUM
+   Step 10: discord.channels.create — name="🔊 Lobby", type="voice",
+     category_id="💼 CHUNG", risk: MEDIUM
+
+   Step 11: discord.categories.create — name="👥 BỘ PHẬN", risk: MEDIUM
+   Step 12: discord.channels.create — name="dev-team", type="text",
+     category_id="👥 BỘ PHẬN",
+     is_private=true, allowed_role_ids=["Developer","Manager","CEO"], risk: MEDIUM
+   Step 13: discord.channels.create — name="marketing-team", type="text",
+     category_id="👥 BỘ PHẬN",
+     is_private=true, allowed_role_ids=["Marketing","Manager","CEO"], risk: MEDIUM
+   Step 14: discord.channels.create — name="hr-team", type="text",
+     category_id="👥 BỘ PHẬN",
+     is_private=true, allowed_role_ids=["HR","Manager","CEO"], risk: MEDIUM
+   Step 15: discord.channels.create — name="🔊 Meeting Room", type="voice",
+     category_id="👥 BỘ PHẬN", risk: MEDIUM
+
+   Step 16: discord.categories.create — name="🔊 VOICE", risk: MEDIUM
+   Step 17: discord.channels.create — name="🔊 General Voice", type="voice",
+     category_id="🔊 VOICE", risk: MEDIUM
+   Step 18: discord.channels.create — name="🔊 Work Room 1", type="voice",
+     category_id="🔊 VOICE", risk: MEDIUM
+   Step 19: discord.channels.create — name="🔊 Work Room 2", type="voice",
+     category_id="🔊 VOICE", risk: MEDIUM
+   Step 20: discord.channels.create — name="🔊 AFK", type="voice",
+     category_id="🔊 VOICE", user_limit=0, risk: MEDIUM
+
+   Step 21: discord.categories.create — name="🔒 MANAGEMENT", risk: MEDIUM
+   Step 22: discord.channels.create — name="quan-ly-noi-bo", type="text",
+     category_id="🔒 MANAGEMENT",
+     is_private=true, allowed_role_ids=["CEO","Manager"], risk: MEDIUM
+   Step 23: discord.channels.create — name="bao-cao-tuan", type="text",
+     category_id="🔒 MANAGEMENT",
+     is_private=true, allowed_role_ids=["CEO","Manager","HR"], risk: MEDIUM
+   Step 24: discord.channels.create — name="🔊 Ban Lãnh Đạo", type="voice",
+     category_id="🔒 MANAGEMENT",
+     is_private=true, allowed_role_ids=["CEO","Manager"], risk: MEDIUM
+
+NOTE: The same pattern applies to ALL full-server-creation requests regardless of theme:
+- "tạo server gaming" → roles: Owner/Admin/Mod/VIP/Member + categories: THÔNG BÁO/GAMING/VOICE/STAFF
+- "tạo server cộng đồng" → roles: Admin/Mod/VIP/Member/Newbie + categories: THÔNG BÁO/TỔNG HỢP/VOICE CHAT/STAFF
+- "tạo server học tập" → roles: Giáo Viên/Trợ Giảng/Học Sinh/Alumni + categories: THÔNG BÁO/MÔN HỌC/THẢO LUẬN/VOICE
+- ALWAYS use discord.roles.bulk_create for all roles in ONE step BEFORE any category/channel steps.
+- ALWAYS create at minimum: 5 roles, 4 categories, 3+ channels per category (mix text+voice).
+- category_id in channel steps MUST reference the category NAME as placeholder (executor resolves at runtime).
+
 Respond with ONLY valid JSON, no markdown fences:
 {
   "description": "Human-readable summary of what will be done",
