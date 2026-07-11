@@ -59,15 +59,53 @@ async def lifespan(app: FastAPI):
                 logger.error("❌ Database connection failed after 5 attempts: %s", e)
                 raise RuntimeError(f"Cannot start without database: {e}")
 
-    from app.llm import get_llm
+    from app.llm import get_llm, get_bedrock_llm
     llm = None
+    llm_planner = None    # Planner: needs smartest model (Nova Pro)
+    llm_classifier = None  # Classifier: can use lightest model (Nova Micro)
     try:
-        llm = get_llm(
-            provider=settings.LLM_PROVIDER,
-            model=settings.GEMINI_MODEL,
-            api_key=settings.GEMINI_API_KEY,
-        )
-        logger.info("✅ LLM provider: %s (%s)", settings.LLM_PROVIDER, settings.GEMINI_MODEL)
+        if settings.LLM_PROVIDER == "bedrock":
+            # Default model (Classifier fallback, Query, ReAct, Executor)
+            llm = get_bedrock_llm(
+                model=settings.BEDROCK_MODEL_ID,
+                region=settings.AWS_REGION,
+            )
+            # Planner uses a heavier model for complex JSON plan generation
+            if settings.BEDROCK_PLANNER_MODEL != settings.BEDROCK_MODEL_ID:
+                llm_planner = get_bedrock_llm(
+                    model=settings.BEDROCK_PLANNER_MODEL,
+                    region=settings.AWS_REGION,
+                )
+            else:
+                llm_planner = llm
+
+            # Classifier uses the lightest/cheapest model (Nova Micro by default)
+            if settings.BEDROCK_CLASSIFIER_MODEL != settings.BEDROCK_MODEL_ID:
+                llm_classifier = get_bedrock_llm(
+                    model=settings.BEDROCK_CLASSIFIER_MODEL,
+                    region=settings.AWS_REGION,
+                )
+            else:
+                llm_classifier = llm
+
+            logger.info(
+                "✅ Bedrock multi-model routing: default=%s planner=%s classifier=%s region=%s",
+                settings.BEDROCK_MODEL_ID,
+                settings.BEDROCK_PLANNER_MODEL,
+                settings.BEDROCK_CLASSIFIER_MODEL,
+                settings.AWS_REGION,
+            )
+        else:
+            llm = get_llm(
+                provider=settings.LLM_PROVIDER,
+                model=settings.GEMINI_MODEL,
+                api_key=settings.GEMINI_API_KEY,
+            )
+            llm_planner = llm
+            llm_classifier = llm
+            logger.info(
+                "✅ LLM provider: %s (%s)", settings.LLM_PROVIDER, settings.GEMINI_MODEL
+            )
     except Exception as e:
         logger.error("❌ LLM initialization FAILED: %s", e, exc_info=True)
         logger.error("   AI features (classify, plan, query) will NOT work.")
@@ -97,9 +135,9 @@ async def lifespan(app: FastAPI):
 
     rate_limit_service = RateLimitService(db)
     request_service = RequestService(db, rate_limit_service=rate_limit_service)
-    classifier_service = ClassifierService(llm)
+    classifier_service = ClassifierService(llm_classifier)
     context_service = ContextService(db, mcp_client)
-    planner_service = PlannerService(db, llm, mcp_client, context_service)
+    planner_service = PlannerService(db, llm_planner, mcp_client, context_service)
     approval_service = ApprovalService(db)
     executor_service = ExecutorService(db, mcp_client, llm, context_service)
     query_service = QueryService(llm, mcp_client, context_service)

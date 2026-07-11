@@ -32,7 +32,20 @@ class Config:
         # LLM Configuration
         self.LLM_PROVIDER: str = os.environ.get('LLM_PROVIDER', 'gemini')
         self.GEMINI_API_KEY: str = os.environ.get('GEMINI_API_KEY', '')
-        self.GEMINI_MODEL: str = os.environ.get('GEMINI_MODEL', 'gemini-2.5-flash')
+        self.GEMINI_MODEL: str = os.environ.get('GEMINI_MODEL', 'gemini-2.0-flash')
+
+        # Bedrock multi-model routing
+        # Default model (used when LLM_PROVIDER=bedrock and no specific override)
+        self.BEDROCK_MODEL_ID: str = os.environ.get(
+            'BEDROCK_MODEL_ID', 'amazon.nova-lite-v1:0'
+        )
+        # Per-service model overrides (optional — falls back to BEDROCK_MODEL_ID)
+        self.BEDROCK_PLANNER_MODEL: str = os.environ.get(
+            'BEDROCK_PLANNER_MODEL', 'amazon.nova-pro-v1:0'
+        )
+        self.BEDROCK_CLASSIFIER_MODEL: str = os.environ.get(
+            'BEDROCK_CLASSIFIER_MODEL', 'amazon.nova-micro-v1:0'
+        )
         
         # Server Configuration
         self.PORT: int = int(os.environ.get('PORT', 8000))
@@ -57,7 +70,8 @@ class Config:
         # AWS/Bedrock Configuration
         self.ENABLE_BEDROCK_LLM: bool = os.environ.get('ENABLE_BEDROCK_LLM', 'False').lower() == 'true'
         self.AWS_REGION: str = os.environ.get('AWS_REGION', 'us-east-1')
-        self.BEDROCK_MODEL_ID: str = os.environ.get('BEDROCK_MODEL_ID', '')
+        # Note: AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY are read directly
+        # by boto3 from the environment — no need to store them here.
         
         # Paths Configuration
         self.PROMPTS_DIR: str = os.environ.get('PROMPTS_DIR', './prompts')

@@ -16,7 +16,7 @@ logger = logging.getLogger(__name__)
 class GeminiLLM(BaseLLM):
     """Google Gemini LLM provider."""
 
-    def __init__(self, model: str = "gemini-2.0-flash", api_key: Optional[str] = None) -> None:
+    def __init__(self, model: str = "gemini-3.5-flash", api_key: Optional[str] = None) -> None:
         """Initialize Gemini LLM provider.
         
         Args:

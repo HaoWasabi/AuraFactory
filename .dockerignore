@@ -11,3 +11,19 @@ __pycache__
 .idea
 .vscode
 logs/
+
+# Secrets — KHÔNG được đóng gói vào image
+.env
+*.env
+.env.*
+!.env.example
+
+# Test & dev files
+tests/
+*.test.py
+pytest.ini
+.pytest_cache/
+
+# Docs
+README.md
+*.md
