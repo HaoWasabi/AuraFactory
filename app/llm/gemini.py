@@ -16,7 +16,7 @@ logger = logging.getLogger(__name__)
 class GeminiLLM(BaseLLM):
     """Google Gemini LLM provider."""
 
-    def __init__(self, model: str = "gemini-3.5-flash", api_key: Optional[str] = None) -> None:
+    def __init__(self, model: str = "gemini-2.0-flash", api_key: Optional[str] = None) -> None:
         """Initialize Gemini LLM provider.
         
         Args:
@@ -215,6 +215,22 @@ class GeminiLLM(BaseLLM):
                 # 429 — quota or rate limit
                 msg = str(e).lower()
                 reason = "rate_limited" if "rate" in msg else "quota_exhausted"
+                # Try to extract retry_delay from error metadata
+                retry_seconds = 0
+                try:
+                    for detail in getattr(e, 'details', []) or []:
+                        rd = getattr(detail, 'retry_delay', None)
+                        if rd:
+                            retry_seconds = getattr(rd, 'seconds', 0)
+                            break
+                except Exception:
+                    pass
+                if retry_seconds > 0 and attempt < max_retries:
+                    attempt += 1
+                    wait = min(retry_seconds + 1, 10)  # cap at 10s
+                    logger.warning("Gemini %s, retry in %ds (attempt %d/%d)", reason, wait, attempt, max_retries)
+                    await asyncio.sleep(wait)
+                    continue
                 logger.warning("Gemini %s: %s", reason, e)
                 raise LLMQuotaError(reason, original=e) from e
             except (PermissionDenied, Unauthenticated) as e:

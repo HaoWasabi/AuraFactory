@@ -70,6 +70,18 @@ class Config:
         # AWS/Bedrock Configuration
         self.ENABLE_BEDROCK_LLM: bool = os.environ.get('ENABLE_BEDROCK_LLM', 'False').lower() == 'true'
         self.AWS_REGION: str = os.environ.get('AWS_REGION', 'us-east-1')
+
+        # LLM Fallback Configuration
+        self.LLM_FALLBACK_ENABLED: bool = os.environ.get('LLM_FALLBACK_ENABLED', '').strip().lower() == 'true'
+        self.LLM_FALLBACK_PROVIDER: str = os.environ.get('LLM_FALLBACK_PROVIDER', 'gemini')
+        _fallback_model = os.environ.get('GEMINI_FALLBACK_MODEL', 'gemini-2.0-flash')
+        if not _fallback_model.startswith('gemini-'):
+            import logging as _log
+            _log.getLogger(__name__).warning(
+                "GEMINI_FALLBACK_MODEL '%s' không hợp lệ, dùng mặc định gemini-2.0-flash", _fallback_model
+            )
+            _fallback_model = 'gemini-2.0-flash'
+        self.GEMINI_FALLBACK_MODEL: str = _fallback_model
         # Note: AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY are read directly
         # by boto3 from the environment — no need to store them here.
         

@@ -59,53 +59,87 @@ async def lifespan(app: FastAPI):
                 logger.error("❌ Database connection failed after 5 attempts: %s", e)
                 raise RuntimeError(f"Cannot start without database: {e}")
 
-    from app.llm import get_llm, get_bedrock_llm
+    from app.llm import get_llm, get_bedrock_llm, LLMRouter, GeminiLLM
     llm = None
     llm_planner = None    # Planner: needs smartest model (Nova Pro)
     llm_classifier = None  # Classifier: can use lightest model (Nova Micro)
     try:
+        # --- Build Gemini fallback provider (nếu cần) ---
+        gemini_fallback = None
+        if settings.LLM_FALLBACK_ENABLED:
+            if settings.GEMINI_API_KEY:
+                # Thử model ưu tiên, fallback về gemini-2.0-flash nếu lỗi
+                preferred_model = settings.GEMINI_FALLBACK_MODEL  # mặc định gemini-2.0-flash
+                try:
+                    gemini_fallback = GeminiLLM(model=preferred_model, api_key=settings.GEMINI_API_KEY)
+                    logger.info("✅ Gemini fallback provider: model=%s (nguồn: %s)",
+                                preferred_model,
+                                "env GEMINI_FALLBACK_MODEL" if preferred_model != 'gemini-2.5-flash' else "default")
+                except Exception as fe:
+                    logger.warning("⚠️ Gemini fallback model '%s' thất bại (%s) — thử gemini-2.0-flash", preferred_model, fe)
+                    try:
+                        gemini_fallback = GeminiLLM(model='gemini-2.0-flash', api_key=settings.GEMINI_API_KEY)
+                        logger.info("✅ Gemini fallback provider: model=gemini-2.0-flash (fallback)")
+                    except Exception as fe2:
+                        logger.error("❌ Toàn bộ chuỗi fallback model thất bại: %s", fe2)
+                        gemini_fallback = None
+            else:
+                logger.warning("⚠️ LLM_FALLBACK_ENABLED=true nhưng GEMINI_API_KEY chưa thiết lập — fallback bị tắt")
+
+        # --- Build primary provider ---
+        def _wrap_router(primary, fallback_for_this=None):
+            """Bọc provider trong LLMRouter."""
+            return LLMRouter(
+                primary=primary,
+                fallback=fallback_for_this or gemini_fallback,
+                fallback_enabled=settings.LLM_FALLBACK_ENABLED,
+            )
+
         if settings.LLM_PROVIDER == "bedrock":
             # Default model (Classifier fallback, Query, ReAct, Executor)
-            llm = get_bedrock_llm(
-                model=settings.BEDROCK_MODEL_ID,
-                region=settings.AWS_REGION,
-            )
+            _llm_raw = get_bedrock_llm(model=settings.BEDROCK_MODEL_ID, region=settings.AWS_REGION)
+            llm = _wrap_router(_llm_raw)
+
             # Planner uses a heavier model for complex JSON plan generation
             if settings.BEDROCK_PLANNER_MODEL != settings.BEDROCK_MODEL_ID:
-                llm_planner = get_bedrock_llm(
-                    model=settings.BEDROCK_PLANNER_MODEL,
-                    region=settings.AWS_REGION,
-                )
+                _planner_raw = get_bedrock_llm(model=settings.BEDROCK_PLANNER_MODEL, region=settings.AWS_REGION)
+                llm_planner = _wrap_router(_planner_raw)
             else:
                 llm_planner = llm
 
             # Classifier uses the lightest/cheapest model (Nova Micro by default)
             if settings.BEDROCK_CLASSIFIER_MODEL != settings.BEDROCK_MODEL_ID:
-                llm_classifier = get_bedrock_llm(
-                    model=settings.BEDROCK_CLASSIFIER_MODEL,
-                    region=settings.AWS_REGION,
-                )
+                _cls_raw = get_bedrock_llm(model=settings.BEDROCK_CLASSIFIER_MODEL, region=settings.AWS_REGION)
+                llm_classifier = _wrap_router(_cls_raw)
             else:
                 llm_classifier = llm
 
             logger.info(
-                "✅ Bedrock multi-model routing: default=%s planner=%s classifier=%s region=%s",
+                "✅ Bedrock multi-model routing: default=%s planner=%s classifier=%s region=%s fallback=%s",
                 settings.BEDROCK_MODEL_ID,
                 settings.BEDROCK_PLANNER_MODEL,
                 settings.BEDROCK_CLASSIFIER_MODEL,
                 settings.AWS_REGION,
+                "enabled" if settings.LLM_FALLBACK_ENABLED else "disabled",
             )
         else:
-            llm = get_llm(
+            _gemini_raw = get_llm(
                 provider=settings.LLM_PROVIDER,
                 model=settings.GEMINI_MODEL,
                 api_key=settings.GEMINI_API_KEY,
             )
+            llm = _wrap_router(_gemini_raw, fallback_for_this=None)  # Gemini không fallback về Gemini
             llm_planner = llm
             llm_classifier = llm
             logger.info(
-                "✅ LLM provider: %s (%s)", settings.LLM_PROVIDER, settings.GEMINI_MODEL
+                "✅ LLM provider: %s (%s) fallback=%s",
+                settings.LLM_PROVIDER, settings.GEMINI_MODEL,
+                "disabled (primary đã là Gemini)" if settings.LLM_PROVIDER == "gemini" else "disabled",
             )
+
+        # Expose llm_router cho API endpoints
+        app.state.llm_router = llm  # router chính (dùng để switch provider / update key)
+
     except Exception as e:
         logger.error("❌ LLM initialization FAILED: %s", e, exc_info=True)
         logger.error("   AI features (classify, plan, query) will NOT work.")
@@ -183,6 +217,8 @@ async def lifespan(app: FastAPI):
     app.state.db = db
     app.state.services = services
     app.state.bot = bot
+    if not hasattr(app.state, 'llm_router') or app.state.llm_router is None:
+        app.state.llm_router = llm  # fallback nếu llm_router chưa được set trong try block
 
     elapsed = time.time() - start_time
     logger.info("✅ AuraFactory ready in %.2fs", elapsed)

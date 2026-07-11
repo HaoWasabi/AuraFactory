@@ -87,6 +87,29 @@
             <!-- Admin Panel -->
             <div class="sidebar-section" id="adminSection" style="display:none;">
                 <div class="sidebar-section-title" style="color:var(--risk-high,#f0a500);">⚙️ Bot Admin</div>
+
+                <!-- LLM Provider Toggle -->
+                <div style="margin-bottom:12px;">
+                    <div style="font-size:12px;color:var(--text-muted);margin-bottom:6px;">Nhà cung cấp AI</div>
+                    <div id="llmStatusLabel" style="font-size:11px;color:var(--text-muted);margin-bottom:8px;">Đang tải...</div>
+                    <!-- Warning khi Gemini active nhưng không có key -->
+                    <div id="llmKeyWarning" style="display:none;background:rgba(240,165,0,0.15);border:1px solid var(--risk-high,#f0a500);border-radius:6px;padding:6px 8px;font-size:11px;color:var(--risk-high,#f0a500);margin-bottom:8px;">
+                        ⚠️ Gemini đang active nhưng chưa có API key. Vui lòng nhập key bên dưới.
+                    </div>
+                    <div style="display:flex;gap:6px;">
+                        <button id="btnSwitchBedrock" onclick="switchLLMProvider('bedrock')"
+                            style="flex:1;border:1px solid var(--border-color);border-radius:6px;color:var(--text-primary);cursor:pointer;font-size:11px;padding:5px 6px;background:var(--bg-secondary);transition:all 0.2s;">
+                            🏗️ Bedrock
+                        </button>
+                        <button id="btnSwitchGemini" onclick="switchLLMProvider('gemini')"
+                            style="flex:1;border:1px solid var(--border-color);border-radius:6px;color:var(--text-primary);cursor:pointer;font-size:11px;padding:5px 6px;background:var(--bg-secondary);transition:all 0.2s;">
+                            ✨ Gemini
+                        </button>
+                    </div>
+                    <div id="llmFallbackStatus" style="font-size:10px;color:var(--text-muted);margin-top:5px;"></div>
+                </div>
+
+                <!-- Gemini API Key -->
                 <div style="font-size:12px;color:var(--text-muted);margin-bottom:8px;">Cập nhật Gemini API key</div>
                 <div style="display:flex;flex-direction:column;gap:6px;">
                     <input type="password" id="adminApiKeyInput" placeholder="AIza..." autocomplete="off"
@@ -96,6 +119,8 @@
                         🔑 Cập nhật API Key
                     </button>
                 </div>
+
+                <!-- Discord Bot Token -->
                 <div style="font-size:12px;color:var(--text-muted);margin-top:12px;margin-bottom:8px;">Cập nhật Discord Bot Token</div>
                 <div style="display:flex;flex-direction:column;gap:6px;">
                     <input type="password" id="adminDiscordTokenInput" placeholder="MT..." autocomplete="off"
@@ -604,8 +629,80 @@ async function checkAdminStatus() {
     if (!currentUser) return;
     try {
         const data = await api('GET', `/api/admin/status?user_id=${currentUser.id}`);
-        if (data && data.is_admin) document.getElementById('adminSection').style.display = '';
+        if (data && data.is_admin) {
+            document.getElementById('adminSection').style.display = '';
+            await loadLLMStatus();
+        }
     } catch (e) {}
+}
+
+async function loadLLMStatus() {
+    if (!currentUser) return;
+    const label = document.getElementById('llmStatusLabel');
+    const fallbackEl = document.getElementById('llmFallbackStatus');
+    const warning = document.getElementById('llmKeyWarning');
+    try {
+        const controller = new AbortController();
+        const timeout = setTimeout(() => controller.abort(), 5000);
+        const resp = await fetch(`/api/admin/llm-status?user_id=${currentUser.id}`, { signal: controller.signal });
+        clearTimeout(timeout);
+        if (!resp.ok) { label.textContent = '⚠️ Không thể tải trạng thái LLM'; return; }
+        const data = await resp.json();
+        _applyLLMStatus(data);
+    } catch (e) {
+        if (label) label.textContent = '⚠️ Trạng thái LLM không khả dụng';
+    }
+}
+
+function _applyLLMStatus(data) {
+    const label = document.getElementById('llmStatusLabel');
+    const fallbackEl = document.getElementById('llmFallbackStatus');
+    const warning = document.getElementById('llmKeyWarning');
+    const btnBedrock = document.getElementById('btnSwitchBedrock');
+    const btnGemini = document.getElementById('btnSwitchGemini');
+
+    const activeProvider = data.active_provider || 'gemini';
+    const providerName = activeProvider === 'bedrock' ? 'Bedrock' : 'Gemini';
+    if (label) label.textContent = `Đang dùng: ${providerName}`;
+
+    // Highlight nút active
+    const activeStyle = 'background:var(--accent-primary);color:#fff;border-color:var(--accent-primary);';
+    const inactiveStyle = 'background:var(--bg-secondary);color:var(--text-primary);border-color:var(--border-color);';
+    if (btnBedrock) btnBedrock.style.cssText += activeProvider === 'bedrock' ? activeStyle : inactiveStyle;
+    if (btnGemini) btnGemini.style.cssText += activeProvider === 'gemini' ? activeStyle : inactiveStyle;
+
+    // Fallback status
+    if (fallbackEl) {
+        if (data.fallback_enabled && data.fallback_provider) {
+            fallbackEl.textContent = `Dự phòng: ${data.fallback_provider === 'gemini' ? 'Gemini' : 'Bedrock'} ✓`;
+        } else {
+            fallbackEl.textContent = 'Dự phòng: Tắt';
+        }
+    }
+
+    // Cảnh báo Gemini không có key
+    if (warning) {
+        warning.style.display = (activeProvider === 'gemini' && !data.gemini_key_configured) ? '' : 'none';
+    }
+}
+
+async function switchLLMProvider(provider) {
+    if (!currentUser) return;
+    try {
+        const data = await api('POST', '/api/admin/switch-llm-provider', { provider, user_id: currentUser.id });
+        if (data && data.ok) {
+            showToast(`✅ ${data.message}`, 'info');
+            // Reset button styles trước khi apply lại
+            const btnBedrock = document.getElementById('btnSwitchBedrock');
+            const btnGemini = document.getElementById('btnSwitchGemini');
+            if (btnBedrock) btnBedrock.removeAttribute('style');
+            if (btnGemini) btnGemini.removeAttribute('style');
+            // Reload trạng thái mới
+            await loadLLMStatus();
+        } else {
+            showToast('❌ ' + (data?.detail || data?.error || 'Chuyển đổi thất bại'), 'error');
+        }
+    } catch (e) { showToast('❌ Lỗi: ' + e.message, 'error'); }
 }
 
 async function updateGeminiKey() {
@@ -614,8 +711,11 @@ async function updateGeminiKey() {
     if (!newKey) { showToast('Vui lòng nhập API key', 'warning'); return; }
     try {
         const data = await api('POST', '/api/admin/update-gemini-key', { api_key: newKey, user_id: currentUser.id });
-        if (data && data.ok) { showToast('✅ ' + (data.message || 'API key đã cập nhật'), 'info'); input.value = ''; }
-        else showToast('❌ ' + (data?.detail || data?.error || 'Cập nhật thất bại'), 'error');
+        if (data && data.ok) {
+            showToast('✅ ' + (data.message || 'API key đã cập nhật'), 'info');
+            input.value = '';
+            await loadLLMStatus();  // Refresh để cập nhật trạng thái key
+        } else showToast('❌ ' + (data?.detail || data?.error || 'Cập nhật thất bại'), 'error');
     } catch (e) { showToast('❌ Lỗi: ' + e.message, 'error'); }
 }
 

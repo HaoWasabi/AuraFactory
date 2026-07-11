@@ -518,6 +518,107 @@ def create_api_router(services: dict) -> APIRouter:
         owner_ids = _get_bot_owner_ids(request)
         return {"is_admin": bool(owner_ids) and uid in owner_ids}
 
+    # === LLM Status & Provider Switch ===
+
+    @router.get("/admin/llm-status")
+    async def llm_status(user_id: str, request: Request):
+        """Trả về trạng thái LLM provider hiện tại.
+
+        Chỉ Bot_Owner mới được gọi endpoint này.
+        """
+        from app.config import settings as _settings
+
+        uid = int(user_id)
+        owner_ids = _get_bot_owner_ids(request)
+        if not owner_ids or uid not in owner_ids:
+            raise HTTPException(status_code=403, detail="Không có quyền: chỉ owner của bot mới được xem trạng thái LLM")
+
+        router_inst = getattr(request.app.state, "llm_router", None)
+
+        # active_provider
+        if router_inst and hasattr(router_inst, "active_provider"):
+            active_provider = router_inst.active_provider
+        else:
+            active_provider = _settings.LLM_PROVIDER
+
+        # gemini_key_configured
+        if router_inst and hasattr(router_inst, "gemini_key_configured"):
+            gemini_key_configured = router_inst.gemini_key_configured
+        else:
+            gemini_key_configured = bool(_settings.GEMINI_API_KEY and _settings.GEMINI_API_KEY.strip())
+
+        # bedrock_configured
+        import os
+        bedrock_configured = (
+            _settings.ENABLE_BEDROCK_LLM
+            or bool(os.environ.get("AWS_ACCESS_KEY_ID"))
+            or bool(os.environ.get("AWS_PROFILE"))
+        )
+
+        return {
+            "active_provider": active_provider,
+            "fallback_enabled": _settings.LLM_FALLBACK_ENABLED,
+            "fallback_provider": _settings.LLM_FALLBACK_PROVIDER if _settings.LLM_FALLBACK_ENABLED else None,
+            "gemini_key_configured": gemini_key_configured,
+            "bedrock_configured": bedrock_configured,
+        }
+
+    class SwitchProviderRequest(BaseModel):
+        provider: str
+        user_id: str
+
+    @router.post("/admin/switch-llm-provider")
+    async def switch_llm_provider(req: SwitchProviderRequest, request: Request):
+        """Chuyển đổi Active_Provider tại runtime (bedrock ↔ gemini).
+
+        Chỉ Bot_Owner mới được gọi endpoint này.
+        """
+        from app.config import settings as _settings
+
+        uid = int(req.user_id)
+        owner_ids = _get_bot_owner_ids(request)
+        if not owner_ids or uid not in owner_ids:
+            raise HTTPException(status_code=403, detail="Không có quyền: chỉ owner của bot mới được chuyển đổi provider")
+
+        if req.provider not in ("bedrock", "gemini"):
+            raise HTTPException(
+                status_code=400,
+                detail=f"Giá trị provider không hợp lệ: '{req.provider}'. Chấp nhận: 'bedrock' hoặc 'gemini'",
+            )
+
+        # Kiểm tra Gemini key khi chuyển sang gemini
+        if req.provider == "gemini":
+            gemini_key = (_settings.GEMINI_API_KEY or "").strip()
+            if not gemini_key:
+                raise HTTPException(
+                    status_code=400,
+                    detail="Chưa có Gemini API key. Vui lòng nhập API key trước khi chuyển sang Gemini.",
+                )
+
+        # Thực hiện switch trên tất cả LLMRouter instances
+        switched_routers = []
+        svc_map = getattr(request.app.state, "services", {})
+        for svc_name, svc in svc_map.items():
+            llm = getattr(svc, "llm", None)
+            if llm is not None and hasattr(llm, "switch_provider"):
+                result = llm.switch_provider(req.provider)
+                if result:
+                    switched_routers.append(svc_name)
+
+        # Cũng switch trên llm_router chính
+        main_router = getattr(request.app.state, "llm_router", None)
+        if main_router and hasattr(main_router, "switch_provider"):
+            main_router.switch_provider(req.provider)
+
+        logger.info("LLM provider chuyển sang '%s' bởi user %d — routers: %s", req.provider, uid, switched_routers)
+
+        return {
+            "ok": True,
+            "active_provider": req.provider,
+            "message": f"Đã chuyển sang {'Bedrock' if req.provider == 'bedrock' else 'Gemini'} thành công",
+            "switched_services": switched_routers,
+        }
+
     # === Community Upgrade ===
 
     @router.post("/community-upgrade/confirm")

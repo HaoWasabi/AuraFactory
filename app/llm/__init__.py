@@ -1,6 +1,7 @@
 from .base import BaseLLM, LLMResponse, ToolCall, UsageStats
 from .gemini import GeminiLLM
 from .bedrock import BedrockLLM
+from .router import LLMRouter
 
 
 def get_llm(provider: str = "gemini", **kwargs) -> BaseLLM:
