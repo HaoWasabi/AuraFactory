@@ -224,6 +224,13 @@ def create_api_router(services: dict) -> APIRouter:
 
         request_id = req_result["request_id"]
 
+        async def _save_bot_reply(content: str):
+            if session_service and session_id:
+                await session_service.add_message(
+                    session_id=session_id, guild_id=guild_id, user_id=user_id,
+                    role="bot", content=content, origin="web",
+                )
+
         # Classify
         try:
             classification = await classifier_service.classify(req.message)
@@ -239,13 +246,6 @@ def create_api_router(services: dict) -> APIRouter:
         tool_mode = classification["tool_mode"]
         lang = classification.get("lang", "vi")
         await request_service.update_status(request_id, "classified", intent=intent, tool_mode=tool_mode)
-
-        async def _save_bot_reply(content: str):
-            if session_service and session_id:
-                await session_service.add_message(
-                    session_id=session_id, guild_id=guild_id, user_id=user_id,
-                    role="bot", content=content, origin="web",
-                )
 
         # Route by intent
         if intent == "query":
