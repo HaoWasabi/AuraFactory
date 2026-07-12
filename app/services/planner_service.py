@@ -40,6 +40,14 @@ CRITICAL RULES:
 9. REQUESTOR IDENTITY: The context header contains "Requestor ID" — this is the Discord user ID of the person who sent the request.
    - When the user says "tôi", "me", "myself", "cho tôi", "for me" — use the Requestor ID as member_id
    - NEVER use placeholder strings like "REPLACE_WITH_ACTUAL_USER_ID" — always use the actual numeric ID from context
+10. COMMUNITY SERVER — LOCKED CHANNELS: Discord Community servers have two special channels that CANNOT be deleted directly:
+    - "Community Rules Channel" (rules_channel): shown in context as LOCKED
+    - "Community Updates Channel" (public_updates_channel): shown in context as LOCKED
+    If the user's plan requires deleting a LOCKED channel, you MUST insert a `discord.guild.set_community` step BEFORE the delete step to reassign those locked roles to a different channel (one that will survive, or one created earlier in this plan).
+    - Use `rules_channel_id` and `updates_channel_id` params pointing to the safe channel's ID.
+    - Only THEN delete the old locked channel in a subsequent step.
+    - If both rules_channel and updates_channel point to the same channel, one `set_community` step can reassign both at once.
+11. MANAGED ROLES — NEVER DELETE: Roles marked `[MANAGED — cannot delete]` in the context are created by integrations or other bots (e.g. Readybot.io, Dyno, MEE6, AuraFactory). Discord does NOT allow deleting managed roles. ALWAYS skip these in any delete/cleanup plan — do not include them as steps at all.
 
 ROLE MANAGEMENT TOOL SELECTION GUIDE:
 - Creating ONE role with basic settings → discord.roles.create
@@ -94,6 +102,19 @@ EXAMPLE — Clone role:
 User: "tạo role Mod2 giống hệt role Mod"
 Context: roles include {"id": "444555666", "name": "Mod"}
 → discord.roles.clone with source_role_id="444555666", new_name="Mod2"
+
+EXAMPLE — Delete a channel that is community-locked:
+Context shows:
+  Community Rules Channel: "chat-tự-do" → id: 1524486879444209744 (LOCKED)
+  Community Updates Channel: "chat-tự-do" → id: 1524486879444209744 (LOCKED)
+  Channels: #general → id: 111222333, #chat-tự-do → id: 1524486879444209744
+User: "xóa kênh #chat-tự-do"
+→ Step 1: discord.guild.set_community — reassign rules_channel_id and updates_channel_id to #general (id: 111222333)
+          params: {guild_id, enable=true, rules_channel_id="111222333", updates_channel_id="111222333"}
+          risk: HIGH
+   Step 2: discord.channels.delete — channel_id="1524486879444209744"
+          risk: HIGH
+(Never try to delete a LOCKED channel without a set_community reassign step first)
 
 EXAMPLE — Delete a channel:
 User: "xóa channel #spam"
@@ -201,6 +222,17 @@ EXAMPLE — Change server language:
 User: "đổi ngôn ngữ server sang tiếng Việt"
 → discord.guild.set_preferred_locale with locale="vi"
 
+CLEANUP TOOL SELECTION GUIDE:
+When intent is CLEANUP (user asks to delete resources NOT in a previous plan's list):
+1. Read the "Resources Created In Previous Plan (DO NOT DELETE)" section in the prompt
+2. Read the current server channels/categories/roles from Server Context
+3. KEEP list = whitelist names + user exclusions (e.g. "trừ kênh hiện tại") + community LOCKED channels + @everyone + roles marked [MANAGED — cannot delete]
+4. DELETE list = everything in server context NOT in KEEP list
+5. Order: delete channels first → then categories (must be empty first) → then roles
+6. For each item to delete: use the EXACT ID from Server Context
+7. If user specifies scope: "xóa kênh cũ" → only channels; "xóa role cũ" → only roles; "xóa tất cả cũ" → channels + categories + roles
+8. NEVER delete: @everyone, community LOCKED channels, channels/categories/roles in the whitelist, roles marked [MANAGED — cannot delete]
+
 EXAMPLE — Full server setup (multi-step):
 User: "setup server: đổi tên 'Gaming Hub', bật Community, bảo mật medium, tắt thông báo join, ngôn ngữ Việt"
 → Step 1: discord.guild.edit_profile (new_name, risk: HIGH)
@@ -290,6 +322,30 @@ NOTE: The same pattern applies to ALL full-server-creation requests regardless o
 - ALWAYS create at minimum: 5 roles, 4 categories, 3+ channels per category (mix text+voice).
 - category_id in channel steps MUST reference the category NAME as placeholder (executor resolves at runtime).
 
+EXAMPLE — Cleanup: delete channels/categories/roles NOT in the previous plan's whitelist:
+Context shows (current server):
+  Channels: #thong-bao-chung, #chat-tu-do, #general, #spam-cu, #test-cu
+  Categories: 📢 THÔNG BÁO, 💼 CHUNG, Kênh Cũ
+  Roles: @CEO, @Manager, @Member, @OldRole1
+Resources Created In Previous Plan (DO NOT DELETE):
+  Channels to KEEP: thong-bao-chung, general
+  Categories to KEEP: 📢 THÔNG BÁO, 💼 CHUNG
+  Roles to KEEP: CEO, Manager, Member
+Community Rules Channel: "chat-tu-do" → id: 111 (LOCKED)
+User: "xóa các kênh cũ không trong danh sách, trừ kênh hiện tại #chat-tu-do"
+→ Delete channels NOT in whitelist AND not excluded:
+   - #spam-cu → discord.channels.delete
+   - #test-cu → discord.channels.delete
+   Delete categories NOT in whitelist:
+   - Kênh Cũ → discord.categories.delete
+   Delete roles NOT in whitelist (skip @everyone which is undeletable):
+   - @OldRole1 → discord.roles.delete
+   SKIP: #thong-bao-chung, #general (in whitelist)
+   SKIP: #chat-tu-do (user excluded it + community LOCKED)
+   SKIP: 📢 THÔNG BÁO, 💼 CHUNG (in whitelist)
+   SKIP: @CEO, @Manager, @Member (in whitelist)
+   SKIP: @everyone (Discord system role — never deletable)
+
 Respond with ONLY valid JSON, no markdown fences:
 {
   "description": "Human-readable summary of what will be done",
@@ -327,10 +383,16 @@ class PlannerService:
         message: str,
         intent: str,
         history: Optional[List[Dict[str, str]]] = None,
+        session_id: Optional[str] = None,
     ) -> dict:
         try:
             # 1. Get server context
             server_context = await self.context_service.get_server_context(guild_id)
+
+            # 1b. For cleanup intent: fetch resources created in the last completed plan of this session
+            session_whitelist: Optional[Dict[str, Any]] = None
+            if intent == "cleanup" and session_id:
+                session_whitelist = await self.get_session_created_resources(session_id, guild_id)
 
             # 2. Get available tools filtered by intent category
             tools = self.mcp_client.get_tools_for_intent(intent)
@@ -346,12 +408,17 @@ class PlannerService:
                 user_id=user_id,
                 server_context=server_context,
                 tool_list=tool_descriptions,
+                session_whitelist=session_whitelist,
             )
 
             messages = []
             if history:
                 for h in history[-4:]:
-                    messages.append({"role": h.get("role", "user"), "content": h.get("content", "")})
+                    role = h.get("role", "user")
+                    # Map Discord DB role "bot" → Gemini "model"
+                    if role == "bot":
+                        role = "model"
+                    messages.append({"role": role, "content": h.get("content", "")})
             messages.append({"role": "user", "content": user_content})
 
             # 4. Single LLM call
@@ -515,6 +582,19 @@ class PlannerService:
                 features = server_info.get("features", [])
                 if features:
                     lines.append(f"Server Features: {', '.join(features)}")
+                # Community-locked channels — planner MUST know before generating delete steps
+                rules_ch = server_info.get("rules_channel")
+                updates_ch = server_info.get("public_updates_channel")
+                if rules_ch and isinstance(rules_ch, dict):
+                    lines.append(
+                        f"Community Rules Channel: \"{rules_ch.get('name', '?')}\" → id: {rules_ch.get('id', '?')} "
+                        f"(LOCKED — cannot delete without reassigning first)"
+                    )
+                if updates_ch and isinstance(updates_ch, dict):
+                    lines.append(
+                        f"Community Updates Channel: \"{updates_ch.get('name', '?')}\" → id: {updates_ch.get('id', '?')} "
+                        f"(LOCKED — cannot delete without reassigning first)"
+                    )
         except Exception:
             pass
 
@@ -568,7 +648,9 @@ class PlannerService:
                     rid = role.get("id", role.get("role_id", "?"))
                     rname = role.get("name", "?")
                     members = role.get("member_count", "?")
-                    lines.append(f"  - @{rname} → id: {rid} (members: {members})")
+                    managed = role.get("managed", False)
+                    managed_tag = " [MANAGED — cannot delete]" if managed else ""
+                    lines.append(f"  - @{rname} → id: {rid} (members: {members}){managed_tag}")
         except Exception:
             lines.append("\nRoles: (unable to parse)")
 
@@ -601,6 +683,7 @@ class PlannerService:
         server_context: dict,
         tool_list: List[Dict[str, Any]],
         user_id: Optional[int] = None,
+        session_whitelist: Optional[Dict[str, Any]] = None,
     ) -> str:
         """Build the user prompt with human-readable context.
 
@@ -612,6 +695,25 @@ class PlannerService:
         # to an actual Discord user ID when generating member_id in steps.
         if user_id:
             formatted_context = f"Requestor ID (người gửi yêu cầu): {user_id}\n" + formatted_context
+
+        # Inject session whitelist for cleanup intent
+        whitelist_section = ""
+        if session_whitelist:
+            whitelist_lines = ["\n## Resources Created In Previous Plan (DO NOT DELETE these)"]
+            ch_names = session_whitelist.get("channels", [])
+            cat_names = session_whitelist.get("categories", [])
+            role_names = session_whitelist.get("roles", [])
+            if ch_names:
+                whitelist_lines.append(f"Channels to KEEP: {', '.join(ch_names)}")
+            if cat_names:
+                whitelist_lines.append(f"Categories to KEEP: {', '.join(cat_names)}")
+            if role_names:
+                whitelist_lines.append(f"Roles to KEEP: {', '.join(role_names)}")
+            whitelist_lines.append(
+                "Delete ALL channels/categories/roles from the server that are NOT in the above lists "
+                "and NOT excluded by the user's request (e.g. 'trừ kênh hiện tại', community-locked channels)."
+            )
+            whitelist_section = "\n".join(whitelist_lines)
         # Build compact tool reference instead of full JSON schema
         tool_lines = []
         for t in tool_list:
@@ -638,7 +740,7 @@ class PlannerService:
         tools_text = "\n".join(tool_lines)
         return f"""## Server Context
 {formatted_context}
-
+{whitelist_section}
 ## Available Tools
 {tools_text}
 
@@ -834,6 +936,121 @@ class PlannerService:
     # ------------------------------------------------------------------
     # Helpers
     # ------------------------------------------------------------------
+
+    async def get_session_created_resources(self, session_id: str, guild_id: int) -> Dict[str, Any]:
+        """Query DB for channels/categories/roles created in the last completed plan of this session.
+
+        Used by cleanup intent to build a whitelist of resources that should NOT be deleted.
+
+        Returns:
+            Dict with keys: channels (list of names), categories (list of names), roles (list of names)
+        """
+        import json as _json
+
+        result: Dict[str, Any] = {"channels": [], "categories": [], "roles": []}
+
+        try:
+            # Find the most recent completed plan for this session
+            row = await self.db.fetchrow(
+                """SELECT p.id FROM plans p
+                   JOIN requests r ON r.id = p.request_id
+                   WHERE r.session_id = $1
+                     AND r.guild_id = $2
+                     AND p.status = 'completed'
+                   ORDER BY p.created_at DESC
+                   LIMIT 1""",
+                uuid.UUID(session_id),
+                guild_id,
+            )
+
+            if not row:
+                logger.info(
+                    "[PlannerService] No completed plan found for session %s — cleanup will use empty whitelist",
+                    session_id,
+                )
+                return result
+
+            plan_id = row["id"]
+
+            # Fetch all completed steps of that plan
+            steps = await self.db.fetch(
+                """SELECT tool_name, tool_params, result FROM plan_steps
+                   WHERE plan_id = $1 AND status = 'completed'
+                   ORDER BY step_number ASC""",
+                plan_id,
+            )
+
+            channels, categories, roles = [], [], []
+
+            for step in steps:
+                tool_name = step["tool_name"]
+                # Parse result (JSONB from DB)
+                raw_result = step["result"]
+                if isinstance(raw_result, str):
+                    try:
+                        res = _json.loads(raw_result)
+                    except Exception:
+                        res = {}
+                elif isinstance(raw_result, dict):
+                    res = raw_result
+                else:
+                    res = {}
+
+                # Parse tool_params too (for fallback name extraction)
+                raw_params = step["tool_params"]
+                if isinstance(raw_params, str):
+                    try:
+                        params = _json.loads(raw_params)
+                    except Exception:
+                        params = {}
+                elif isinstance(raw_params, dict):
+                    params = raw_params
+                else:
+                    params = {}
+
+                if tool_name in ("discord.channels.create",):
+                    name = res.get("name") or params.get("name", "")
+                    if name:
+                        channels.append(name)
+
+                elif tool_name in ("discord.categories.create",):
+                    name = res.get("name") or params.get("name", "")
+                    if name:
+                        categories.append(name)
+
+                elif tool_name in ("discord.roles.create",):
+                    name = res.get("name") or params.get("name", "")
+                    if name:
+                        roles.append(name)
+
+                elif tool_name in ("discord.roles.bulk_create",):
+                    # result may be {"roles": [...]} or list
+                    created = res.get("roles", []) if isinstance(res, dict) else []
+                    if not created:
+                        # Fallback to params
+                        created = params.get("roles", [])
+                    for r in created:
+                        if isinstance(r, dict):
+                            n = r.get("name", "")
+                        else:
+                            n = str(r)
+                        if n:
+                            roles.append(n)
+
+            result["channels"] = list(dict.fromkeys(channels))    # dedupe, preserve order
+            result["categories"] = list(dict.fromkeys(categories))
+            result["roles"] = list(dict.fromkeys(roles))
+
+            logger.info(
+                "[PlannerService] Cleanup whitelist for session %s plan %s: %d channels, %d categories, %d roles",
+                session_id, plan_id,
+                len(result["channels"]), len(result["categories"]), len(result["roles"]),
+            )
+
+        except Exception as e:
+            logger.error("[PlannerService] Failed to build cleanup whitelist: %s", e)
+
+        return result
 
     async def _fail_request(self, request_id: str, error: str) -> None:
         """Mark request as failed."""

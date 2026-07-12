@@ -162,7 +162,10 @@ class QueryService:
             for turn in history[-10:]:
                 role = turn.get("role", "user")
                 content = turn.get("content", "")
-                if role in ("user", "assistant") and content:
+                # Map Discord DB role "bot" → Gemini "model"; "assistant" also valid
+                if role == "bot":
+                    role = "model"
+                if role in ("user", "assistant", "model") and content:
                     messages.append({"role": role, "content": content})
 
         # Add the current question

@@ -16,16 +16,16 @@ logger = logging.getLogger(__name__)
 class GeminiLLM(BaseLLM):
     """Google Gemini LLM provider."""
 
-    def __init__(self, model: str = "gemini-2.0-flash", api_key: Optional[str] = None) -> None:
+    def __init__(self, model: str = "gemini-3.5-flash-lite", api_key: Optional[str] = None) -> None:
         """Initialize Gemini LLM provider.
         
         Args:
-            model: Model name (default: gemini-2.0-flash)
-            api_key: Optional API key. If not provided, uses GOOGLE_API_KEY env var.
+            model: Model name (default: gemini-3.5-flash-lite)
+            api_key: Optional API key. If not provided, uses GEMINI_API_KEY env var.
         """
-        api_key = api_key or os.getenv("GOOGLE_API_KEY")
+        api_key = api_key or os.getenv("GEMINI_API_KEY")
         if not api_key:
-            raise ValueError("GOOGLE_API_KEY environment variable not set and api_key not provided")
+            raise ValueError("GEMINI_API_KEY environment variable not set and api_key not provided")
         
         super().__init__(model=model, api_key=api_key)
         genai.configure(api_key=self.api_key)

@@ -242,13 +242,46 @@ class ExecutorService:
                     "paused_at_step": i + 1,
                 }
             else:
+                error_msg = step_result.get("error", "Step execution failed")
+
+                # Check if this is a skippable error (managed role, hierarchy, protected resource)
+                # These are hard Discord API restrictions — skip and continue rather than halt the plan.
+                _skippable_patterns = (
+                    "managed role",
+                    "is a managed role",
+                    "integration or bot",
+                    "bot's own highest role",
+                    "role hierarchy",
+                    "missing permissions",
+                )
+                is_skippable = any(
+                    p in error_msg.lower() for p in _skippable_patterns
+                )
+
+                if is_skippable:
+                    logger.warning(
+                        "[ExecutorService] Step %d/%d SKIPPED (protected resource) for plan %s: %s",
+                        i + 1, total_steps, plan_id, error_msg,
+                    )
+                    # Mark step as skipped in DB
+                    import json as _js
+                    await self._db.execute(
+                        "UPDATE plan_steps SET status = 'skipped', result = $1::jsonb WHERE id = $2",
+                        _js.dumps({"skipped": True, "reason": error_msg[:500]}),
+                        step_dict["id"],
+                    )
+                    # Continue to next step — don't halt the plan
+                    if i < total_steps - 1:
+                        await asyncio.sleep(0.3)
+                    continue
+
                 # §5.6: On failure after ReAct retry → stop execution
                 logger.warning(
                     "[ExecutorService] Step %d/%d failed for plan %s: %s",
                     i + 1,
                     total_steps,
                     plan_id,
-                    step_result.get("error"),
+                    error_msg,
                 )
                 # Plan fails, request stays 'executing' for user decision
                 await self._db.execute(
@@ -259,7 +292,7 @@ class ExecutorService:
                     "completed_steps": completed_steps,
                     "total_steps": total_steps,
                     "results": results,
-                    "error": step_result.get("error", "Step execution failed"),
+                    "error": error_msg,
                     "failed_step": i + 1,
                 }
 

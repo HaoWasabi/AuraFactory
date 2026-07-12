@@ -382,6 +382,7 @@ class DiscordBot(commands.Bot):
                 message=content,
                 intent=intent,
                 history=history,
+                session_id=session_id,
             )
         except LLMQuotaError as qe:
             err_msg = msg_for_quota_error(qe.reason, lang=lang)

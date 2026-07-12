@@ -19,6 +19,7 @@ INTENTS = {
         "system channels, notification level, AFK config, preferred locale, content filter"
     ),
     "automod": "Create/delete automod rules, events",
+    "cleanup": "Delete channels/categories/roles that were NOT created in the previous plan (cleanup old/leftover resources)",
     "clarify": "User message is too vague to determine intent",
     "out_of_scope": "Request is outside what AuraFactory can do",
 }
@@ -43,6 +44,9 @@ Given a user message, classify it into ONE of these intents:
     * Server language / preferred locale
     * Explicit content filter
 - automod: Automod rules, scheduled events
+- cleanup: Delete channels/categories/roles that are OLD — i.e. NOT in the list from the previous plan.
+           Triggered by phrases like "xóa cũ", "xóa kênh không trong danh sách", "dọn dẹp kênh cũ",
+           "xóa những gì không cần", "remove old channels", "clean up old", "delete leftover"
 - clarify: Message is too vague or missing required details
 - out_of_scope: Not related to Discord server management
 
@@ -61,6 +65,7 @@ CLASSIFICATION HINTS:
 - "tạo kênh private", "kênh ẩn", "kênh chỉ cho role X" → setup
 - "tạo kênh forum/stage/news/announcement" → setup
 - "sửa quyền kênh", "tắt quyền gửi tin" → manage
+- "xóa kênh cũ", "xóa kênh không trong danh sách", "dọn dẹp", "xóa những gì không cần thiết", "xóa cũ", "clean up old", "delete leftover", "remove old" → cleanup
 
 Also determine:
 - tool_mode: "action" (setup/manage/moderate/server_settings/automod), "read_only" (query), "none" (clarify/out_of_scope)
@@ -89,7 +94,11 @@ class ClassifierService:
         if history:
             # Include last 2 messages for context
             for h in history[-2:]:
-                messages.append({"role": h.get("role", "user"), "content": h.get("content", "")})
+                role = h.get("role", "user")
+                # Map Discord DB role "bot" → Gemini "model"
+                if role == "bot":
+                    role = "model"
+                messages.append({"role": role, "content": h.get("content", "")})
         messages.append({"role": "user", "content": message})
 
         try:

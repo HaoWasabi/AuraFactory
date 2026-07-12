@@ -110,6 +110,7 @@ class MCPClient:
             "query": ["channels", "categories", "roles", "guild", "members"],
             "server_settings": ["guild", "features", "webhooks", "emojis", "invites"],
             "automod": ["automod"],
+            "cleanup": ["channels", "categories", "roles", "guild"],  # delete ops + guild for community reassign
         }
 
         intent_lower = intent.lower()
